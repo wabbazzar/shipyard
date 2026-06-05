@@ -38,6 +38,12 @@
 
 set -uo pipefail
 
+# Dependency preflight — fail fast with a clear message.
+for dep in jq python3 git gh systemctl claude; do
+  command -v "$dep" >/dev/null 2>&1 || {
+    echo "missing dependency: $dep (see README Requirements)" >&2; exit 2; }
+done
+
 QUARTET_DIR="${QUARTET_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 
@@ -134,6 +140,15 @@ for agent in ${AGENTS//,/ }; do
   service_path="$SYSTEMD_DIR/${PROJECT_NAME}-${agent}.service"
   timer_path="$SYSTEMD_DIR/${PROJECT_NAME}-${agent}.timer"
 
+  # Propagate quartet runtime knobs set at install time into the unit —
+  # systemd user services get a near-empty environment otherwise, which
+  # silently mutes notifications and disables medic's ops scan.
+  quartet_env=""
+  for var in QUARTET_NOTIFY_CMD QUARTET_OPS_JSON QUARTET_EVENTS_DIR; do
+    val="${!var:-}"
+    [ -n "$val" ] && quartet_env+="Environment=$var=$val"$'\n'
+  done
+
   # Guardian wants network; the others don't.
   unit_extras=""
   [ "$agent" = "guardian" ] && unit_extras=$'Wants=network-online.target\nAfter=network-online.target\n'
@@ -147,7 +162,7 @@ WorkingDirectory=$PROJECT_DIR
 ExecStart=/bin/bash $QUARTET_DIR/agents/$agent/runner.sh --project $PROJECT_DIR --mode $mode
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=$HOME
-TimeoutStartSec=3900
+${quartet_env}TimeoutStartSec=3900
 "
   timer_content="[Unit]
 Description=$desc (timer)

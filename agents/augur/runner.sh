@@ -1,10 +1,9 @@
 #!/bin/bash
 # agents/augur/runner.sh — generic augur wrapper.
 #
-# Phase 1 design: live and dry-run modes are passthrough to the existing
-# project-local script ($PROJECT_DIR/scripts/$PROJECT_NAME-augur.sh).
-# Incident mode is implemented natively here — single incident, sync
-# handoff from medic, with self-merge gate.
+# Live and dry-run modes run natively here (nightly feedback triage →
+# autonomous PRs). Incident mode is the medic handoff path — single
+# incident, sync invocation, with self-merge gate.
 #
 # Usage:
 #   runner.sh --project DIR --mode live

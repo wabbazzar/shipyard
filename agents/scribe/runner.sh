@@ -75,11 +75,11 @@ cd "$PROJECT_DIR"
   mode="$MODE" project="$PROJECT_NAME" || true
 echo "[$PROJECT_NAME-scribe] $(now_iso) start mode=$MODE" > "$LOG_FILE"
 
-# Refresh ops snapshot before scribe runs (cheap, AI-free, keeps the
-# Ops page current ahead of any pages that read from ops.json).
-if [ -x "$QUARTET_DIR/scripts/ops_snapshot.py" ]; then
-  echo "[$PROJECT_NAME-scribe] refreshing ops snapshot" >> "$LOG_FILE"
-  python3 "$QUARTET_DIR/scripts/ops_snapshot.py" >> "$LOG_FILE" 2>&1 || true
+# Optional pre-hook: a project can run a cheap, AI-free refresh step
+# before scribe (e.g. regenerate a state snapshot scribe reads).
+if [ -n "${QUARTET_SCRIBE_PRE_HOOK:-}" ] && [ -x "${QUARTET_SCRIBE_PRE_HOOK}" ]; then
+  echo "[$PROJECT_NAME-scribe] running pre-hook $QUARTET_SCRIBE_PRE_HOOK" >> "$LOG_FILE"
+  "$QUARTET_SCRIBE_PRE_HOOK" >> "$LOG_FILE" 2>&1 || true
 fi
 
 # Build prompt = role.md + project scribe.md + RUN CONTEXT.

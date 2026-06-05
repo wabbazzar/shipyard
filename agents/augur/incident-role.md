@@ -21,7 +21,7 @@ The runner appends a `RUN CONTEXT` block with:
   `augur.wall_clock_sec`, `paths.worktree_dir`
 - **worktree** — the absolute path of a fresh worktree the runner has
   already created for you, on branch `medic-incident-<id>` cut from
-  origin/master. **Do all work here. Do not touch the main checkout.**
+  origin/<trunk> (config `branch`, default the trunk branch (config `branch`)). **Do all work here. Do not touch the main checkout.**
 - **result_file** — absolute path of the JSON file you must write before
   exiting (schema below)
 

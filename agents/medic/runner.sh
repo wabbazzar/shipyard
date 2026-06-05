@@ -946,10 +946,6 @@ while [ "$i" -lt "$N_CLASS" ]; do
 
         # Run guardian post-merge against the merge sha.
         GUARDIAN_RUNNER="$QUARTET_DIR/agents/guardian/runner.sh"
-        # Legacy fallback: invoke the project's own <project>-guardian.sh launcher.
-        if [ ! -x "$GUARDIAN_RUNNER" ]; then
-          GUARDIAN_RUNNER="$PROJECT_DIR/scripts/$PROJECT_NAME-guardian.sh"
-        fi
         GUARDIAN_OUTCOME="skipped"
         if [ -x "$GUARDIAN_RUNNER" ]; then
           "$GUARDIAN_RUNNER" --mode post-merge --merge-sha "$MERGE_SHA" \

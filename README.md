@@ -46,7 +46,7 @@ PRs), `git`.
 
 ```toml
 project_name  = "myproject"
-project_dir   = "/home/user/code/myproject"   # leak-allow (placeholder)
+project_dir   = "/home/user/code/myproject"   # informational only — runners take --project  # leak-allow
 project_owner = "your-github-user"            # PR reviewer — required
 branch        = "main"
 
@@ -82,6 +82,18 @@ email. Unset = silent (events are still logged).
 ```bash
 QUARTET_NOTIFY_CMD="/home/user/bin/notify" ./install.sh --project …  # leak-allow (placeholder)
 ```
+
+## Environment knobs
+
+| var | effect |
+|---|---|
+| `QUARTET_NOTIFY_CMD` | notification command `(title, body)`; unset = silent |
+| `QUARTET_EVENTS_DIR` | where the JSONL event stream lands (default `data/events/` in this repo) |
+| `QUARTET_OPS_JSON` | optional systemd/cron state snapshot for medic's runner scan |
+| `QUARTET_SCRIBE_PRE_HOOK` | optional executable run before each scribe pass |
+
+Set them when running `install.sh` — they're baked into the generated
+systemd units (user services don't inherit your shell env).
 
 ## Event stream
 

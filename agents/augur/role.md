@@ -78,7 +78,7 @@ tightening, off-by-one, missing-test additions, etc.).
 ## Worktree discipline (live mode)
 
 1. The runner creates a fresh worktree at `$WORKTREE_DIR/augur-<id>`
-   on branch `augur/<id>` cut from `origin/master`. You start there.
+   on branch `augur/<id>` cut from `origin/<trunk> (config `branch`, default the trunk branch (config `branch`))`. You start there.
 2. Reproduce the issue inside the worktree before changing anything.
 3. Make the smallest fix that closes the item.
 4. Run the project's full fast checks (typecheck + vitest) before
