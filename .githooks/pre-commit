@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Pre-commit guard: block owner/machine-specific data from entering the
+# public repo. Enabled by install.sh via `git config core.hooksPath .githooks`.
+exec "$(git rev-parse --show-toplevel)/scripts/leak-check.sh" --staged

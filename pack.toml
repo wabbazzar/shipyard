@@ -1,0 +1,3 @@
+name = "guardian-quartet"
+description = "Autonomous repo-maintenance agents: guardian (tests+audits), augur (feedback→PRs), medic (failure triage), scribe (docs)"
+fragment = "CLAUDE.fragment.md"
