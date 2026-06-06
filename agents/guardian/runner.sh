@@ -184,6 +184,8 @@ if (d.get("vitest") or {}).get("failed", 0) > 0: cats.append("vitest")
 if (d.get("typecheck") or {}).get("errors", 0) > 0: cats.append("tsc")
 if d.get("dbIssues"): cats.append("db")
 if d.get("tombstoneAnomalies"): cats.append("tombstones")
+sec = d.get("security") or {}
+if sec.get("auditCritical", 0) > 0 or sec.get("headerIssues") or sec.get("secretsHits"): cats.append("security")
 if d.get("errors"): cats.append("error")
 print(",".join(cats) or ("ok" if d.get("pass") else "unknown"))
 PY

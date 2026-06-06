@@ -64,6 +64,88 @@ The mode is in `RUN CONTEXT.mode`. Branch on it.
   overwrite it with the real result at the end — a budget or timeout
   death mid-step then still leaves a diagnosable result.
 
+## Security sweep (daily mode, config-gated)
+
+If `RUN CONTEXT.config.guardian.security` exists AND mode is `daily`,
+run three mechanical sub-checks after the project block's own checks.
+All bash, no LLM judgment — seconds of wall time, zero model tokens.
+Skip the whole section (and omit the `security` result key) when the
+config block is absent or mode is `hook`.
+
+Config shape (`.agents/config.toml`):
+
+```toml
+[guardian.security]
+audit_dirs       = [".", "subpackage"]    # package dirs to dependency-audit
+audit_cmd        = "npm audit --json"     # optional override (default shown)
+header_probe_url = "https://api.example.com/api/auth/me"  # optional
+```
+
+**Sub-check 1 — dependency audit.** For each dir in `audit_dirs`
+(default `["."]`), run `audit_cmd` (default `npm audit --json`) from
+that dir and read the critical/high vulnerability counts:
+
+```bash
+(cd <dir> && npm audit --json 2>/dev/null | \
+  jq '{critical: .metadata.vulnerabilities.critical, high: .metadata.vulnerabilities.high}')
+```
+
+Sum across dirs. Any **critical** flips `pass=false`. **High** counts
+are informational — list them in the run summary, do not flip pass.
+
+**Sub-check 2 — TLS/header check** (skip if `header_probe_url` unset):
+
+```bash
+HDRS="$(curl -sI --max-time 10 <header_probe_url> | tr -d '\r')"
+echo "$HDRS" | grep -qi '^strict-transport-security:' \
+  || echo "HEADER ISSUE: Strict-Transport-Security missing"
+echo "$HDRS" | grep -qi '^x-content-type-options: *nosniff' \
+  || echo "HEADER ISSUE: X-Content-Type-Options nosniff missing"
+echo "$HDRS" | grep -i '^access-control-allow-origin: *\*' \
+  && echo "HEADER ISSUE: Access-Control-Allow-Origin is wildcard"
+```
+
+Any emitted `HEADER ISSUE` line flips `pass=false` and goes into
+`security.headerIssues`. (An absent Access-Control-Allow-Origin header
+is fine — only a literal `*` fails.)
+
+**Sub-check 3 — secrets-in-commits grep** (last 24h of commits, always
+on when the config block is present):
+
+```bash
+git log --since="24 hours ago" -p -- . ':(exclude)*package-lock.json' \
+  ':(exclude)*.lock' 2>/dev/null | \
+  grep -inE "^\+.*(password|secret|api[_-]?key|token|bearer)['\"]? *[:=] *['\"][A-Za-z0-9+/_\.-]{16,}['\"]" | \
+  grep -viE 'process\.env|\.env\.example|fixture|placeholder|example|your[_-]?key|x{8,}' | \
+  head -20
+```
+
+The pattern looks for ADDED lines assigning a long literal to a
+secret-ish name — not every mention of "token". Inspect each hit: a
+real-looking literal secret flips `pass=false`; record it in
+`security.secretsHits` REDACTED — file + line + variable name only.
+NEVER echo the literal value into the result JSON, the log, or the
+notification summary. Test fixtures and obvious placeholders are false
+positives — skip them, do not flip pass. The project block may extend
+the false-positive filter with codebase idioms (e.g. legit auth symbols
+that mention "token" constantly).
+
+Record all three under a `security` key in the result JSON:
+
+```json
+"security": {
+  "auditCritical": 0,
+  "auditHigh": 2,
+  "headersOk": true,
+  "headerIssues": [],
+  "secretsHits": []
+}
+```
+
+and add a `Security:` line to whatever run summary the project block
+defines (e.g. `Security: clean` or `Security: 1 critical CVE (vitest),
+HSTS missing`).
+
 ## Result JSON schema
 
 You MUST write `RUN CONTEXT.result_file` (typically
