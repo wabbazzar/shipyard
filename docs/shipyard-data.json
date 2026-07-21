@@ -190,20 +190,22 @@
     {
       "id": 1,
       "title": "Gap fixes 1a–1g",
-      "status": "in-progress",
-      "gist": "Post-merge --project bug, honest revert by commit shape, merge default → opt-in, no_checks → red, shared trunk detection that never silently defaults, --check-config, medic --self-test. Every fix behind a test first shown failing."
+      "status": "done",
+      "gist": "Post-merge --project bug, honest revert by commit shape, merge default → opt-in, no_checks → red, shared trunk detection that never silently defaults, --check-config, medic --self-test. Every fix behind a test first shown failing.",
+      "completed": "2026-07-21"
     },
     {
       "id": 2,
       "title": "shredly2 CI",
-      "status": "pending",
+      "status": "in-progress",
       "gist": "The hot case: auto-merge on + zero CI workflows. vitest (1558 tests) + typecheck on PR and push; must land before the gates that would otherwise disable its auto-merge."
     },
     {
       "id": 3,
       "title": "fleet dry run",
-      "status": "pending",
-      "gist": "Read-only --check-config sweep across all projects from a worktree (the dev clone is live — medic fires every 10 min); any mismatch with the audited inventory blocks the merge."
+      "status": "done",
+      "gist": "Read-only --check-config sweep across all projects from a worktree (the dev clone is live — medic fires every 10 min); any mismatch with the audited inventory blocks the merge.",
+      "completed": "2026-07-21"
     },
     {
       "id": 4,
