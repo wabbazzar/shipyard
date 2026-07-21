@@ -9,6 +9,7 @@
 #   runner.sh --project DIR --mode live
 #   runner.sh --project DIR --mode dry-run
 #   runner.sh --project DIR --mode incident --incident-file PATH
+#   runner.sh --project DIR --check-config   # print effective gates, read-only
 #
 # Result file (written to $PROJECT_DIR/$paths.result_dir/$project-augur-result.json):
 #   {pass, incident_id, branch, pr_url, merge_sha, files_changed, errors}
@@ -25,32 +26,55 @@ export QUARTET_SOURCE="${QUARTET_SOURCE:-system}"
 PROJECT_DIR=""
 MODE=""
 INCIDENT_FILE=""
+CHECK_CONFIG=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --project)        PROJECT_DIR="$2"; shift 2 ;;
     --mode)           MODE="$2"; shift 2 ;;
     --incident-file)  INCIDENT_FILE="$2"; shift 2 ;;
-    -h|--help)        sed -n '2,15p' "$0"; exit 0 ;;
+    --check-config)   CHECK_CONFIG=1; shift ;;
+    -h|--help)        sed -n '2,16p' "$0"; exit 0 ;;
     *)                echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 [ -z "$PROJECT_DIR" ] && { echo "--project required" >&2; exit 2; }
 [ -d "$PROJECT_DIR" ] || { echo "project dir missing: $PROJECT_DIR" >&2; exit 2; }
-[ -z "$MODE" ] && { echo "--mode required" >&2; exit 2; }
+[ "$CHECK_CONFIG" -eq 0 ] && [ -z "$MODE" ] && { echo "--mode required" >&2; exit 2; }
 
 CONFIG_FILE="$PROJECT_DIR/.agents/config.toml"
 [ -f "$CONFIG_FILE" ] || { echo "config not found: $CONFIG_FILE" >&2; exit 2; }
 
 source "$QUARTET_DIR/agents/lib/load-config.sh"
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
 CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
 
 PROJECT_NAME="$(jq -r '.project_name' <<<"$CFG_JSON")"
-# Trunk branch name — `master` by default; projects on `main` set
-# `trunk_branch` in their config.toml.
-TRUNK_BRANCH="$(jq -r '.branch // "master"' <<<"$CFG_JSON")"
+# Trunk branch — config wins, else origin/HEAD; unresolvable fails loudly.
+TRUNK_BRANCH="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")" || exit 2
 RESULT_DIR_REL="$(jq -r '.paths.result_dir // "tmp"' <<<"$CFG_JSON")"
 WORKTREE_DIR_REL="$(jq -r '.paths.worktree_dir // ".worktrees"' <<<"$CFG_JSON")"
+
+# ---------- --check-config: print effective gates, then stop ----------------
+# STRICTLY read-only: no result files, no events, no claude, no gh.
+if [ "$CHECK_CONFIG" -eq 1 ]; then
+  jq -n \
+    --arg agent "augur" \
+    --arg dir "$PROJECT_DIR" \
+    --arg trunk "$TRUNK_BRANCH" \
+    --argjson cfg "$CFG_JSON" \
+    '{agent:$agent, project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
+      can_merge:($cfg.medic.augur_can_merge // false),
+      allow_no_ci:($cfg.augur.allow_no_ci // false),
+      in_scope_paths:($cfg.augur.in_scope_paths // []),
+      forbidden_paths:($cfg.augur.forbidden_paths // []),
+      budgets:{live_usd:($cfg.augur.budget // 2.00),
+               incident_usd:($cfg.augur.budget_incident // 1.50),
+               wall_clock_sec:($cfg.augur.wall_clock_sec // 3600)}}'
+  exit 0
+fi
+
 RESULT_DIR="$PROJECT_DIR/$RESULT_DIR_REL"
 WORKTREE_DIR="$PROJECT_DIR/$WORKTREE_DIR_REL"
 mkdir -p "$RESULT_DIR" "$WORKTREE_DIR"
@@ -223,7 +247,8 @@ LOG_FILE="$RESULT_DIR/$PROJECT_NAME-augur-incident-$ID_PREFIX.log"
 
 INCIDENT_BUDGET="$(jq -r '.augur.budget_incident // 1.50' <<<"$CFG_JSON")"
 WALL_CLOCK="$(jq -r '.augur.wall_clock_sec // 3600' <<<"$CFG_JSON")"
-AUGUR_CAN_MERGE="$(jq -r '.medic.augur_can_merge // true' <<<"$CFG_JSON")"
+AUGUR_CAN_MERGE="$(jq -r '.medic.augur_can_merge // false' <<<"$CFG_JSON")"
+ALLOW_NO_CI="$(jq -r '.augur.allow_no_ci // false' <<<"$CFG_JSON")"
 IN_SCOPE_PATHS="$(jq -c '.augur.in_scope_paths // []' <<<"$CFG_JSON")"
 FORBIDDEN_PATHS="$(jq -c '.augur.forbidden_paths // []' <<<"$CFG_JSON")"
 
@@ -438,7 +463,18 @@ while [ "$(date +%s)" -lt "$CI_WAIT_DEADLINE" ]; do
 done
 
 case "$CI_STATE" in
-  green|no_checks)  echo "[augur-incident] CI ok ($CI_STATE)" >> "$LOG_FILE" ;;
+  green)  echo "[augur-incident] CI ok (green)" >> "$LOG_FILE" ;;
+  no_checks)
+    # Zero CI checks is NOT green — it only passes when the project has
+    # explicitly opted in, and even then the waiver is emitted loudly so
+    # the dashboard/owner can see merges that skipped CI.
+    if [ "$ALLOW_NO_CI" = "true" ]; then
+      echo "[augur-incident] CI has no checks — waived (augur.allow_no_ci=true)" >> "$LOG_FILE"
+      [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-augur" augur.incident.ci_waived \
+        incident_id="$INCIDENT_ID" project="$PROJECT_NAME" pr_url="$PR_URL" || true
+    else
+      gate_fail "ci_no_checks"
+    fi ;;
   failed)           gate_fail "ci_failed" ;;
   pending)          gate_fail "ci_timeout" ;;
   *)                gate_fail "ci_unknown_state:$CI_STATE" ;;
