@@ -35,7 +35,7 @@
           "disposition": "new",
           "source": "agents/design/runner — Phase 11",
           "summary": "Nightly: signals → ≤3 open proposals per project.",
-          "detail": "Writes <project>/tmp/<project>-mentat-result.json (mirrors augur's result shape so the dispatch queue enrichment stays symmetric), emits design.proposal.opened events, respects budget_proposal_daily = $2.00. Skips drafting when 3 proposals sit undecided. Approve in the dispatch → mentat hardens via polish-ticket into <project>/docs/tickets/ and hands to helldiver. Deny → recorded in decisions.jsonl, never re-proposed. [D-O7, D-O9, D-L13]"
+          "detail": "Writes <project>/tmp/<project>-mentat-result.json (mirrors augur's result shape so the dispatch queue enrichment stays symmetric), emits design.proposal.opened events, respects a 1M-token daily cap (all caps are token-based, never dollars). Skips drafting when 3 proposals sit undecided. Approve in the dispatch → mentat hardens via polish-ticket into <project>/docs/tickets/ and hands to helldiver. Deny → recorded in decisions.jsonl, never re-proposed. [D-O7, D-O9, D-L13] Incident-repair proposals (from suk) emit immediately, outside the nightly cadence, against the same token cap. [D-L15]"
         },
         {
           "name": "coverage-audit",
@@ -71,11 +71,11 @@
           "detail": "The flow stays; the gates change. Fix 1c: augur_can_merge default flips true→false at runner.sh:226 + medic/runner.sh:84 — merge becomes opt-in per project. Fix 1d: the green|no_checks case at runner.sh:441 splits — no_checks fails the gate unless [augur] allow_no_ci = true, and a waiver emits augur.incident.ci_waived. The hot case that forced the ordering: shredly2 runs augur_can_merge = true with zero CI workflows, so its CI must exist (Phase 2) before these gates go live (Phase 4)."
         },
         {
-          "name": "incident PRs",
-          "disposition": "kept",
+          "name": "incident repairs — via the loop",
+          "disposition": "replaced",
           "source": "agents/augur/incident-role.md",
-          "summary": "Fix PRs for suk-opened incidents.",
-          "detail": "Suk's scan opens an incident; helldiver's incident role drafts the fix PR. Left open for human review unless merge is explicitly enabled for the project. With 1c, 'unset' now means open-PRs-only — the fleet audit found augur_can_merge absent everywhere except shredly2 (true, commented '§6.1 kill switch') and starbird/aurora/bopthere (false)."
+          "summary": "The incident side-door into build is retired.",
+          "detail": "Old path: suk's scan opens an incident, helldiver's incident-role.md drafts a fix PR directly — a second road into build that bypasses the design gate. New path (D-L15, lands in Phase 11; old path stays live through Phase 10): suk keeps ungated mitigation (restart, revert, contain — on-call waits for no stamp), but the code fix becomes an incident-repair proposal emitted immediately on incident open, paged to the operator, stamped in the dispatch, polished by mentat, built by helldiver, gated by proctor. One road into build; repeated incidents become design signal instead of one-off patches."
         }
       ]
     },
@@ -94,14 +94,14 @@
           "disposition": "new",
           "source": "agents/guardian/critic-role.md — Phase 6, piloted on bopthere",
           "summary": "Concurrent cold-context critique of the live diff.",
-          "detail": "Input is ONLY the diff, the changed-file list, the project's .agents/guardian.md, and the rubric — explicitly never the dev session transcript, because goal contamination is the thing this design exists to avoid. Debounce: 5 min idle OR 8 touched files (D-L3). Findings graded block / warn / note and delivered into the live session via claude-note.sh (exit 2 = ambiguous target, exit 3 = session at a prompt — retry, never treat as delivered). Budgets: $0.25/critique, $3.00/day (D-O1). It never writes code (D-L7). Verified by planting a real authz bug + an untested behavior change and requiring a block + warn within one debounce window."
+          "detail": "Input is ONLY the diff, the changed-file list, the project's .agents/guardian.md, and the rubric — explicitly never the dev session transcript, because goal contamination is the thing this design exists to avoid. Debounce: 5 min idle OR 8 touched files (D-L3). Findings graded block / warn / note and delivered into the live session via claude-note.sh (exit 2 = ambiguous target, exit 3 = session at a prompt — retry, never treat as delivered). Budget: 1M tokens/day, enforced by summing today's critique events' token counts before spawning (D-O1 — all caps are token-based, never dollars). It never writes code (D-L7). Verified by planting a real authz bug + an untested behavior change and requiring a block + warn within one debounce window."
         },
         {
           "name": "release-readiness rubric",
           "disposition": "new",
           "source": "critic-role.md, tuned per-project in .agents/guardian.md",
           "summary": "What 'ready to ship' means, written down.",
-          "detail": "v1 lines: does the change do what the task claims beyond the eval the dev agent optimized (Goodhart check); changed behavior covered by a changed/added test, deleted or weakened tests flagged; security boundaries (authz on new endpoints, input validation, secrets, injection); reversibility (migrations with down paths, no irreversible actions); blast radius (unexplained files = scope creep); observability of new failure modes; suppressions (eslint-disable, @ts-ignore, skipped tests) as explicit risk decisions. After a 2-week measure, lines that only ever produce notes get pruned."
+          "detail": "v1 lines: does the change do what the task claims beyond the eval the dev agent optimized (Goodhart check); changed behavior covered by a changed/added test, deleted or weakened tests flagged; security boundaries (authz on new endpoints, input validation, secrets, injection); reversibility (migrations with down paths, no irreversible actions); blast radius (unexplained files = scope creep); observability of new failure modes; suppressions (eslint-disable, @ts-ignore, skipped tests) as explicit risk decisions. After a 2-week measure, lines that only ever produce notes get pruned. The rubric is also where the operator's conventions live: .agents/guardian.md carries a Conventions block of stated taste — fewest LOC possible, no new dependencies without justification, naming, comment density — asked for at install time. The critic grades against stated conventions, never generic taste, at warn/note severity; convention lines face the same only-ever-notes pruning."
         },
         {
           "name": "daily battery",
@@ -141,7 +141,7 @@
           "disposition": "kept",
           "source": "agents/medic/runner.sh + check-examples/",
           "summary": "Every-10-minute scan; opens incidents, assigns repair.",
-          "detail": "Detects failures on live services, opens incidents into the event stream and the dispatch approval queue, hands fix work to helldiver's incident role, auto-restarts prod where the project configures it. The 10-minute cadence is also the merge-is-live hazard: units execute runners from the dev clone, so anything merged to trunk is live within 10 minutes — all ticket work stays on a branch until the single Phase-4 cutover."
+          "detail": "Detects failures on live services every 10 minutes. Mitigation is immediate and ungated: restart, revert, contain. Repair is not: on opening an incident, suk emits an incident-repair proposal to the top of the loop (design → stamp → build → release) and pages the operator — it no longer hands fix work directly to build (D-L15). The 10-minute cadence is also the merge-is-live hazard: units execute runners from the dev clone, so anything merged to trunk is live within 10 minutes — all ticket work stays on a branch until the single Phase-4 cutover."
         },
         {
           "name": "--check-config + --self-test",
