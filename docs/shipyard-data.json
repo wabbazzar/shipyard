@@ -183,13 +183,14 @@
     {
       "id": 0,
       "title": "bats test harness",
-      "status": "in-progress",
-      "gist": "First tests the quartet has ever had: PATH-shim stubs (gh/git/claude/systemctl), fixture configs, a real bare-origin git topology for both merge shapes, wired into CI."
+      "status": "done",
+      "gist": "First tests the quartet has ever had: PATH-shim stubs (gh/git/claude/systemctl), fixture configs, a real bare-origin git topology for both merge shapes, wired into CI.",
+      "completed": "2026-07-21"
     },
     {
       "id": 1,
       "title": "Gap fixes 1a–1g",
-      "status": "pending",
+      "status": "in-progress",
       "gist": "Post-merge --project bug, honest revert by commit shape, merge default → opt-in, no_checks → red, shared trunk detection that never silently defaults, --check-config, medic --self-test. Every fix behind a test first shown failing."
     },
     {
