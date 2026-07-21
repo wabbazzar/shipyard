@@ -1,0 +1,203 @@
+{
+  "meta": {
+    "updated": "2026-07-21",
+    "ticket": "wabbazzar-ice:docs/tickets/quartet-gaps-guardian-teeth.md",
+    "repo": "https://github.com/wabbazzar/shipyard",
+    "note": "Canonical deck data. Ticket standing gate: every phase completion and every direction-changing ticket edit updates this file in the same push."
+  },
+  "stats": [
+    { "value": "16", "label": "repos under agent maintenance (8 public · 8 private)" },
+    { "value": "871", "label": "nightly release-agent runs over 92 days" },
+    { "value": "0", "label": "real regressions caught in those runs" },
+    { "value": "8.8%", "label": "failure rate — every one environmental noise" }
+  ],
+  "crew": [
+    {
+      "id": "design",
+      "name": "mentat",
+      "was": null,
+      "loop": "design",
+      "status": "new agent — built in Phase 11",
+      "tagline": "Mines fleet telemetry and drafts feature/bug proposals.",
+      "headline": "Design was never a loop: every feature started as a chat conversation, gated by what I happened to notice.",
+      "gate": "proposal approved/denied in the daily dispatch; denied proposals are never re-proposed",
+      "skills": [
+        {
+          "name": "polish-ticket",
+          "disposition": "adapted",
+          "source": "hub .claude/skills/ → shipyard/skills/ (172 lines, read end-to-end 2026-07-21)",
+          "summary": "Hardens a spec until a zero-context agent can build it unattended.",
+          "detail": "The A–H checklist survives unchanged: self-containment (exact files, units, ports, dated numbers with the command that produced them), orchestration protocol with the verbatim anti-cheating brief, per-phase gate assembly, toolchain proof (§C2: never hand over a ticket whose verification method you haven't run while polishing), verification surfaces where a test that can't fail is a finding, decisions split locked / open-with-default / user-class, thin-slice phasing, ledger + observable DoD. What changes: the ice gate menu, dashboard port, notify path, and sibling-repo hazards stop being baked prose and become parameters from .agents/config.toml + a hub gate file. Callers: mentat headless after a proposal is stamped; Wesley in-session. [Phase 10, D-L11]"
+        },
+        {
+          "name": "telemetry collectors",
+          "disposition": "new",
+          "source": "agents/design/ — Phase 11",
+          "summary": "Read-only signal mining across the fleet.",
+          "detail": "Sources verified live 2026-07-21: caddy access logs via journald (caddy logs to stdout — /var/log/caddy/ is empty), the quartet event stream (92 day-files; pipe through jq -R 'fromjson?' — 2 corrupt lines abort bare jq), fyi-requests.jsonl, medic incident files, session transcripts under ~/.claude/projects/. Plus pilot usage beacons on shredly2 + bopthere: POST /api/usage appending {ts, path, action, session} JSONL to gitignored data/usage/ — no third-party analytics, nothing leaves the box/tailnet. Further instrumentation ships as mentat's own proposals: the loop bootstraps itself. [D-L12, D-O8]"
+        },
+        {
+          "name": "proposal drafting",
+          "disposition": "new",
+          "source": "agents/design/runner — Phase 11",
+          "summary": "Nightly: signals → ≤3 open proposals per project.",
+          "detail": "Writes <project>/tmp/<project>-mentat-result.json (mirrors augur's result shape so the dispatch queue enrichment stays symmetric), emits design.proposal.opened events, respects budget_proposal_daily = $2.00. Skips drafting when 3 proposals sit undecided. Approve in the dispatch → mentat hardens via polish-ticket into <project>/docs/tickets/ and hands to helldiver. Deny → recorded in decisions.jsonl, never re-proposed. [D-O7, D-O9, D-L13]"
+        },
+        {
+          "name": "coverage-audit",
+          "disposition": "adapted",
+          "source": "~/.claude/skills/audit-guardian-coverage (304 lines, user scope) → shipyard/skills/",
+          "summary": "Session transcripts as ground truth for what automation misses.",
+          "detail": "Every time the user pointed out a bug in a session, the test suite had missed it. This skill samples the N most-recent transcripts, finds those moments, categorizes the failure classes, and triages each fix as project-specific / generic / install-time-configurable. It resolves the core ambiguity: 0 catches can mean 'stable' or 'checking what doesn't break'. Today it's trapped at user scope on one box; adapted, it installs with the system, renamed to role IDs, and its output feeds both mentat proposals and proctor rubric lines. [shared design + release]"
+        }
+      ]
+    },
+    {
+      "id": "build",
+      "name": "helldiver",
+      "was": "augur",
+      "loop": "build",
+      "status": "renamed + hardened — Phases 1, 9, 10",
+      "tagline": "Takes ratified tickets to shipped code.",
+      "headline": "Auto-merge was opt-out (default true), and a repo with zero CI checks passed the CI gate vacuously.",
+      "gate": "CI green + explicit opt-in merge; no checks = red (waivable only by allow_no_ci, with a loud ci_waived event)",
+      "skills": [
+        {
+          "name": "execute-ticket",
+          "disposition": "adapted",
+          "source": "hub .claude/skills/ → shipyard/skills/ (164 lines, read end-to-end 2026-07-21)",
+          "summary": "Orchestrated build with mandatory on-system verification.",
+          "detail": "Portable core: discover-state step 0, green-baseline-before-touching-anything, thin vertical slices with a safety patch before risky changes, verify-before-commit (never trust a subagent's green — re-run and read the actual output), the honest-blocker protocol (revert to last green + precise report beats faked green), and the user-decision class as the only reason to stop (money, outward-facing, destructive, overriding deliberate config, real design forks) with a Signal alert when stopping. Parameterized: gate menu, notify command, event-stream path. Callers: helldiver headless for ratified tickets; Wesley in-session. [Phase 10, D-L11]"
+        },
+        {
+          "name": "feedback triage → PRs",
+          "disposition": "kept + hardened",
+          "source": "agents/augur/runner.sh + role.md",
+          "summary": "Nightly fyi-requests.jsonl → autonomous PRs.",
+          "detail": "The flow stays; the gates change. Fix 1c: augur_can_merge default flips true→false at runner.sh:226 + medic/runner.sh:84 — merge becomes opt-in per project. Fix 1d: the green|no_checks case at runner.sh:441 splits — no_checks fails the gate unless [augur] allow_no_ci = true, and a waiver emits augur.incident.ci_waived. The hot case that forced the ordering: shredly2 runs augur_can_merge = true with zero CI workflows, so its CI must exist (Phase 2) before these gates go live (Phase 4)."
+        },
+        {
+          "name": "incident PRs",
+          "disposition": "kept",
+          "source": "agents/augur/incident-role.md",
+          "summary": "Fix PRs for suk-opened incidents.",
+          "detail": "Suk's scan opens an incident; helldiver's incident role drafts the fix PR. Left open for human review unless merge is explicitly enabled for the project. With 1c, 'unset' now means open-PRs-only — the fleet audit found augur_can_merge absent everywhere except shredly2 (true, commented '§6.1 kill switch') and starbird/aurora/bopthere (false)."
+        }
+      ]
+    },
+    {
+      "id": "release",
+      "name": "proctor",
+      "was": "guardian",
+      "loop": "release",
+      "status": "repositioned — Phases 0–1, 6, 9",
+      "tagline": "Cold-context release-readiness critic; judges diffs while the code is being written.",
+      "headline": "871 runs over 92 days, 0 real regressions caught — it re-ran the tests the authoring session had already made green.",
+      "gate": "block findings must be addressed before ship; delivered as in-session notes, never hard stops (D-L2)",
+      "skills": [
+        {
+          "name": "shoulder-mode critic",
+          "disposition": "new",
+          "source": "agents/guardian/critic-role.md — Phase 6, piloted on bopthere",
+          "summary": "Concurrent cold-context critique of the live diff.",
+          "detail": "Input is ONLY the diff, the changed-file list, the project's .agents/guardian.md, and the rubric — explicitly never the dev session transcript, because goal contamination is the thing this design exists to avoid. Debounce: 5 min idle OR 8 touched files (D-L3). Findings graded block / warn / note and delivered into the live session via claude-note.sh (exit 2 = ambiguous target, exit 3 = session at a prompt — retry, never treat as delivered). Budgets: $0.25/critique, $3.00/day (D-O1). It never writes code (D-L7). Verified by planting a real authz bug + an untested behavior change and requiring a block + warn within one debounce window."
+        },
+        {
+          "name": "release-readiness rubric",
+          "disposition": "new",
+          "source": "critic-role.md, tuned per-project in .agents/guardian.md",
+          "summary": "What 'ready to ship' means, written down.",
+          "detail": "v1 lines: does the change do what the task claims beyond the eval the dev agent optimized (Goodhart check); changed behavior covered by a changed/added test, deleted or weakened tests flagged; security boundaries (authz on new endpoints, input validation, secrets, injection); reversibility (migrations with down paths, no irreversible actions); blast radius (unexplained files = scope creep); observability of new failure modes; suppressions (eslint-disable, @ts-ignore, skipped tests) as explicit risk decisions. After a 2-week measure, lines that only ever produce notes get pruned."
+        },
+        {
+          "name": "daily battery",
+          "disposition": "kept",
+          "source": "agents/guardian/role.md + runner.sh",
+          "summary": "The deterministic floor.",
+          "detail": "Stays as the backstop and as suk's post-merge validator (D-L4: shoulder mode runs beside it, not instead of it). The nightly LLM pass is repurposed from 're-run green tests' to 'critique what changed since my last run' — role.md:116 already builds a git log --since='24 hours ago' -p block to extend. Baseline it must beat: 794 ok / 77 fail, every failure environmental (playwright errors, db locks, dirty worktrees), fixAttempts: 0 across every sampled result.json."
+        },
+        {
+          "name": "coverage-audit",
+          "disposition": "adapted (shared)",
+          "source": "see mentat — same skill, second consumer",
+          "summary": "Missed-bug classes become rubric lines.",
+          "detail": "The audit's categorized failure classes (bugs users reported that tests missed) are exactly the classes the release rubric should check for that project. Shared skill, two consumers: mentat proposes work from it, proctor tightens its rubric from it."
+        }
+      ]
+    },
+    {
+      "id": "medic",
+      "name": "suk",
+      "was": "medic",
+      "loop": "on-call",
+      "status": "fixed — Phases 1, 9 (role ID stays 'medic')",
+      "tagline": "Answers when the ship is holed: triage, assign repair, restart, revert.",
+      "headline": "The merge→validate→revert loop never worked — and its notifications claimed 'reverted' regardless.",
+      "gate": "reverts and restarts are logged honestly (reverted vs revert_failed); timers fire every 10 minutes",
+      "skills": [
+        {
+          "name": "merge → validate → revert",
+          "disposition": "kept + fixed",
+          "source": "agents/medic/runner.sh:951–966",
+          "summary": "Post-merge validation with an honest revert path.",
+          "detail": "The confirmed-live bug chain: post-merge validation invoked guardian without --project (runner.sh:951), guardian exits 2 before doing any work, so the outcome was always 'fail', so the revert always ran; git revert -m 1 fails on squash merges (no second parent) and the failure was swallowed by || true; the Signal notification at :962 then claimed 'reverted' no matter what. Fixes 1a/1b: pass --project; choose revert shape by commit topology (rev-parse MERGE_SHA^2); capture the exit code; notify reverted vs revert_failed truthfully; emit medic.action.revert with outcome. Proven against a bats fixture with a real bare-origin + clone topology, both commit shapes, each test first shown failing against the pre-fix code."
+        },
+        {
+          "name": "incident triage",
+          "disposition": "kept",
+          "source": "agents/medic/runner.sh + check-examples/",
+          "summary": "Every-10-minute scan; opens incidents, assigns repair.",
+          "detail": "Detects failures on live services, opens incidents into the event stream and the dispatch approval queue, hands fix work to helldiver's incident role, auto-restarts prod where the project configures it. The 10-minute cadence is also the merge-is-live hazard: units execute runners from the dev clone, so anything merged to trunk is live within 10 minutes — all ticket work stays on a branch until the single Phase-4 cutover."
+        },
+        {
+          "name": "--check-config + --self-test",
+          "disposition": "new",
+          "source": "all runners (1f); medic (1g)",
+          "summary": "Prove the gates and the loop without touching anything live.",
+          "detail": "--check-config: read-only effective-gate printout (can_merge, allow_no_ci, resolved trunk, scope globs, budgets) as one JSON object — swept across the whole fleet and diffed against the audited inventory before any cutover. --self-test: run merge → post-merge-fail → revert on the fixture topology for both commit shapes; non-zero exit if the revert path doesn't actually revert."
+        }
+      ]
+    },
+    {
+      "id": "scribe",
+      "name": "chronicler",
+      "was": "scribe",
+      "loop": "docs",
+      "status": "renamed — Phase 9",
+      "tagline": "Keeps the log: daily doc refresh, the record of what the fleet did.",
+      "headline": "The only agent whose job was already honest — it gets the rename and nothing else.",
+      "gate": "docs follow the code; the daily dispatch (hub-side) is where its record meets the human",
+      "skills": [
+        {
+          "name": "doc refresh",
+          "disposition": "kept",
+          "source": "agents/scribe/role.md + runner.sh",
+          "summary": "Daily documentation pass per project.",
+          "detail": "Unchanged behavior; rename-only changes in Phase 9 (unit names, svc strings, role: field on events). Two projects run scribe-only installs today (2pizzaclub and the ice hub itself)."
+        },
+        {
+          "name": "install playbook",
+          "disposition": "replaced (system skill)",
+          "source": "hub skills/install-quartet (224 lines) → shipyard/skills/install",
+          "summary": "The installer keeps the recon, gains the theme knob.",
+          "detail": "Not chronicler's skill — listed here as the system-level entry. Kept from install-quartet: Step-0 recon (stack detection so a Python project never inherits Node test commands, git remote + gh auth checks, tracked-secrets sweep before anything pushes, medic service-surface and chat-DB shape questions), coverage-audit-first ordering, and the safety sweep. Added: the --theme question (spacetime / plain / custom), role-ID config keys with QUARTET_* accepted through the deprecation window (D-O6). The hub copy becomes a stub."
+        }
+      ]
+    }
+  ],
+  "phases": [
+    { "id": 0, "title": "bats test harness", "status": "in-progress", "gist": "First tests the quartet has ever had: PATH-shim stubs (gh/git/claude/systemctl), fixture configs, a real bare-origin git topology for both merge shapes, wired into CI." },
+    { "id": 1, "title": "Gap fixes 1a–1g", "status": "pending", "gist": "Post-merge --project bug, honest revert by commit shape, merge default → opt-in, no_checks → red, shared trunk detection that never silently defaults, --check-config, medic --self-test. Every fix behind a test first shown failing." },
+    { "id": 2, "title": "shredly2 CI", "status": "pending", "gist": "The hot case: auto-merge on + zero CI workflows. vitest (1558 tests) + typecheck on PR and push; must land before the gates that would otherwise disable its auto-merge." },
+    { "id": 3, "title": "fleet dry run", "status": "pending", "gist": "Read-only --check-config sweep across all projects from a worktree (the dev clone is live — medic fires every 10 min); any mismatch with the audited inventory blocks the merge." },
+    { "id": 4, "title": "live cutover", "status": "pending", "gist": "The single merge to main. Supervised runs on all four full-install projects; event stream watched for upgrade-caused incidents; rollback sha recorded first." },
+    { "id": 5, "title": "7-day soak", "status": "pending", "gist": "Failure rate must hold ≤ 8.8% baseline; zero dishonest revert notifications (a truthful revert_failed passes; a false 'reverted' fails)." },
+    { "id": 6, "title": "shoulder mode", "status": "pending", "gist": "Proctor's critic built + piloted on bopthere: planted-bug test, debounce test, blocking-gate test, cost guard, wrote-no-code check. Hooks merged additively into existing settings." },
+    { "id": 7, "title": "dispatch surfacing", "status": "pending", "gist": "Critique events into the dashboard (timeline detail, guardians panel — svc list currently hardcodes 3 of 4 projects) and the Daily Dispatch, verified at mobile viewport." },
+    { "id": 8, "title": "end-to-end gate", "status": "pending", "gist": "Every gate re-run from clean state; 2-week findings measure opens — Wesley judges ≥⅓ actionable, noisy rubric lines pruned." },
+    { "id": 9, "title": "rename + themes", "status": "pending", "gist": "guardian-quartet → shipyard locally (GitHub already renamed); canonical role IDs in code + events; --theme spacetime|plain|custom; fleet re-baked; legacy keys warn for one release." },
+    { "id": 10, "title": "skills-parity", "status": "pending", "gist": "polish-ticket, execute-ticket, coverage-audit adapted into shipyard/skills/; install-quartet replaced; symlinked per-project so agents and humans load identical files." },
+    { "id": 11, "title": "mentat", "status": "pending", "gist": "Collectors + pilot beacons + nightly proposals → dispatch Approve/Deny → polish-ticket → helldiver. Deny-suppression and budget caps proven with bats." },
+    { "id": 12, "title": "5-day fleet trial", "status": "pending", "gist": "T1 ≥1 real bug caught+fixed · T2 usage assessed for ≥3 projects · T3 ≥1 feature shipped end-to-end · T4 ≥1 consequential decision surfaced and decided. Missed floors become written findings." }
+  ]
+}

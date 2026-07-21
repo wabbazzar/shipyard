@@ -4,13 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>The Shipyard</title>
-  <meta name="description" content="Design → build → release for a fleet of agent-maintained repos: five agents, human gates, one installable system.">
+  <meta name="description" content="Design → build → release for a fleet of agent-maintained repos: five agents, human gates, one installable system. Live build status.">
   <meta property="og:title" content="The Shipyard">
-  <meta property="og:description" content="Design → build → release for a fleet of agent-maintained repos.">
+  <meta property="og:description" content="Design → build → release for a fleet of agent-maintained repos. Live build status.">
   <meta property="og:type" content="article">
   <meta property="og:url" content="https://wabbazzar.com/shipyard/">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <link rel="stylesheet" href="styles.css?v=1">
+  <link rel="stylesheet" href="styles.css?v=2">
   <style>
     /* Back link to the writing series — matches the mode-toggle pill. */
     .back-to-writing {
@@ -23,86 +23,117 @@
     .back-to-writing:hover { color: var(--text); opacity: 1; }
     body.present-mode .back-to-writing { opacity: 0; pointer-events: none; }
 
-    /* --- Shipyard-specific: loop identity colors (validated, dark + light) --- */
-    :root {
-      --loop-design: #0FA3C8;
-      --loop-build: #B5860A;
-      --loop-release: #DE5B96;
-    }
-    html.light body {
-      --loop-design: #0683A8;
-      --loop-build: #8A650A;
-      --loop-release: #B33D74;
-    }
+    /* --- Loop identity colors (validated: dark + light, CVD-checked) --- */
+    :root { --loop-design: #0FA3C8; --loop-build: #B5860A; --loop-release: #DE5B96; }
+    html.light body { --loop-design: #0683A8; --loop-build: #8A650A; --loop-release: #B33D74; }
 
-    /* Stat tiles (hero numbers — the data speaks first) */
-    .stat-row {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 2px; margin: 2rem 0; background: transparent;
-    }
-    .stat-tile {
-      background: var(--code-bg); border: 1px solid var(--dot-inactive);
-      border-radius: 8px; padding: 1.1rem 1.2rem;
-    }
+    /* Stat tiles */
+    .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 2px; margin: 2rem 0; }
+    .stat-tile { background: var(--code-bg); border: 1px solid var(--dot-inactive); border-radius: 8px; padding: 1.1rem 1.2rem; }
     .stat-value { font-size: 2.2rem; font-weight: 700; line-height: 1.1; color: var(--text); }
     .stat-label { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; letter-spacing: 0.02em; }
 
-    /* Flow diagram — plain HTML, theme-native, labels carry identity (color is secondary) */
-    .loop-flow {
-      display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.5rem;
-      margin: 1.8rem 0 1rem; font-size: 0.85rem;
-    }
+    /* Crew flow — nodes are buttons (clickable → drawer) */
+    .loop-flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.5rem; margin: 1.8rem 0 0.6rem; font-size: 0.85rem; }
     .loop-node {
       flex: 1 1 150px; min-width: 140px; border-radius: 8px; padding: 0.8rem 0.9rem;
       background: var(--code-bg); border: 1px solid var(--dot-inactive);
-      border-top: 3px solid var(--muted);
+      border-top: 3px solid var(--muted); text-align: left; color: var(--text);
+      font-family: var(--font); cursor: pointer;
+      transition: border-color var(--transition), transform 0.15s ease;
     }
+    .loop-node:hover { border-color: var(--accent); transform: translateY(-2px); }
     .loop-node.design { border-top-color: var(--loop-design); }
     .loop-node.build { border-top-color: var(--loop-build); }
     .loop-node.release { border-top-color: var(--loop-release); }
     .loop-node .crew { font-weight: 700; font-size: 1rem; }
     .loop-node .loop-tag { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
     .loop-node p { font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; line-height: 1.45; }
+    .loop-node .skill-count { display: inline-block; margin-top: 0.5rem; font-size: 0.7rem; color: var(--accent); }
     .loop-gate {
-      flex: 0 0 auto; align-self: center; text-align: center;
-      color: var(--muted); font-size: 0.7rem; letter-spacing: 0.05em;
-      padding: 0.3rem 0.4rem; border: 1px dashed var(--dot-inactive); border-radius: 6px;
+      flex: 0 0 auto; align-self: center; text-align: center; color: var(--muted);
+      font-size: 0.7rem; letter-spacing: 0.05em; padding: 0.3rem 0.4rem;
+      border: 1px dashed var(--dot-inactive); border-radius: 6px;
     }
     .loop-gate strong { display: block; color: var(--text); font-size: 0.95rem; }
-    .crew-aside {
-      display: flex; gap: 0.5rem; margin: 0.6rem 0 1.4rem; flex-wrap: wrap;
-    }
+    .crew-aside { display: flex; gap: 0.5rem; margin: 0.5rem 0 0.4rem; flex-wrap: wrap; }
     .crew-aside .loop-node { border-top-style: dashed; flex: 1 1 200px; }
+    .drawer-hint { font-size: 0.75rem; color: var(--muted); margin: 0.6rem 0 1.2rem; }
 
-    /* Tables */
+    /* Crew drawer (right side, both modes) */
+    .crew-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 95; opacity: 0; pointer-events: none; transition: opacity 0.25s ease; }
+    .crew-overlay.open { opacity: 1; pointer-events: auto; }
+    .crew-drawer {
+      position: fixed; top: 0; right: -520px; width: min(500px, 92vw); height: 100vh;
+      background: var(--bg); border-left: 1px solid var(--dot-inactive); z-index: 96;
+      padding: 2rem 1.5rem 3rem; overflow-y: auto; transition: right 0.25s ease;
+    }
+    .crew-drawer.open { right: 0; }
+    body.drawer-open .mode-toggle, body.drawer-open .theme-toggle, body.drawer-open .back-to-writing { opacity: 0; pointer-events: none; }
+    .crew-drawer-close {
+      position: absolute; top: 1rem; right: 1rem; background: none;
+      border: 1px solid var(--dot-inactive); color: var(--muted); width: 30px; height: 30px;
+      border-radius: 50%; cursor: pointer; font-size: 0.9rem;
+    }
+    .crew-drawer-close:hover { border-color: var(--accent); color: var(--text); }
+    .crew-drawer .loop-tag { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+    .crew-drawer h3 { font-size: 1.5rem; margin: 0.1rem 0 0.2rem; color: var(--text); }
+    .crew-drawer .was { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.8rem; }
+    .crew-drawer .headline {
+      font-size: 0.9rem; line-height: 1.55; border-left: 3px solid var(--accent);
+      padding: 0.5rem 0.9rem; background: var(--code-bg); border-radius: 0 6px 6px 0; margin: 0.8rem 0;
+    }
+    .crew-drawer .gate-line { font-size: 0.8rem; color: var(--muted); margin: 0.8rem 0 1.2rem; }
+    .crew-drawer .gate-line strong { color: var(--text); }
+    .skill-item { border: 1px solid var(--dot-inactive); border-radius: 8px; margin-bottom: 0.6rem; overflow: hidden; }
+    .skill-toggle {
+      width: 100%; display: flex; align-items: center; gap: 0.6rem; text-align: left;
+      background: var(--code-bg); border: none; color: var(--text); font-family: var(--font);
+      font-size: 0.9rem; font-weight: 600; padding: 0.7rem 0.9rem; cursor: pointer;
+    }
+    .skill-toggle .chev { margin-left: auto; color: var(--muted); transition: transform 0.2s ease; font-size: 0.8rem; }
+    .skill-item.open .skill-toggle .chev { transform: rotate(90deg); }
+    .disposition {
+      font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em;
+      padding: 0.15rem 0.45rem; border-radius: 999px; border: 1px solid var(--dot-inactive);
+      color: var(--muted); white-space: nowrap;
+    }
+    .disposition[data-d^="new"] { border-color: var(--accent); color: var(--accent); }
+    .disposition[data-d^="adapted"] { border-color: var(--loop-design); color: var(--loop-design); }
+    .disposition[data-d^="kept"] { border-color: var(--muted); }
+    .disposition[data-d^="replaced"] { border-color: var(--loop-release); color: var(--loop-release); }
+    .skill-body { display: none; padding: 0.8rem 0.9rem; font-size: 0.82rem; line-height: 1.55; color: var(--muted); border-top: 1px solid var(--dot-inactive); }
+    .skill-item.open .skill-body { display: block; }
+    .skill-body .src { display: block; font-family: var(--mono); font-size: 0.7rem; margin-bottom: 0.5rem; color: var(--muted); opacity: 0.85; word-break: break-word; }
+    .skill-body p { color: inherit; }
+    .skill-summary { font-size: 0.78rem; font-weight: 400; color: var(--muted); display: block; }
+
+    /* Phase board */
+    .phase-board { margin: 1.6rem 0; border: 1px solid var(--dot-inactive); border-radius: 8px; overflow: hidden; }
+    .phase-row { display: grid; grid-template-columns: 2.2rem 9.5rem 6.2rem 1fr; gap: 0.8rem; padding: 0.55rem 0.9rem; border-bottom: 1px solid var(--dot-inactive); font-size: 0.82rem; align-items: baseline; }
+    .phase-row:last-child { border-bottom: none; }
+    .phase-row .pnum { font-family: var(--mono); color: var(--muted); font-size: 0.75rem; }
+    .phase-row .ptitle { font-weight: 600; color: var(--text); }
+    .phase-row .pgist { color: var(--muted); line-height: 1.5; }
+    .status-chip { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; padding: 0.15rem 0.5rem; border-radius: 999px; border: 1px solid var(--dot-inactive); color: var(--muted); white-space: nowrap; justify-self: start; }
+    .status-chip[data-s="in-progress"] { border-color: var(--accent); color: var(--accent); }
+    .status-chip[data-s="done"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+    .board-meta { font-size: 0.72rem; color: var(--muted); font-family: var(--mono); margin: 0.4rem 0 0; }
+
     .ship-table { width: 100%; border-collapse: collapse; margin: 1.4rem 0; font-size: 0.85rem; }
-    .ship-table th, .ship-table td {
-      text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--dot-inactive);
-      vertical-align: top;
-    }
+    .ship-table th, .ship-table td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--dot-inactive); vertical-align: top; }
     .ship-table th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; }
-    .swatch { display: inline-block; width: 0.65em; height: 0.65em; border-radius: 2px; margin-right: 0.45em; vertical-align: baseline; }
-    .sw-design { background: var(--loop-design); }
-    .sw-build { background: var(--loop-build); }
-    .sw-release { background: var(--loop-release); }
-
-    .callout {
-      border-left: 3px solid var(--accent); background: var(--code-bg);
-      border-radius: 0 8px 8px 0; padding: 0.9rem 1.1rem; margin: 1.4rem 0;
-      font-size: 0.9rem;
-    }
+    .callout { border-left: 3px solid var(--accent); background: var(--code-bg); border-radius: 0 8px 8px 0; padding: 0.9rem 1.1rem; margin: 1.4rem 0; font-size: 0.9rem; }
     .callout strong { color: var(--text); }
     .footnote { font-size: 0.8rem; color: var(--muted); margin-top: 1.6rem; }
-    #deck pre {
-      background: var(--code-bg); border: 1px solid var(--dot-inactive);
-      border-radius: 8px; padding: 0.9rem 1.1rem; margin: 1.2rem 0;
-      overflow-x: auto; font-size: 0.8rem; line-height: 1.5;
-    }
+    #deck pre { background: var(--code-bg); border: 1px solid var(--dot-inactive); border-radius: 8px; padding: 0.9rem 1.1rem; margin: 1.2rem 0; overflow-x: auto; font-size: 0.8rem; line-height: 1.5; }
     #deck pre code { background: none; border: none; padding: 0; }
     @media (max-width: 640px) {
       .loop-flow { flex-direction: column; }
       .loop-gate { align-self: stretch; }
       #title .slide-inner { padding-top: 3.5rem; } /* clear the fixed pills */
+      .phase-row { grid-template-columns: 2rem 1fr 6rem; }
+      .phase-row .pgist { grid-column: 1 / -1; }
     }
   </style>
   <!-- Apply saved theme before paint to avoid a flash. -->
@@ -123,129 +154,88 @@
 
   <main id="deck">
 
-    <!-- ========== Slide 1: the problem, in numbers ========== -->
+    <!-- ========== 1 · The problem, measured ========== -->
     <section id="title">
       <div class="slide-inner">
         <h1>The Shipyard</h1>
         <p class="subtitle">design &rarr; build &rarr; release for a fleet of agent-maintained repos</p>
 
-        <p>Sixteen personal projects run under autonomous maintenance agents on
-        systemd timers &mdash; tests re-run nightly, feedback triaged into PRs,
-        failures triaged on-call, docs refreshed. It sounds like a shipping
-        pipeline. Then I measured it.</p>
+        <p>Sixteen repos run under autonomous maintenance agents on systemd
+        timers. Measured over 92 days:</p>
 
-        <div class="stat-row" role="group" aria-label="Baseline measurements">
-          <div class="stat-tile"><div class="stat-value">16</div><div class="stat-label">repos under agent maintenance (8 public &middot; 8 private)</div></div>
-          <div class="stat-tile"><div class="stat-value">871</div><div class="stat-label">nightly release-agent runs over 92 days</div></div>
-          <div class="stat-tile"><div class="stat-value">0</div><div class="stat-label">real regressions caught in those runs</div></div>
-          <div class="stat-tile"><div class="stat-value">8.8%</div><div class="stat-label">failure rate &mdash; every one environmental noise</div></div>
-        </div>
+        <div class="stat-row" id="stat-row" role="group" aria-label="Baseline measurements"></div>
 
-        <p>871 runs, zero catches. The release agent was re-running the same
-        tests the authoring session had already made green &mdash; validating
-        yesterday&rsquo;s work with the same signal the author optimized
-        against. And <em>design</em> wasn&rsquo;t a loop at all: every feature
-        started as a chat conversation, which means it started whenever I
-        happened to notice something, not when the data did.</p>
+        <p>The release agent re-ran the tests the authoring session had already
+        made green &mdash; same signal the author optimized against, a day
+        late. Design wasn&rsquo;t a loop at all: features started as chat,
+        gated by what I happened to notice.</p>
 
-        <p class="footnote">This deck is the design record for rebuilding that system as
-        <strong>Shipyard</strong> &mdash; borrowing the three-loop framing from
-        <a href="https://github.com/eugenelim/agent-ready-repo" target="_blank" rel="noopener">agent-ready-repo</a>:
-        supervised loops with human gates at every irreversible handoff.</p>
+        <p>The rebuild adopts
+        <a href="https://github.com/eugenelim/agent-ready-repo" target="_blank" rel="noopener">agent-ready-repo</a>&rsquo;s
+        three-loop model: design, build, and release as peer loops, a human
+        gate at every irreversible handoff. This page renders the live build
+        data &mdash; crew, skills, phase status &mdash; from the same file the
+        ticket&rsquo;s gates require the builder to update. If this page lags
+        reality, a gate is broken.</p>
       </div>
     </section>
 
-    <!-- ========== Slide 2: three loops, five crew ========== -->
+    <!-- ========== 2 · Three loops, five crew ========== -->
     <section id="loops">
       <div class="slide-inner">
         <h2>Three loops, five crew</h2>
 
-        <p>Design, build, and release are peer loops. Two agents sit outside
-        the shipment paradigm entirely: an on-call orchestrator and a
-        historian. Nothing crosses a gate without a human stamp.</p>
+        <p>Two agents sit outside the shipment loops: on-call and docs.
+        Nothing crosses a gate without a human stamp.</p>
 
-        <div class="loop-flow" aria-label="The shipment pipeline">
-          <div class="loop-node design">
-            <span class="loop-tag">design</span>
-            <div class="crew">mentat</div>
-            <p>Mines fleet telemetry &mdash; usage beacons, access logs, event
-            streams, feedback &mdash; and drafts feature/bug proposals.</p>
-          </div>
-          <div class="loop-gate"><strong>&#9875;</strong>stamp<br>(dispatch)</div>
-          <div class="loop-node build">
-            <span class="loop-tag">build</span>
-            <div class="crew">helldiver</div>
-            <p>Takes ratified tickets to shipped code through the same
-            skills a human session uses.</p>
-          </div>
-          <div class="loop-gate"><strong>&#9875;</strong>CI +<br>merge gate</div>
-          <div class="loop-node release">
-            <span class="loop-tag">release</span>
-            <div class="crew">proctor</div>
-            <p>Cold-context release-readiness critic: judges diffs against a
-            rubric while the code is still being written.</p>
-          </div>
-        </div>
+        <div class="loop-flow" id="loop-flow" aria-label="The shipment pipeline"></div>
+        <div class="crew-aside" id="crew-aside" aria-label="Outside the shipment loops"></div>
+        <p class="drawer-hint">&#9656; Tap a crew member for their skills &mdash; each expandable to the real spec: what&rsquo;s adapted, what&rsquo;s replaced, what&rsquo;s new, with sources and decision IDs.</p>
 
-        <div class="crew-aside" aria-label="Outside the shipment loops">
-          <div class="loop-node">
-            <span class="loop-tag">on-call</span>
-            <div class="crew">medic</div>
-            <p>Triage &amp; repair of live failures &mdash; merge, validate,
-            revert honestly when it breaks.</p>
-          </div>
-          <div class="loop-node">
-            <span class="loop-tag">docs</span>
-            <div class="crew">chronicler</div>
-            <p>Keeps the log: daily doc refresh, the record of what the fleet
-            did and why.</p>
-          </div>
-        </div>
-
-        <table class="ship-table">
-          <thead><tr><th>Loop</th><th>Crew (spacetime theme)</th><th>Human gate</th></tr></thead>
-          <tbody>
-            <tr><td><span class="swatch sw-design"></span>design</td><td>mentat &mdash; the human computer, reads the fleet&rsquo;s signals</td><td>proposal approved/denied in the daily dispatch</td></tr>
-            <tr><td><span class="swatch sw-build"></span>build</td><td>helldiver &mdash; digs where no one else can</td><td>CI green + explicit opt-in merge; no checks = red</td></tr>
-            <tr><td><span class="swatch sw-release"></span>release</td><td>proctor &mdash; presides over the trials</td><td><code>block</code> findings must be addressed before ship</td></tr>
-          </tbody>
-        </table>
-
-        <div class="callout"><strong>Skills-parity.</strong> The agents run the
-        <em>same skill files</em> a human-driven session invokes:
-        <code>polish-ticket</code> hardens a spec until a zero-context agent can
-        build it safely; <code>execute-ticket</code> orchestrates the build with
-        mandatory on-system verification. Mentat calls one, helldiver calls the
-        other, I call both by hand. One implementation, three callers &mdash;
-        no agent-only forks of the workflow.</div>
+        <div class="callout"><strong>Skills-parity.</strong> Agents run the
+        <em>same skill files</em> a human session invokes &mdash;
+        <code>polish-ticket</code>, <code>execute-ticket</code>,
+        <code>coverage-audit</code> &mdash; installed per-project, one
+        implementation, N callers. The full disposition audit is in each
+        crew&rsquo;s drawer.</div>
       </div>
     </section>
 
-    <!-- ========== Slide 3: installable, gated, judged ========== -->
+    <!-- ========== 3 · The build, live ========== -->
+    <section id="plan">
+      <div class="slide-inner">
+        <h2>The build</h2>
+
+        <p>Thirteen phases. 0&ndash;8 harden the existing agents under their
+        current names (the ticket&rsquo;s verified line numbers depend on it);
+        9&ndash;11 rename, unify skills, and add the design loop; 12 judges the
+        whole system. Status below is live data, updated by the builder as a
+        commit gate.</p>
+
+        <div class="phase-board" id="phase-board"></div>
+        <p class="board-meta" id="board-meta"></p>
+      </div>
+    </section>
+
+    <!-- ========== 4 · Installable, gated, judged ========== -->
     <section id="install">
       <div class="slide-inner">
         <h2>Installable, gated, judged</h2>
 
-        <p>Shipyard installs per-project, like a package. Names are a knob, not
-        a doctrine &mdash; canonical role IDs (<code>design</code>,
+        <p>Per-project install. Canonical role IDs (<code>design</code>,
         <code>build</code>, <code>release</code>, <code>medic</code>,
-        <code>scribe</code>) live in code and events; the display names come
-        from a theme:</p>
+        <code>scribe</code>) live in code and events; display names are a
+        theme:</p>
 
-        <pre><code>bash install.sh --project &lt;dir&gt; --theme spacetime   # mentat &middot; helldiver &middot; proctor &middot; medic &middot; chronicler
+        <pre><code>bash install.sh --project &lt;dir&gt; --theme spacetime   # mentat &middot; helldiver &middot; proctor &middot; suk &middot; chronicler
 bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; build &middot; release &middot; medic &middot; scribe</code></pre>
 
-        <p>The hardening that comes with it: merge is opt-in (default
-        <em>no</em>), a repo with zero CI checks reads as <em>red</em>, the
+        <p>Hardening shipped with it: merge is opt-in (default <em>no</em>),
+        zero CI checks reads as <em>red</em>, the
         merge&rarr;validate&rarr;revert loop is tested against real git
-        topologies, and every agent behavior sits behind a test that was first
-        shown failing.</p>
+        topologies, every behavior sits behind a test first shown failing.</p>
 
         <h3>The 5-day trial</h3>
-        <p>After install across the fleet, the system &mdash; not any one agent
-        &mdash; is judged over five days, each criterion with a floor and an
-        evidence trail:</p>
-
         <table class="ship-table">
           <thead><tr><th>Criterion</th><th>Floor</th></tr></thead>
           <tbody>
@@ -255,9 +245,8 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
             <tr><td>Decisions surfaced</td><td>&ge;1 consequential choice surfaced to the human and decided, not defaulted</td></tr>
           </tbody>
         </table>
-
-        <p>Any floor missed becomes a written finding with a follow-up ticket
-        &mdash; not a silent pass.</p>
+        <p>Missed floors become written findings with follow-up tickets, not
+        silent passes.</p>
 
         <p class="footnote">Code: <a href="https://github.com/wabbazzar/shipyard" target="_blank" rel="noopener">github.com/wabbazzar/shipyard</a>
         &middot; framing borrowed with thanks from
@@ -266,6 +255,99 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
     </section>
 
   </main>
+
+  <!-- Crew drawer -->
+  <div class="crew-overlay" id="crew-overlay"></div>
+  <aside class="crew-drawer" id="crew-drawer" aria-label="Crew detail">
+    <button class="crew-drawer-close" id="crew-drawer-close" aria-label="Close">&times;</button>
+    <div id="crew-drawer-body"></div>
+  </aside>
+
+  <!-- Deck data + rendering -->
+  <script>
+    (async () => {
+      // Canonical data lives in the shipyard repo's Pages deploy; local copy is the fallback.
+      const SOURCES = ['./shipyard-data.json'];
+      let data = null;
+      for (const src of SOURCES) {
+        try { const r = await fetch(src, { cache: 'no-store' }); if (r.ok) { data = await r.json(); break; } } catch (e) {}
+      }
+      if (!data) {
+        document.getElementById('stat-row').innerHTML = '<p style="color:var(--muted)">shipyard-data.json unavailable</p>';
+        return;
+      }
+      const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+      // Stats
+      document.getElementById('stat-row').innerHTML = data.stats.map(s =>
+        `<div class="stat-tile"><div class="stat-value">${esc(s.value)}</div><div class="stat-label">${esc(s.label)}</div></div>`).join('');
+
+      // Crew flow: design → gate → build → gate → release; aside: medic + scribe
+      const byId = Object.fromEntries(data.crew.map(c => [c.id, c]));
+      const node = (c) =>
+        `<button class="loop-node ${c.id === 'medic' || c.id === 'scribe' ? '' : c.id}" data-crew="${c.id}" type="button">
+           <span class="loop-tag">${esc(c.loop)}</span>
+           <div class="crew">${esc(c.name)}</div>
+           <p>${esc(c.tagline)}</p>
+           <span class="skill-count">${c.skills.length} skills &#9656;</span>
+         </button>`;
+      document.getElementById('loop-flow').innerHTML =
+        node(byId.design) +
+        `<div class="loop-gate"><strong>&#9875;</strong>stamp<br>(dispatch)</div>` +
+        node(byId.build) +
+        `<div class="loop-gate"><strong>&#9875;</strong>CI +<br>merge gate</div>` +
+        node(byId.release);
+      document.getElementById('crew-aside').innerHTML = node(byId.medic) + node(byId.scribe);
+
+      // Phase board
+      document.getElementById('phase-board').innerHTML = data.phases.map(p =>
+        `<div class="phase-row">
+           <span class="pnum">${p.id}</span>
+           <span class="ptitle">${esc(p.title)}</span>
+           <span class="status-chip" data-s="${esc(p.status)}">${esc(p.status)}</span>
+           <span class="pgist">${esc(p.gist)}</span>
+         </div>`).join('');
+      document.getElementById('board-meta').textContent =
+        `data: shipyard-data.json · updated ${data.meta.updated} · ticket: ${data.meta.ticket}`;
+
+      // Drawer
+      const drawer = document.getElementById('crew-drawer');
+      const overlay = document.getElementById('crew-overlay');
+      const body = document.getElementById('crew-drawer-body');
+      function openCrew(id) {
+        const c = byId[id];
+        if (!c) return;
+        body.innerHTML =
+          `<span class="loop-tag">${esc(c.loop)}${c.was ? ` &middot; was <s>${esc(c.was)}</s>` : ' &middot; new'}</span>
+           <h3>${esc(c.name)}</h3>
+           <div class="was">${esc(c.status)}</div>
+           <div class="headline">${esc(c.headline)}</div>
+           <p class="gate-line"><strong>Gate:</strong> ${esc(c.gate)}</p>` +
+          c.skills.map((s, i) =>
+            `<div class="skill-item" data-i="${i}">
+               <button class="skill-toggle" type="button">
+                 <span>${esc(s.name)}<span class="skill-summary">${esc(s.summary)}</span></span>
+                 <span class="disposition" data-d="${esc(s.disposition)}">${esc(s.disposition)}</span>
+                 <span class="chev">&#9656;</span>
+               </button>
+               <div class="skill-body"><span class="src">${esc(s.source || '')}</span><p>${esc(s.detail)}</p></div>
+             </div>`).join('');
+        drawer.classList.add('open');
+        overlay.classList.add('open');
+        document.body.classList.add('drawer-open');
+      }
+      function closeCrew() { drawer.classList.remove('open'); overlay.classList.remove('open'); document.body.classList.remove('drawer-open'); }
+      document.addEventListener('click', (e) => {
+        const n = e.target.closest('.loop-node');
+        if (n) { openCrew(n.dataset.crew); return; }
+        const t = e.target.closest('.skill-toggle');
+        if (t) { t.closest('.skill-item').classList.toggle('open'); }
+      });
+      overlay.addEventListener('click', closeCrew);
+      document.getElementById('crew-drawer-close').addEventListener('click', closeCrew);
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && drawer.classList.contains('open')) closeCrew(); });
+    })();
+  </script>
 
   <!-- Presentation Logic -->
   <script>
@@ -277,7 +359,6 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
       const btnPresent = document.getElementById('btn-present');
       const sections = Array.from(deck.querySelectorAll('section'));
 
-      // Build dots
       sections.forEach((sec, i) => {
         const dot = document.createElement('button');
         dot.classList.add('dot');
@@ -287,7 +368,6 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
       });
       const dots = Array.from(dotsContainer.querySelectorAll('.dot'));
 
-      // --- Mode Management ---
       function setMode(mode) {
         const isPresent = mode === 'present';
         body.classList.toggle('present-mode', isPresent);
@@ -303,14 +383,12 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
       const saved = localStorage.getItem('deck-mode');
       if (saved === 'present') setMode('present');
 
-      // --- Dot Navigation ---
       dotsContainer.addEventListener('click', (e) => {
         const dot = e.target.closest('.dot');
         if (!dot) return;
         sections[parseInt(dot.dataset.index, 10)].scrollIntoView({ behavior: 'smooth' });
       });
 
-      // --- Active Dot Tracking ---
       function updateActiveDot() {
         if (!body.classList.contains('present-mode')) return;
         let closest = 0, closestDist = Infinity;
@@ -323,7 +401,6 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
       deck.addEventListener('scroll', updateActiveDot, { passive: true });
       window.addEventListener('scroll', updateActiveDot, { passive: true });
 
-      // --- Keyboard Navigation (Present Mode) ---
       document.addEventListener('keydown', (e) => {
         if (!body.classList.contains('present-mode')) return;
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -341,7 +418,6 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
         if (targetIdx !== currentIdx) sections[targetIdx].scrollIntoView({ behavior: 'smooth' });
       });
 
-      // --- Hash Navigation ---
       function scrollToHash() {
         const hash = window.location.hash.slice(1);
         if (!hash) return;
@@ -351,7 +427,6 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
       window.addEventListener('hashchange', scrollToHash);
       window.addEventListener('load', () => { scrollToHash(); updateActiveDot(); });
 
-      // --- Theme toggle ---
       const themeBtn = document.getElementById('theme-toggle');
       function applyTheme(light) {
         document.documentElement.classList.toggle('light', light);
