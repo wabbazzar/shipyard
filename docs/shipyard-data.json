@@ -197,8 +197,9 @@
     {
       "id": 2,
       "title": "shredly2 CI",
-      "status": "in-progress",
-      "gist": "The hot case: auto-merge on + zero CI workflows. vitest (1558 tests) + typecheck on PR and push; must land before the gates that would otherwise disable its auto-merge."
+      "status": "done",
+      "gist": "The hot case: auto-merge on + zero CI workflows. vitest (1558 tests) + typecheck on PR and push; must land before the gates that would otherwise disable its auto-merge.",
+      "completed": "2026-07-21"
     },
     {
       "id": 3,
@@ -210,13 +211,14 @@
     {
       "id": 4,
       "title": "live cutover",
-      "status": "pending",
-      "gist": "The single merge to main. Supervised runs on all four full-install projects; event stream watched for upgrade-caused incidents; rollback sha recorded first."
+      "status": "done",
+      "gist": "The single merge to main. Supervised runs on all four full-install projects; event stream watched for upgrade-caused incidents; rollback sha recorded first.",
+      "completed": "2026-07-21"
     },
     {
       "id": 5,
       "title": "7-day soak",
-      "status": "pending",
+      "status": "in-progress",
       "gist": "Failure rate must hold ≤ 8.8% baseline; zero dishonest revert notifications (a truthful revert_failed passes; a false 'reverted' fails)."
     },
     {
