@@ -497,3 +497,22 @@ EOF
   run notify_log
   [[ "$output" == *"revert_failed"* ]]
 }
+
+@test "phase3: synthetic incident with augur_can_merge absent — PR stays open, no merge" {
+  p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
+  install_agents "$p" absent-keys.toml p3neg
+  sed -i '/^\[augur\]/a in_scope_paths = ["*"]' "$p/.agents/config.toml"
+  topo_commit_all "$p"
+  prep_augur_incident "$p" p3neg
+
+  run run_runner augur "$p" --mode incident --incident-file "$INC_FILE"
+  [ "$status" -eq 0 ]
+
+  # gh pr merge was never invoked — the PR is left open for human review.
+  run stub_argv gh
+  [[ "$output" != *"pr merge"* ]]
+  # And the refusal is on the record.
+  ev="$(events_json | jq -c 'select(.event=="augur.incident.merge_blocked")')"
+  [ -n "$ev" ]
+  [ "$(jq -r '.reason' <<<"$ev")" = "merge_disabled_by_config" ]
+}
