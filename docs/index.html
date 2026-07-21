@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Shipyard</title>
+  <meta name="description" content="Design → build → release for a fleet of agent-maintained repos: five agents, human gates, one installable system.">
+  <meta property="og:title" content="The Shipyard">
+  <meta property="og:description" content="Design → build → release for a fleet of agent-maintained repos.">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://wabbazzar.github.io/shipyard/">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <link rel="stylesheet" href="styles.css?v=1">
+  <style>
+    /* Back link to the writing series — matches the mode-toggle pill. */
+    .back-to-writing {
+      position: fixed; top: 1.5rem; left: 1.5rem; z-index: 100;
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      background: #111; border: 1px solid #222; border-radius: 999px;
+      padding: 0.45rem 1rem; color: var(--muted); font-size: 0.8rem;
+      letter-spacing: 0.04em; transition: color var(--transition);
+    }
+    .back-to-writing:hover { color: var(--text); opacity: 1; }
+    body.present-mode .back-to-writing { opacity: 0; pointer-events: none; }
+
+    /* --- Shipyard-specific: loop identity colors (validated, dark + light) --- */
+    :root {
+      --loop-design: #0FA3C8;
+      --loop-build: #B5860A;
+      --loop-release: #DE5B96;
+    }
+    html.light body {
+      --loop-design: #0683A8;
+      --loop-build: #8A650A;
+      --loop-release: #B33D74;
+    }
+
+    /* Stat tiles (hero numbers — the data speaks first) */
+    .stat-row {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 2px; margin: 2rem 0; background: transparent;
+    }
+    .stat-tile {
+      background: var(--code-bg); border: 1px solid var(--dot-inactive);
+      border-radius: 8px; padding: 1.1rem 1.2rem;
+    }
+    .stat-value { font-size: 2.2rem; font-weight: 700; line-height: 1.1; color: var(--text); }
+    .stat-label { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; letter-spacing: 0.02em; }
+
+    /* Flow diagram — plain HTML, theme-native, labels carry identity (color is secondary) */
+    .loop-flow {
+      display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.5rem;
+      margin: 1.8rem 0 1rem; font-size: 0.85rem;
+    }
+    .loop-node {
+      flex: 1 1 150px; min-width: 140px; border-radius: 8px; padding: 0.8rem 0.9rem;
+      background: var(--code-bg); border: 1px solid var(--dot-inactive);
+      border-top: 3px solid var(--muted);
+    }
+    .loop-node.design { border-top-color: var(--loop-design); }
+    .loop-node.build { border-top-color: var(--loop-build); }
+    .loop-node.release { border-top-color: var(--loop-release); }
+    .loop-node .crew { font-weight: 700; font-size: 1rem; }
+    .loop-node .loop-tag { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+    .loop-node p { font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; line-height: 1.45; }
+    .loop-gate {
+      flex: 0 0 auto; align-self: center; text-align: center;
+      color: var(--muted); font-size: 0.7rem; letter-spacing: 0.05em;
+      padding: 0.3rem 0.4rem; border: 1px dashed var(--dot-inactive); border-radius: 6px;
+    }
+    .loop-gate strong { display: block; color: var(--text); font-size: 0.95rem; }
+    .crew-aside {
+      display: flex; gap: 0.5rem; margin: 0.6rem 0 1.4rem; flex-wrap: wrap;
+    }
+    .crew-aside .loop-node { border-top-style: dashed; flex: 1 1 200px; }
+
+    /* Tables */
+    .ship-table { width: 100%; border-collapse: collapse; margin: 1.4rem 0; font-size: 0.85rem; }
+    .ship-table th, .ship-table td {
+      text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--dot-inactive);
+      vertical-align: top;
+    }
+    .ship-table th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; }
+    .swatch { display: inline-block; width: 0.65em; height: 0.65em; border-radius: 2px; margin-right: 0.45em; vertical-align: baseline; }
+    .sw-design { background: var(--loop-design); }
+    .sw-build { background: var(--loop-build); }
+    .sw-release { background: var(--loop-release); }
+
+    .callout {
+      border-left: 3px solid var(--accent); background: var(--code-bg);
+      border-radius: 0 8px 8px 0; padding: 0.9rem 1.1rem; margin: 1.4rem 0;
+      font-size: 0.9rem;
+    }
+    .callout strong { color: var(--text); }
+    .footnote { font-size: 0.8rem; color: var(--muted); margin-top: 1.6rem; }
+    #deck pre {
+      background: var(--code-bg); border: 1px solid var(--dot-inactive);
+      border-radius: 8px; padding: 0.9rem 1.1rem; margin: 1.2rem 0;
+      overflow-x: auto; font-size: 0.8rem; line-height: 1.5;
+    }
+    #deck pre code { background: none; border: none; padding: 0; }
+    @media (max-width: 640px) {
+      .loop-flow { flex-direction: column; }
+      .loop-gate { align-self: stretch; }
+      #title .slide-inner { padding-top: 3.5rem; } /* clear the fixed pills */
+    }
+  </style>
+  <!-- Apply saved theme before paint to avoid a flash. -->
+  <script>try{if(localStorage.getItem('blog-theme')==='light')document.documentElement.classList.add('light');}catch(e){}</script>
+</head>
+<body>
+
+  <a class="back-to-writing" href="https://github.com/wabbazzar/shipyard">&larr; Repo</a>
+
+  <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle light or dark theme">&#9728;&#65039; Light</button>
+
+  <div class="mode-toggle" role="tablist" aria-label="View mode">
+    <button id="btn-read" class="active" role="tab" aria-selected="true">Read</button>
+    <button id="btn-present" role="tab" aria-selected="false">Present</button>
+  </div>
+
+  <nav class="progress-dots" aria-label="Slide navigation"></nav>
+
+  <main id="deck">
+
+    <!-- ========== Slide 1: the problem, in numbers ========== -->
+    <section id="title">
+      <div class="slide-inner">
+        <h1>The Shipyard</h1>
+        <p class="subtitle">design &rarr; build &rarr; release for a fleet of agent-maintained repos</p>
+
+        <p>Sixteen personal projects run under autonomous maintenance agents on
+        systemd timers &mdash; tests re-run nightly, feedback triaged into PRs,
+        failures triaged on-call, docs refreshed. It sounds like a shipping
+        pipeline. Then I measured it.</p>
+
+        <div class="stat-row" role="group" aria-label="Baseline measurements">
+          <div class="stat-tile"><div class="stat-value">16</div><div class="stat-label">repos under agent maintenance (8 public &middot; 8 private)</div></div>
+          <div class="stat-tile"><div class="stat-value">871</div><div class="stat-label">nightly release-agent runs over 92 days</div></div>
+          <div class="stat-tile"><div class="stat-value">0</div><div class="stat-label">real regressions caught in those runs</div></div>
+          <div class="stat-tile"><div class="stat-value">8.8%</div><div class="stat-label">failure rate &mdash; every one environmental noise</div></div>
+        </div>
+
+        <p>871 runs, zero catches. The release agent was re-running the same
+        tests the authoring session had already made green &mdash; validating
+        yesterday&rsquo;s work with the same signal the author optimized
+        against. And <em>design</em> wasn&rsquo;t a loop at all: every feature
+        started as a chat conversation, which means it started whenever I
+        happened to notice something, not when the data did.</p>
+
+        <p class="footnote">This deck is the design record for rebuilding that system as
+        <strong>Shipyard</strong> &mdash; borrowing the three-loop framing from
+        <a href="https://github.com/eugenelim/agent-ready-repo" target="_blank" rel="noopener">agent-ready-repo</a>:
+        supervised loops with human gates at every irreversible handoff.</p>
+      </div>
+    </section>
+
+    <!-- ========== Slide 2: three loops, five crew ========== -->
+    <section id="loops">
+      <div class="slide-inner">
+        <h2>Three loops, five crew</h2>
+
+        <p>Design, build, and release are peer loops. Two agents sit outside
+        the shipment paradigm entirely: an on-call orchestrator and a
+        historian. Nothing crosses a gate without a human stamp.</p>
+
+        <div class="loop-flow" aria-label="The shipment pipeline">
+          <div class="loop-node design">
+            <span class="loop-tag">design</span>
+            <div class="crew">mentat</div>
+            <p>Mines fleet telemetry &mdash; usage beacons, access logs, event
+            streams, feedback &mdash; and drafts feature/bug proposals.</p>
+          </div>
+          <div class="loop-gate"><strong>&#9875;</strong>stamp<br>(dispatch)</div>
+          <div class="loop-node build">
+            <span class="loop-tag">build</span>
+            <div class="crew">helldiver</div>
+            <p>Takes ratified tickets to shipped code through the same
+            skills a human session uses.</p>
+          </div>
+          <div class="loop-gate"><strong>&#9875;</strong>CI +<br>merge gate</div>
+          <div class="loop-node release">
+            <span class="loop-tag">release</span>
+            <div class="crew">proctor</div>
+            <p>Cold-context release-readiness critic: judges diffs against a
+            rubric while the code is still being written.</p>
+          </div>
+        </div>
+
+        <div class="crew-aside" aria-label="Outside the shipment loops">
+          <div class="loop-node">
+            <span class="loop-tag">on-call</span>
+            <div class="crew">medic</div>
+            <p>Triage &amp; repair of live failures &mdash; merge, validate,
+            revert honestly when it breaks.</p>
+          </div>
+          <div class="loop-node">
+            <span class="loop-tag">docs</span>
+            <div class="crew">chronicler</div>
+            <p>Keeps the log: daily doc refresh, the record of what the fleet
+            did and why.</p>
+          </div>
+        </div>
+
+        <table class="ship-table">
+          <thead><tr><th>Loop</th><th>Crew (spacetime theme)</th><th>Human gate</th></tr></thead>
+          <tbody>
+            <tr><td><span class="swatch sw-design"></span>design</td><td>mentat &mdash; the human computer, reads the fleet&rsquo;s signals</td><td>proposal approved/denied in the daily dispatch</td></tr>
+            <tr><td><span class="swatch sw-build"></span>build</td><td>helldiver &mdash; digs where no one else can</td><td>CI green + explicit opt-in merge; no checks = red</td></tr>
+            <tr><td><span class="swatch sw-release"></span>release</td><td>proctor &mdash; presides over the trials</td><td><code>block</code> findings must be addressed before ship</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout"><strong>Skills-parity.</strong> The agents run the
+        <em>same skill files</em> a human-driven session invokes:
+        <code>polish-ticket</code> hardens a spec until a zero-context agent can
+        build it safely; <code>execute-ticket</code> orchestrates the build with
+        mandatory on-system verification. Mentat calls one, helldiver calls the
+        other, I call both by hand. One implementation, three callers &mdash;
+        no agent-only forks of the workflow.</div>
+      </div>
+    </section>
+
+    <!-- ========== Slide 3: installable, gated, judged ========== -->
+    <section id="install">
+      <div class="slide-inner">
+        <h2>Installable, gated, judged</h2>
+
+        <p>Shipyard installs per-project, like a package. Names are a knob, not
+        a doctrine &mdash; canonical role IDs (<code>design</code>,
+        <code>build</code>, <code>release</code>, <code>medic</code>,
+        <code>scribe</code>) live in code and events; the display names come
+        from a theme:</p>
+
+        <pre><code>bash install.sh --project &lt;dir&gt; --theme spacetime   # mentat &middot; helldiver &middot; proctor &middot; medic &middot; chronicler
+bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; build &middot; release &middot; medic &middot; scribe</code></pre>
+
+        <p>The hardening that comes with it: merge is opt-in (default
+        <em>no</em>), a repo with zero CI checks reads as <em>red</em>, the
+        merge&rarr;validate&rarr;revert loop is tested against real git
+        topologies, and every agent behavior sits behind a test that was first
+        shown failing.</p>
+
+        <h3>The 5-day trial</h3>
+        <p>After install across the fleet, the system &mdash; not any one agent
+        &mdash; is judged over five days, each criterion with a floor and an
+        evidence trail:</p>
+
+        <table class="ship-table">
+          <thead><tr><th>Criterion</th><th>Floor</th></tr></thead>
+          <tbody>
+            <tr><td>Bugs caught &amp; fixed</td><td>&ge;1 real defect caught by release/on-call and fixed through the loop (baseline: 0 in 871 runs)</td></tr>
+            <tr><td>Usage assessed</td><td>real-telemetry usage assessments for &ge;3 projects in the daily dispatch</td></tr>
+            <tr><td>Features shipped</td><td>&ge;1 feature end-to-end: proposal &rarr; stamp &rarr; build &rarr; release &rarr; merged</td></tr>
+            <tr><td>Decisions surfaced</td><td>&ge;1 consequential choice surfaced to the human and decided, not defaulted</td></tr>
+          </tbody>
+        </table>
+
+        <p>Any floor missed becomes a written finding with a follow-up ticket
+        &mdash; not a silent pass.</p>
+
+        <p class="footnote">Code: <a href="https://github.com/wabbazzar/shipyard" target="_blank" rel="noopener">github.com/wabbazzar/shipyard</a>
+        &middot; framing borrowed with thanks from
+        <a href="https://github.com/eugenelim/agent-ready-repo" target="_blank" rel="noopener">agent-ready-repo</a></p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Presentation Logic -->
+  <script>
+    (() => {
+      const body = document.body;
+      const deck = document.getElementById('deck');
+      const dotsContainer = document.querySelector('.progress-dots');
+      const btnRead = document.getElementById('btn-read');
+      const btnPresent = document.getElementById('btn-present');
+      const sections = Array.from(deck.querySelectorAll('section'));
+
+      // Build dots
+      sections.forEach((sec, i) => {
+        const dot = document.createElement('button');
+        dot.classList.add('dot');
+        dot.setAttribute('aria-label', `Go to slide ${i + 1}: ${sec.id}`);
+        dot.dataset.index = i;
+        dotsContainer.appendChild(dot);
+      });
+      const dots = Array.from(dotsContainer.querySelectorAll('.dot'));
+
+      // --- Mode Management ---
+      function setMode(mode) {
+        const isPresent = mode === 'present';
+        body.classList.toggle('present-mode', isPresent);
+        btnRead.classList.toggle('active', !isPresent);
+        btnPresent.classList.toggle('active', isPresent);
+        btnRead.setAttribute('aria-selected', !isPresent);
+        btnPresent.setAttribute('aria-selected', isPresent);
+        localStorage.setItem('deck-mode', mode);
+        if (isPresent) requestAnimationFrame(() => updateActiveDot());
+      }
+      btnRead.addEventListener('click', () => setMode('read'));
+      btnPresent.addEventListener('click', () => setMode('present'));
+      const saved = localStorage.getItem('deck-mode');
+      if (saved === 'present') setMode('present');
+
+      // --- Dot Navigation ---
+      dotsContainer.addEventListener('click', (e) => {
+        const dot = e.target.closest('.dot');
+        if (!dot) return;
+        sections[parseInt(dot.dataset.index, 10)].scrollIntoView({ behavior: 'smooth' });
+      });
+
+      // --- Active Dot Tracking ---
+      function updateActiveDot() {
+        if (!body.classList.contains('present-mode')) return;
+        let closest = 0, closestDist = Infinity;
+        sections.forEach((sec, i) => {
+          const dist = Math.abs(sec.getBoundingClientRect().top);
+          if (dist < closestDist) { closestDist = dist; closest = i; }
+        });
+        dots.forEach((d, i) => d.classList.toggle('active', i === closest));
+      }
+      deck.addEventListener('scroll', updateActiveDot, { passive: true });
+      window.addEventListener('scroll', updateActiveDot, { passive: true });
+
+      // --- Keyboard Navigation (Present Mode) ---
+      document.addEventListener('keydown', (e) => {
+        if (!body.classList.contains('present-mode')) return;
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        const currentIdx = dots.findIndex(d => d.classList.contains('active'));
+        let targetIdx = currentIdx;
+        switch (e.key) {
+          case 'ArrowDown': case ' ': case 'PageDown':
+            e.preventDefault(); targetIdx = Math.min(currentIdx + 1, sections.length - 1); break;
+          case 'ArrowUp': case 'PageUp':
+            e.preventDefault(); targetIdx = Math.max(currentIdx - 1, 0); break;
+          case 'Home': e.preventDefault(); targetIdx = 0; break;
+          case 'End': e.preventDefault(); targetIdx = sections.length - 1; break;
+          case 'Escape': setMode('read'); return;
+        }
+        if (targetIdx !== currentIdx) sections[targetIdx].scrollIntoView({ behavior: 'smooth' });
+      });
+
+      // --- Hash Navigation ---
+      function scrollToHash() {
+        const hash = window.location.hash.slice(1);
+        if (!hash) return;
+        const target = document.getElementById(hash);
+        if (target && target.tagName === 'SECTION') target.scrollIntoView({ behavior: 'smooth' });
+      }
+      window.addEventListener('hashchange', scrollToHash);
+      window.addEventListener('load', () => { scrollToHash(); updateActiveDot(); });
+
+      // --- Theme toggle ---
+      const themeBtn = document.getElementById('theme-toggle');
+      function applyTheme(light) {
+        document.documentElement.classList.toggle('light', light);
+        themeBtn.innerHTML = light ? '&#127769; Dark' : '&#9728;&#65039; Light';
+        try { localStorage.setItem('blog-theme', light ? 'light' : 'dark'); } catch (e) {}
+      }
+      applyTheme(document.documentElement.classList.contains('light'));
+      themeBtn.addEventListener('click', () =>
+        applyTheme(!document.documentElement.classList.contains('light')));
+    })();
+  </script>
+
+</body>
+</html>
