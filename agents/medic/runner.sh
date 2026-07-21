@@ -6,6 +6,8 @@
 #   runner.sh --project <dir> --mode scan
 #   runner.sh --project <dir> --mode post-run --incident-source <agent>
 #   runner.sh --project <dir> --mode scan --dry-run
+#   runner.sh --project <dir> --check-config   # print effective gates, read-only
+#   runner.sh --self-test                      # prove the revert path, both shapes
 #
 # Modes:
 #   scan     — invoked by systemd timer; walk ops.json + (optionally) chat
@@ -30,25 +32,100 @@ PROJECT_DIR=""
 MODE=""
 INCIDENT_SOURCE=""
 DRY_RUN=0
+CHECK_CONFIG=0
+SELF_TEST=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --project)         PROJECT_DIR="$2"; shift 2 ;;
     --mode)            MODE="$2"; shift 2 ;;
     --incident-source) INCIDENT_SOURCE="$2"; shift 2 ;;
     --dry-run)         DRY_RUN=1; shift ;;
+    --check-config)    CHECK_CONFIG=1; shift ;;
+    --self-test)       SELF_TEST=1; shift ;;
     -h|--help)
-      sed -n '2,16p' "$0"; exit 0 ;;
+      sed -n '2,18p' "$0"; exit 0 ;;
     *)
       echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
+# Revert helper (also the unit under --self-test). MEDIC_REVERT_LIB is a
+# test hook so the self-test can be pointed at a sabotaged implementation
+# and proven to catch it.
+# shellcheck disable=SC1090,SC1091
+source "${MEDIC_REVERT_LIB:-$QUARTET_DIR/agents/lib/revert-merge.sh}"
+
+# ---------- --self-test: merge → post-merge-fail → revert, both shapes ------
+medic_self_test() {
+  # Builds a throwaway origin+clone per commit shape, lands a regression
+  # with that shape, simulates a guardian post-merge failure, and requires
+  # medic_revert_merge to actually remove the change from trunk. No
+  # network, no LLM — local git only.
+  local root rc=0 shape
+  root="$(mktemp -d)"
+  export GIT_AUTHOR_NAME="medic-self-test" GIT_AUTHOR_EMAIL="self-test@localhost"
+  export GIT_COMMITTER_NAME="medic-self-test" GIT_COMMITTER_EMAIL="self-test@localhost"
+
+  for shape in squash true-merge; do
+    local base="$root/$shape" p sha
+    mkdir -p "$base"
+    git init -q --bare -b main "$base/origin.git"
+    git clone -q "$base/origin.git" "$base/project" 2>/dev/null
+    p="$base/project"
+    git -C "$p" symbolic-ref HEAD refs/heads/main
+    printf 'base\n' >"$p/README.md"
+    git -C "$p" add -A
+    git -C "$p" commit -q -m "base"
+    git -C "$p" push -q -u origin main
+
+    # merge: land a regression with the shape under test.
+    git -C "$p" checkout -q -b feat
+    printf 'regression\n' >"$p/bad.txt"
+    git -C "$p" add -A
+    git -C "$p" commit -q -m "feat: add bad.txt"
+    git -C "$p" checkout -q main
+    if [ "$shape" = "squash" ]; then
+      git -C "$p" merge --squash feat >/dev/null 2>&1
+      git -C "$p" commit -q -m "feat (#1)"
+    else
+      git -C "$p" merge -q --no-ff -m "Merge branch 'feat'" feat
+    fi
+    sha="$(git -C "$p" rev-parse HEAD)"
+    git -C "$p" push -q origin main
+
+    # post-merge-fail → revert.
+    if ! medic_revert_merge "$p" "$sha" main /dev/null; then
+      echo "self-test: $shape — medic_revert_merge FAILED (revert command errored)"
+      rc=1; continue
+    fi
+    if [ -f "$p/bad.txt" ]; then
+      echo "self-test: $shape — revert claimed success but bad.txt still on trunk"
+      rc=1; continue
+    fi
+    echo "self-test: $shape — merge -> post-merge-fail -> revert OK"
+  done
+  rm -rf "$root"
+  if [ "$rc" -eq 0 ]; then
+    echo "self-test: PASS (shapes exercised: squash, true-merge)"
+  else
+    echo "self-test: FAIL"
+  fi
+  return "$rc"
+}
+
+if [ "$SELF_TEST" -eq 1 ]; then
+  medic_self_test
+  exit $?
+fi
+
 [ -z "$PROJECT_DIR" ] && { echo "--project required" >&2; exit 2; }
 [ -d "$PROJECT_DIR" ] || { echo "project dir not found: $PROJECT_DIR" >&2; exit 2; }
-[ -z "$MODE" ] && { echo "--mode required (scan|post-run)" >&2; exit 2; }
-case "$MODE" in scan|post-run) ;; *) echo "bad --mode: $MODE" >&2; exit 2 ;; esac
-[ "$MODE" = "post-run" ] && [ -z "$INCIDENT_SOURCE" ] && \
-  { echo "--incident-source required for post-run" >&2; exit 2; }
+if [ "$CHECK_CONFIG" -eq 0 ]; then
+  [ -z "$MODE" ] && { echo "--mode required (scan|post-run)" >&2; exit 2; }
+  case "$MODE" in scan|post-run) ;; *) echo "bad --mode: $MODE" >&2; exit 2 ;; esac
+  [ "$MODE" = "post-run" ] && [ -z "$INCIDENT_SOURCE" ] && \
+    { echo "--incident-source required for post-run" >&2; exit 2; }
+fi
 
 # Recursion guard.
 if [ "$INCIDENT_SOURCE" = "medic" ]; then
@@ -60,18 +137,22 @@ CONFIG_FILE="$PROJECT_DIR/.agents/config.toml"
 MEDIC_PROMPT_PROJECT="$PROJECT_DIR/.agents/medic.md"
 MEDIC_PROMPT_ROLE="$SCRIPT_DIR/role.md"
 [ -f "$CONFIG_FILE" ] || { echo "config not found: $CONFIG_FILE" >&2; exit 2; }
-[ -f "$MEDIC_PROMPT_ROLE" ] || { echo "role.md not found: $MEDIC_PROMPT_ROLE" >&2; exit 2; }
-[ -f "$MEDIC_PROMPT_PROJECT" ] || { echo "project medic.md not found: $MEDIC_PROMPT_PROJECT" >&2; exit 2; }
+if [ "$CHECK_CONFIG" -eq 0 ]; then
+  [ -f "$MEDIC_PROMPT_ROLE" ] || { echo "role.md not found: $MEDIC_PROMPT_ROLE" >&2; exit 2; }
+  [ -f "$MEDIC_PROMPT_PROJECT" ] || { echo "project medic.md not found: $MEDIC_PROMPT_PROJECT" >&2; exit 2; }
+fi
 
 # ---------- config loader ---------------------------------------------------
 source "$QUARTET_DIR/agents/lib/load-config.sh"
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
 CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
 
 # Cherry-pick fields we need into shell vars (jq -r is fine here).
 PROJECT_NAME="$(echo "$CFG_JSON" | jq -r '.project_name // ""')"
-# Trunk branch name — `master` by default; override in config.toml.
-TRUNK_BRANCH="$(echo "$CFG_JSON" | jq -r '.branch // "master"')"
+# Trunk branch — config wins, else origin/HEAD; unresolvable fails loudly.
+TRUNK_BRANCH="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")" || exit 2
 DEV_PORT="$(echo "$CFG_JSON" | jq -r '.dev_port // empty')"
 DAILY_CAP="$(echo "$CFG_JSON" | jq -r '.medic.daily_escalation_cap // 5')"
 POLL_INTERVAL="$(echo "$CFG_JSON" | jq -r '.medic.poll_interval_sec // 600')"
@@ -81,11 +162,30 @@ RESTART_SYSTEMD="$(echo "$CFG_JSON" | jq -r '.medic.restart_systemd // true')"
 # have no local user-unit to bounce (e.g. an HTTP probe outage on a service
 # managed outside `systemctl --user`). Unset = current behavior (no-op).
 RESTART_CMD="$(echo "$CFG_JSON" | jq -r '.medic.restart_cmd // empty')"
-AUGUR_CAN_MERGE="$(echo "$CFG_JSON" | jq -r '.medic.augur_can_merge // true')"
+AUGUR_CAN_MERGE="$(echo "$CFG_JSON" | jq -r '.medic.augur_can_merge // false')"
 AUGUR_WALL_CLOCK="$(echo "$CFG_JSON" | jq -r '.augur.wall_clock_sec // 3600')"
 RESULT_DIR_REL="$(echo "$CFG_JSON" | jq -r '.paths.result_dir // "tmp"')"
 
 [ -z "$PROJECT_NAME" ] && { echo "config missing project_name" >&2; exit 2; }
+
+# ---------- --check-config: print effective gates, then stop ----------------
+# STRICTLY read-only: no result files, no events, no claude, no network.
+if [ "$CHECK_CONFIG" -eq 1 ]; then
+  jq -n \
+    --arg agent "medic" \
+    --arg dir "$PROJECT_DIR" \
+    --arg trunk "$TRUNK_BRANCH" \
+    --argjson cfg "$CFG_JSON" \
+    '{agent:$agent, project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
+      can_merge:($cfg.medic.augur_can_merge // false),
+      allow_no_ci:($cfg.augur.allow_no_ci // false),
+      restart_systemd:($cfg.medic.restart_systemd // true),
+      sync_to_augur:($cfg.medic.sync_to_augur // true),
+      budgets:{claude_usd:0.50,
+               daily_escalation_cap:($cfg.medic.daily_escalation_cap // 5),
+               augur_wall_clock_sec:($cfg.augur.wall_clock_sec // 3600)}}'
+  exit 0
+fi
 
 RESULT_DIR="$PROJECT_DIR/$RESULT_DIR_REL"
 mkdir -p "$RESULT_DIR"
@@ -944,28 +1044,41 @@ while [ "$i" -lt "$N_CLASS" ]; do
       if [ "$AUGUR_PASS" = "true" ] && [ -n "$MERGE_SHA" ]; then
         emit augur.incident.merged "$iid" pr_url="$PR_URL" merge_sha="$MERGE_SHA"
 
-        # Run guardian post-merge against the merge sha.
+        # Run guardian post-merge against the merge sha. `|| GRC=$?` keeps
+        # a failing child from killing us — set -e is active here, and a
+        # bare `GRC=$?` after a failing command never executes.
         GUARDIAN_RUNNER="$QUARTET_DIR/agents/guardian/runner.sh"
         GUARDIAN_OUTCOME="skipped"
         if [ -x "$GUARDIAN_RUNNER" ]; then
-          "$GUARDIAN_RUNNER" --mode post-merge --merge-sha "$MERGE_SHA" \
-            >> "$LOG_FILE" 2>&1
-          GRC=$?
+          GRC=0
+          "$GUARDIAN_RUNNER" --project "$PROJECT_DIR" --mode post-merge \
+            --merge-sha "$MERGE_SHA" >> "$LOG_FILE" 2>&1 || GRC=$?
           GUARDIAN_OUTCOME=$([ "$GRC" = "0" ] && echo "ok" || echo "fail")
           emit guardian.post_merge.run "$iid" merge_sha="$MERGE_SHA" outcome="$GUARDIAN_OUTCOME"
         fi
 
         if [ "$GUARDIAN_OUTCOME" = "fail" ]; then
-          # Revert the merge to keep the trunk branch green.
-          (cd "$PROJECT_DIR" && git revert --no-edit -m 1 "$MERGE_SHA" \
-            >> "$LOG_FILE" 2>&1 && git push origin "$TRUNK_BRANCH" >> "$LOG_FILE" 2>&1) || true
-          quartet_notify "Medic $PROJECT_NAME (regression)" \
-            "Augur merged $PR_URL but post-merge guardian failed; reverted. Frozen 24h."
+          # Revert the merge to keep the trunk branch green. Shape-aware
+          # (squash vs true merge) and honest: the revert's real exit
+          # status decides what we log and claim.
+          if medic_revert_merge "$PROJECT_DIR" "$MERGE_SHA" "$TRUNK_BRANCH" "$LOG_FILE"; then
+            REVERT_OUTCOME="reverted"
+          else
+            REVERT_OUTCOME="revert_failed"
+          fi
+          emit medic.action.revert "$iid" merge_sha="$MERGE_SHA" outcome="$REVERT_OUTCOME"
+          if [ "$REVERT_OUTCOME" = "reverted" ]; then
+            quartet_notify "Medic $PROJECT_NAME (regression)" \
+              "Augur merged $PR_URL but post-merge guardian failed; reverted. Frozen 24h."
+          else
+            quartet_notify "Medic $PROJECT_NAME (regression)" \
+              "Augur merged $PR_URL but post-merge guardian failed AND the revert_failed — trunk may still carry the bad merge. Manual fix needed. Frozen 24h."
+          fi
           until_ts="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
           state_set ".cooldowns[\"$iid\"] = {\"frozen_until\":\"$until_ts\",\"reason\":\"post_merge_guardian_fail\"}"
           emit medic.incident.frozen "$iid" frozen_until="$until_ts" reason="post_merge_guardian_fail"
-          push_action "$(jq -n --arg iid "$iid" --arg pr "$PR_URL" \
-            '{incident_id:$iid, action:"escalate_augur", outcome:"post_merge_guardian_fail", pr_url:$pr}')"
+          push_action "$(jq -n --arg iid "$iid" --arg pr "$PR_URL" --arg rev "$REVERT_OUTCOME" \
+            '{incident_id:$iid, action:"escalate_augur", outcome:"post_merge_guardian_fail", revert:$rev, pr_url:$pr}')"
         else
           # Retrigger the failed unit (runners surface only in v1).
           RETRIGGER_OUTCOME="skipped"

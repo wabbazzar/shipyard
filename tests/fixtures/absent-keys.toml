@@ -1,0 +1,28 @@
+# Fixture: the "key absent" variant for all three gate keys.
+#
+#   branch            — absent (trunk must be detected, not defaulted)
+#   medic.augur_can_merge — absent (self-merge default under test)
+#   augur.allow_no_ci — absent (a repo with zero CI checks must not pass)
+#
+# guardian.test_cmd / typecheck are no-ops so the deterministic post-merge
+# path can run in a test without a toolchain.
+
+project_name  = "__PROJECT_NAME__"
+project_owner = "fixture-owner"
+
+[paths]
+result_dir   = "tmp"
+worktree_dir = ".worktrees"
+
+[guardian]
+test_cmd     = "true"
+typecheck    = "true"
+budget_hook  = 0.10
+budget_daily = 0.10
+
+[augur]
+budget         = 0.10
+wall_clock_sec = 60
+
+[medic]
+daily_escalation_cap = 5

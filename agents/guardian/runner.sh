@@ -4,6 +4,7 @@
 # Usage:
 #   runner.sh --project DIR --mode {hook|daily}
 #   runner.sh --project DIR --mode post-merge --merge-sha SHA
+#   runner.sh --project DIR --check-config   # print effective gates, read-only
 #
 # Reads <project>/.agents/config.toml. Prompt = agents/guardian/role.md
 # + <project>/.agents/guardian.md + RUN CONTEXT block. Writes result to
@@ -26,26 +27,32 @@ export QUARTET_SOURCE="${QUARTET_SOURCE:-system}"
 PROJECT_DIR=""
 MODE=""
 MERGE_SHA=""
+CHECK_CONFIG=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --project)    PROJECT_DIR="$2"; shift 2 ;;
-    --mode)       MODE="$2"; shift 2 ;;
-    --merge-sha)  MERGE_SHA="$2"; shift 2 ;;
-    -h|--help)    sed -n '2,15p' "$0"; exit 0 ;;
-    *)            echo "unknown arg: $1" >&2; exit 2 ;;
+    --project)      PROJECT_DIR="$2"; shift 2 ;;
+    --mode)         MODE="$2"; shift 2 ;;
+    --merge-sha)    MERGE_SHA="$2"; shift 2 ;;
+    --check-config) CHECK_CONFIG=1; shift ;;
+    -h|--help)      sed -n '2,16p' "$0"; exit 0 ;;
+    *)              echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 [ -z "$PROJECT_DIR" ] && { echo "--project required" >&2; exit 2; }
 [ -d "$PROJECT_DIR" ] || { echo "project dir missing: $PROJECT_DIR" >&2; exit 2; }
-[ -z "$MODE" ] && { echo "--mode required" >&2; exit 2; }
-case "$MODE" in hook|daily|post-merge) ;; *) echo "bad --mode: $MODE" >&2; exit 2 ;; esac
+if [ "$CHECK_CONFIG" -eq 0 ]; then
+  [ -z "$MODE" ] && { echo "--mode required" >&2; exit 2; }
+  case "$MODE" in hook|daily|post-merge) ;; *) echo "bad --mode: $MODE" >&2; exit 2 ;; esac
+fi
 
 CONFIG_FILE="$PROJECT_DIR/.agents/config.toml"
 ROLE_FILE="$SCRIPT_DIR/role.md"
 PROJECT_PROMPT="$PROJECT_DIR/.agents/guardian.md"
 [ -f "$CONFIG_FILE" ]    || { echo "config not found: $CONFIG_FILE" >&2; exit 2; }
-[ -f "$ROLE_FILE" ]      || { echo "role.md not found: $ROLE_FILE" >&2; exit 2; }
-[ -f "$PROJECT_PROMPT" ] || { echo "project guardian.md not found: $PROJECT_PROMPT" >&2; exit 2; }
+if [ "$CHECK_CONFIG" -eq 0 ]; then
+  [ -f "$ROLE_FILE" ]      || { echo "role.md not found: $ROLE_FILE" >&2; exit 2; }
+  [ -f "$PROJECT_PROMPT" ] || { echo "project guardian.md not found: $PROJECT_PROMPT" >&2; exit 2; }
+fi
 
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/load-config.sh"
@@ -58,6 +65,28 @@ TEST_CMD="$(jq -r '.guardian.test_cmd // "npx vitest run"' <<<"$CFG_JSON")"
 TYPECHECK_CMD="$(jq -r '.guardian.typecheck // "npx tsc --noEmit"' <<<"$CFG_JSON")"
 BUDGET_HOOK="$(jq -r '.guardian.budget_hook // 0.50' <<<"$CFG_JSON")"
 BUDGET_DAILY="$(jq -r '.guardian.budget_daily // 2.00' <<<"$CFG_JSON")"
+
+# ---------- --check-config: print effective gates, then stop ----------------
+# STRICTLY read-only: no result files, no events, no claude, no network.
+if [ "$CHECK_CONFIG" -eq 1 ]; then
+  # shellcheck disable=SC1091
+  source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
+  TRUNK_BRANCH="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")" || exit 2
+  jq -n \
+    --arg agent "guardian" \
+    --arg dir "$PROJECT_DIR" \
+    --arg trunk "$TRUNK_BRANCH" \
+    --arg test_cmd "$TEST_CMD" \
+    --arg typecheck "$TYPECHECK_CMD" \
+    --argjson cfg "$CFG_JSON" \
+    '{agent:$agent, project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
+      can_merge:($cfg.medic.augur_can_merge // false),
+      allow_no_ci:($cfg.augur.allow_no_ci // false),
+      test_cmd:$test_cmd, typecheck:$typecheck,
+      budgets:{hook_usd:($cfg.guardian.budget_hook // 0.50),
+               daily_usd:($cfg.guardian.budget_daily // 2.00)}}'
+  exit 0
+fi
 
 RESULT_DIR="$PROJECT_DIR/$RESULT_DIR_REL"
 mkdir -p "$RESULT_DIR"

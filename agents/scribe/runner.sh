@@ -3,6 +3,7 @@
 #
 # Usage:
 #   runner.sh --project DIR --mode {daily|dry-run}
+#   runner.sh --project DIR --check-config   # print effective gates, read-only
 #
 # Reads <project>/.agents/config.toml. Prompt = agents/scribe/role.md
 # + <project>/.agents/scribe.md + RUN CONTEXT block. Writes result to
@@ -28,25 +29,31 @@ export QUARTET_SOURCE="${QUARTET_SOURCE:-system}"
 # ---------- argv ------------------------------------------------------------
 PROJECT_DIR=""
 MODE=""
+CHECK_CONFIG=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --project)  PROJECT_DIR="$2"; shift 2 ;;
-    --mode)     MODE="$2"; shift 2 ;;
-    -h|--help)  sed -n '2,18p' "$0"; exit 0 ;;
-    *)          echo "unknown arg: $1" >&2; exit 2 ;;
+    --project)      PROJECT_DIR="$2"; shift 2 ;;
+    --mode)         MODE="$2"; shift 2 ;;
+    --check-config) CHECK_CONFIG=1; shift ;;
+    -h|--help)      sed -n '2,19p' "$0"; exit 0 ;;
+    *)              echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 [ -z "$PROJECT_DIR" ] && { echo "--project required" >&2; exit 2; }
 [ -d "$PROJECT_DIR" ] || { echo "project dir missing: $PROJECT_DIR" >&2; exit 2; }
-[ -z "$MODE" ] && { echo "--mode required (daily|dry-run)" >&2; exit 2; }
-case "$MODE" in daily|dry-run) ;; *) echo "bad --mode: $MODE" >&2; exit 2 ;; esac
+if [ "$CHECK_CONFIG" -eq 0 ]; then
+  [ -z "$MODE" ] && { echo "--mode required (daily|dry-run)" >&2; exit 2; }
+  case "$MODE" in daily|dry-run) ;; *) echo "bad --mode: $MODE" >&2; exit 2 ;; esac
+fi
 
 CONFIG_FILE="$PROJECT_DIR/.agents/config.toml"
 ROLE_FILE="$SCRIPT_DIR/role.md"
 PROJECT_PROMPT="$PROJECT_DIR/.agents/scribe.md"
 [ -f "$CONFIG_FILE" ]    || { echo "config not found: $CONFIG_FILE" >&2; exit 2; }
-[ -f "$ROLE_FILE" ]      || { echo "role.md not found: $ROLE_FILE" >&2; exit 2; }
-[ -f "$PROJECT_PROMPT" ] || { echo "project scribe.md not found: $PROJECT_PROMPT" >&2; exit 2; }
+if [ "$CHECK_CONFIG" -eq 0 ]; then
+  [ -f "$ROLE_FILE" ]      || { echo "role.md not found: $ROLE_FILE" >&2; exit 2; }
+  [ -f "$PROJECT_PROMPT" ] || { echo "project scribe.md not found: $PROJECT_PROMPT" >&2; exit 2; }
+fi
 
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/load-config.sh"
@@ -60,6 +67,27 @@ COMMIT_PREFIX="$(jq -r '.scribe.commit_message_prefix // "scribe: nightly refres
 AUTO_COMMIT="$(jq -r '.scribe.auto_commit // true' <<<"$CFG_JSON")"
 AUTO_PUSH="$(jq -r '.scribe.auto_push // false' <<<"$CFG_JSON")"
 CONTENT_PATHS_JSON="$(jq -c '.scribe.content_paths // []' <<<"$CFG_JSON")"
+
+# ---------- --check-config: print effective gates, then stop ----------------
+# STRICTLY read-only: no result files, no events, no claude, no network.
+if [ "$CHECK_CONFIG" -eq 1 ]; then
+  # shellcheck disable=SC1091
+  source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
+  TRUNK_BRANCH="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")" || exit 2
+  jq -n \
+    --arg agent "scribe" \
+    --arg dir "$PROJECT_DIR" \
+    --arg trunk "$TRUNK_BRANCH" \
+    --argjson cfg "$CFG_JSON" \
+    '{agent:$agent, project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
+      can_merge:($cfg.medic.augur_can_merge // false),
+      allow_no_ci:($cfg.augur.allow_no_ci // false),
+      content_paths:($cfg.scribe.content_paths // []),
+      auto_commit:($cfg.scribe.auto_commit // true),
+      auto_push:($cfg.scribe.auto_push // false),
+      budgets:{daily_usd:($cfg.scribe.budget // 1.50)}}'
+  exit 0
+fi
 
 RESULT_DIR="$PROJECT_DIR/$RESULT_DIR_REL"
 mkdir -p "$RESULT_DIR"

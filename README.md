@@ -48,7 +48,7 @@ PRs), `git`.
 project_name  = "myproject"
 project_dir   = "/home/user/code/myproject"   # informational only — runners take --project  # leak-allow
 project_owner = "your-github-user"            # PR reviewer — required
-branch        = "main"
+branch        = "main"   # optional — omitted: detected from origin/HEAD; runners FAIL (exit 2) if neither resolves, never assume a default
 
 [install.timers]   # optional — override the default schedules
 guardian = "*-*-* 04:30:00"
