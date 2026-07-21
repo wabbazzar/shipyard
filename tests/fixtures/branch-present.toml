@@ -1,0 +1,20 @@
+# Fixture: `branch` present — config must win over any auto-detection.
+
+project_name  = "__PROJECT_NAME__"
+project_owner = "fixture-owner"
+branch        = "main"
+
+[paths]
+result_dir   = "tmp"
+worktree_dir = ".worktrees"
+
+[guardian]
+test_cmd     = "true"
+typecheck    = "true"
+
+[augur]
+budget         = 0.10
+wall_clock_sec = 60
+
+[medic]
+daily_escalation_cap = 5
