@@ -27,12 +27,6 @@
     :root { --loop-design: #0FA3C8; --loop-build: #B5860A; --loop-release: #DE5B96; }
     html.light body { --loop-design: #0683A8; --loop-build: #8A650A; --loop-release: #B33D74; }
 
-    /* Stat tiles */
-    .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 2px; margin: 2rem 0; }
-    .stat-tile { background: var(--code-bg); border: 1px solid var(--dot-inactive); border-radius: 8px; padding: 1.1rem 1.2rem; }
-    .stat-value { font-size: 2.2rem; font-weight: 700; line-height: 1.1; color: var(--text); }
-    .stat-label { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; letter-spacing: 0.02em; }
-
     /* Crew flow — nodes are buttons (clickable → drawer) */
     .loop-flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.5rem; margin: 1.8rem 0 0.6rem; font-size: 0.85rem; }
     .loop-node {
@@ -160,23 +154,25 @@
         <h1>The Shipyard</h1>
         <p class="subtitle">design &rarr; build &rarr; release for a fleet of agent-maintained repos</p>
 
-        <p>Sixteen repos run under autonomous maintenance agents on systemd
-        timers. Measured over 92 days:</p>
+        <p><a href="https://github.com/wabbazzar/shipyard" target="_blank" rel="noopener">Shipyard</a>
+        installs a crew of five autonomous agents on a repo: a design loop
+        that mines usage signals into proposals, a build loop that takes
+        ratified tickets to PRs, a release loop that critiques diffs
+        cold-context while the code is being written &mdash; plus on-call
+        triage and docs. Systemd-timed, event-logged, PR-gated, with a human
+        stamp at every irreversible handoff.</p>
 
-        <div class="stat-row" id="stat-row" role="group" aria-label="Baseline measurements"></div>
+        <p>It is the rebuild of guardian-quartet, whose release agent turned
+        out to be re-running the tests the authoring session had already made
+        green &mdash; the same signal the author optimized against, a day
+        late &mdash; and whose design loop didn&rsquo;t exist: features
+        started as chat, gated by whatever the human happened to notice. The
+        three-loop model comes from
+        <a href="https://github.com/eugenelim/agent-ready-repo" target="_blank" rel="noopener">agent-ready-repo</a>.</p>
 
-        <p>The release agent re-ran the tests the authoring session had already
-        made green &mdash; same signal the author optimized against, a day
-        late. Design wasn&rsquo;t a loop at all: features started as chat,
-        gated by what I happened to notice.</p>
-
-        <p>The rebuild adopts
-        <a href="https://github.com/eugenelim/agent-ready-repo" target="_blank" rel="noopener">agent-ready-repo</a>&rsquo;s
-        three-loop model: design, build, and release as peer loops, a human
-        gate at every irreversible handoff. This page renders the live build
-        data &mdash; crew, skills, phase status &mdash; from the same file the
-        ticket&rsquo;s gates require the builder to update. If this page lags
-        reality, a gate is broken.</p>
+        <p>This page renders the live build data &mdash; crew, skills, phase
+        status &mdash; from the same file the ticket&rsquo;s gates require the
+        builder to update. If this page lags reality, a gate is broken.</p>
       </div>
     </section>
 
@@ -239,7 +235,7 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
         <table class="ship-table">
           <thead><tr><th>Criterion</th><th>Floor</th></tr></thead>
           <tbody>
-            <tr><td>Bugs caught &amp; fixed</td><td>&ge;1 real defect caught by release/on-call and fixed through the loop (baseline: 0 in 871 runs)</td></tr>
+            <tr><td>Bugs caught &amp; fixed</td><td>&ge;1 real defect caught by release/on-call and fixed through the loop</td></tr>
             <tr><td>Usage assessed</td><td>real-telemetry usage assessments for &ge;3 projects in the daily dispatch</td></tr>
             <tr><td>Features shipped</td><td>&ge;1 feature end-to-end: proposal &rarr; stamp &rarr; build &rarr; release &rarr; merged</td></tr>
             <tr><td>Decisions surfaced</td><td>&ge;1 consequential choice surfaced to the human and decided, not defaulted</td></tr>
@@ -273,14 +269,10 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
         try { const r = await fetch(src, { cache: 'no-store' }); if (r.ok) { data = await r.json(); break; } } catch (e) {}
       }
       if (!data) {
-        document.getElementById('stat-row').innerHTML = '<p style="color:var(--muted)">shipyard-data.json unavailable</p>';
+        document.getElementById('loop-flow').innerHTML = '<p style="color:var(--muted)">shipyard-data.json unavailable</p>';
         return;
       }
       const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-      // Stats
-      document.getElementById('stat-row').innerHTML = data.stats.map(s =>
-        `<div class="stat-tile"><div class="stat-value">${esc(s.value)}</div><div class="stat-label">${esc(s.label)}</div></div>`).join('');
 
       // Crew flow: design → gate → build → gate → release; aside: medic + scribe
       const byId = Object.fromEntries(data.crew.map(c => [c.id, c]));
@@ -341,7 +333,12 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
         const n = e.target.closest('.loop-node');
         if (n) { openCrew(n.dataset.crew); return; }
         const t = e.target.closest('.skill-toggle');
-        if (t) { t.closest('.skill-item').classList.toggle('open'); }
+        if (t) {
+          const item = t.closest('.skill-item');
+          const wasOpen = item.classList.contains('open');
+          body.querySelectorAll('.skill-item.open').forEach(el => el.classList.remove('open'));
+          if (!wasOpen) item.classList.add('open'); // one carrot open at a time
+        }
       });
       overlay.addEventListener('click', closeCrew);
       document.getElementById('crew-drawer-close').addEventListener('click', closeCrew);

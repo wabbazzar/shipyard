@@ -5,12 +5,6 @@
     "repo": "https://github.com/wabbazzar/shipyard",
     "note": "Canonical deck data. Ticket standing gate: every phase completion and every direction-changing ticket edit updates this file in the same push."
   },
-  "stats": [
-    { "value": "16", "label": "repos under agent maintenance (8 public · 8 private)" },
-    { "value": "871", "label": "nightly release-agent runs over 92 days" },
-    { "value": "0", "label": "real regressions caught in those runs" },
-    { "value": "8.8%", "label": "failure rate — every one environmental noise" }
-  ],
   "crew": [
     {
       "id": "design",
@@ -19,7 +13,7 @@
       "loop": "design",
       "status": "new agent — built in Phase 11",
       "tagline": "Mines fleet telemetry and drafts feature/bug proposals.",
-      "headline": "Design was never a loop: every feature started as a chat conversation, gated by what I happened to notice.",
+      "headline": "Design was never a loop: every feature started as a chat conversation, gated by whatever the human operator happened to notice.",
       "gate": "proposal approved/denied in the daily dispatch; denied proposals are never re-proposed",
       "skills": [
         {
@@ -27,7 +21,7 @@
           "disposition": "adapted",
           "source": "hub .claude/skills/ → shipyard/skills/ (172 lines, read end-to-end 2026-07-21)",
           "summary": "Hardens a spec until a zero-context agent can build it unattended.",
-          "detail": "The A–H checklist survives unchanged: self-containment (exact files, units, ports, dated numbers with the command that produced them), orchestration protocol with the verbatim anti-cheating brief, per-phase gate assembly, toolchain proof (§C2: never hand over a ticket whose verification method you haven't run while polishing), verification surfaces where a test that can't fail is a finding, decisions split locked / open-with-default / user-class, thin-slice phasing, ledger + observable DoD. What changes: the ice gate menu, dashboard port, notify path, and sibling-repo hazards stop being baked prose and become parameters from .agents/config.toml + a hub gate file. Callers: mentat headless after a proposal is stamped; Wesley in-session. [Phase 10, D-L11]"
+          "detail": "The A–H checklist survives unchanged: self-containment (exact files, units, ports, dated numbers with the command that produced them), orchestration protocol with the verbatim anti-cheating brief, per-phase gate assembly, toolchain proof (§C2: never hand over a ticket whose verification method you haven't run while polishing), verification surfaces where a test that can't fail is a finding, decisions split locked / open-with-default / user-class, thin-slice phasing, ledger + observable DoD. What changes: the ice gate menu, dashboard port, notify path, and sibling-repo hazards stop being baked prose and become parameters from .agents/config.toml + a hub gate file. Callers: mentat headless after a proposal is stamped; the human operator in-session. [Phase 10, D-L11]"
         },
         {
           "name": "telemetry collectors",
@@ -67,7 +61,7 @@
           "disposition": "adapted",
           "source": "hub .claude/skills/ → shipyard/skills/ (164 lines, read end-to-end 2026-07-21)",
           "summary": "Orchestrated build with mandatory on-system verification.",
-          "detail": "Portable core: discover-state step 0, green-baseline-before-touching-anything, thin vertical slices with a safety patch before risky changes, verify-before-commit (never trust a subagent's green — re-run and read the actual output), the honest-blocker protocol (revert to last green + precise report beats faked green), and the user-decision class as the only reason to stop (money, outward-facing, destructive, overriding deliberate config, real design forks) with a Signal alert when stopping. Parameterized: gate menu, notify command, event-stream path. Callers: helldiver headless for ratified tickets; Wesley in-session. [Phase 10, D-L11]"
+          "detail": "Portable core: discover-state step 0, green-baseline-before-touching-anything, thin vertical slices with a safety patch before risky changes, verify-before-commit (never trust a subagent's green — re-run and read the actual output), the honest-blocker protocol (revert to last green + precise report beats faked green), and the user-decision class as the only reason to stop (money, outward-facing, destructive, overriding deliberate config, real design forks) with a Signal alert when stopping. Parameterized: gate menu, notify command, event-stream path. Callers: helldiver headless for ratified tickets; the human operator in-session. [Phase 10, D-L11]"
         },
         {
           "name": "feedback triage → PRs",
@@ -92,7 +86,7 @@
       "loop": "release",
       "status": "repositioned — Phases 0–1, 6, 9",
       "tagline": "Cold-context release-readiness critic; judges diffs while the code is being written.",
-      "headline": "871 runs over 92 days, 0 real regressions caught — it re-ran the tests the authoring session had already made green.",
+      "headline": "Nightly re-runs of already-green tests catch nothing — the authoring session already optimized against that exact signal.",
       "gate": "block findings must be addressed before ship; delivered as in-session notes, never hard stops (D-L2)",
       "skills": [
         {
@@ -114,7 +108,7 @@
           "disposition": "kept",
           "source": "agents/guardian/role.md + runner.sh",
           "summary": "The deterministic floor.",
-          "detail": "Stays as the backstop and as suk's post-merge validator (D-L4: shoulder mode runs beside it, not instead of it). The nightly LLM pass is repurposed from 're-run green tests' to 'critique what changed since my last run' — role.md:116 already builds a git log --since='24 hours ago' -p block to extend. Baseline it must beat: 794 ok / 77 fail, every failure environmental (playwright errors, db locks, dirty worktrees), fixAttempts: 0 across every sampled result.json."
+          "detail": "Stays as the backstop and as suk's post-merge validator (D-L4: shoulder mode runs beside it, not instead of it). The nightly LLM pass is repurposed from 're-run green tests' to 'critique what changed since my last run' — role.md:116 already builds a git log --since='24 hours ago' -p block to extend. The measured failure mode it replaces: every recorded failure was environmental (playwright errors, db locks, dirty worktrees), zero real regressions caught, fixAttempts: 0 in every sampled result.json."
         },
         {
           "name": "coverage-audit",
@@ -186,18 +180,83 @@
     }
   ],
   "phases": [
-    { "id": 0, "title": "bats test harness", "status": "in-progress", "gist": "First tests the quartet has ever had: PATH-shim stubs (gh/git/claude/systemctl), fixture configs, a real bare-origin git topology for both merge shapes, wired into CI." },
-    { "id": 1, "title": "Gap fixes 1a–1g", "status": "pending", "gist": "Post-merge --project bug, honest revert by commit shape, merge default → opt-in, no_checks → red, shared trunk detection that never silently defaults, --check-config, medic --self-test. Every fix behind a test first shown failing." },
-    { "id": 2, "title": "shredly2 CI", "status": "pending", "gist": "The hot case: auto-merge on + zero CI workflows. vitest (1558 tests) + typecheck on PR and push; must land before the gates that would otherwise disable its auto-merge." },
-    { "id": 3, "title": "fleet dry run", "status": "pending", "gist": "Read-only --check-config sweep across all projects from a worktree (the dev clone is live — medic fires every 10 min); any mismatch with the audited inventory blocks the merge." },
-    { "id": 4, "title": "live cutover", "status": "pending", "gist": "The single merge to main. Supervised runs on all four full-install projects; event stream watched for upgrade-caused incidents; rollback sha recorded first." },
-    { "id": 5, "title": "7-day soak", "status": "pending", "gist": "Failure rate must hold ≤ 8.8% baseline; zero dishonest revert notifications (a truthful revert_failed passes; a false 'reverted' fails)." },
-    { "id": 6, "title": "shoulder mode", "status": "pending", "gist": "Proctor's critic built + piloted on bopthere: planted-bug test, debounce test, blocking-gate test, cost guard, wrote-no-code check. Hooks merged additively into existing settings." },
-    { "id": 7, "title": "dispatch surfacing", "status": "pending", "gist": "Critique events into the dashboard (timeline detail, guardians panel — svc list currently hardcodes 3 of 4 projects) and the Daily Dispatch, verified at mobile viewport." },
-    { "id": 8, "title": "end-to-end gate", "status": "pending", "gist": "Every gate re-run from clean state; 2-week findings measure opens — Wesley judges ≥⅓ actionable, noisy rubric lines pruned." },
-    { "id": 9, "title": "rename + themes", "status": "pending", "gist": "guardian-quartet → shipyard locally (GitHub already renamed); canonical role IDs in code + events; --theme spacetime|plain|custom; fleet re-baked; legacy keys warn for one release." },
-    { "id": 10, "title": "skills-parity", "status": "pending", "gist": "polish-ticket, execute-ticket, coverage-audit adapted into shipyard/skills/; install-quartet replaced; symlinked per-project so agents and humans load identical files." },
-    { "id": 11, "title": "mentat", "status": "pending", "gist": "Collectors + pilot beacons + nightly proposals → dispatch Approve/Deny → polish-ticket → helldiver. Deny-suppression and budget caps proven with bats." },
-    { "id": 12, "title": "5-day fleet trial", "status": "pending", "gist": "T1 ≥1 real bug caught+fixed · T2 usage assessed for ≥3 projects · T3 ≥1 feature shipped end-to-end · T4 ≥1 consequential decision surfaced and decided. Missed floors become written findings." }
+    {
+      "id": 0,
+      "title": "bats test harness",
+      "status": "in-progress",
+      "gist": "First tests the quartet has ever had: PATH-shim stubs (gh/git/claude/systemctl), fixture configs, a real bare-origin git topology for both merge shapes, wired into CI."
+    },
+    {
+      "id": 1,
+      "title": "Gap fixes 1a–1g",
+      "status": "pending",
+      "gist": "Post-merge --project bug, honest revert by commit shape, merge default → opt-in, no_checks → red, shared trunk detection that never silently defaults, --check-config, medic --self-test. Every fix behind a test first shown failing."
+    },
+    {
+      "id": 2,
+      "title": "shredly2 CI",
+      "status": "pending",
+      "gist": "The hot case: auto-merge on + zero CI workflows. vitest (1558 tests) + typecheck on PR and push; must land before the gates that would otherwise disable its auto-merge."
+    },
+    {
+      "id": 3,
+      "title": "fleet dry run",
+      "status": "pending",
+      "gist": "Read-only --check-config sweep across all projects from a worktree (the dev clone is live — medic fires every 10 min); any mismatch with the audited inventory blocks the merge."
+    },
+    {
+      "id": 4,
+      "title": "live cutover",
+      "status": "pending",
+      "gist": "The single merge to main. Supervised runs on all four full-install projects; event stream watched for upgrade-caused incidents; rollback sha recorded first."
+    },
+    {
+      "id": 5,
+      "title": "7-day soak",
+      "status": "pending",
+      "gist": "Failure rate must hold ≤ 8.8% baseline; zero dishonest revert notifications (a truthful revert_failed passes; a false 'reverted' fails)."
+    },
+    {
+      "id": 6,
+      "title": "shoulder mode",
+      "status": "pending",
+      "gist": "Proctor's critic built + piloted on bopthere: planted-bug test, debounce test, blocking-gate test, cost guard, wrote-no-code check. Hooks merged additively into existing settings."
+    },
+    {
+      "id": 7,
+      "title": "dispatch surfacing",
+      "status": "pending",
+      "gist": "Critique events into the dashboard (timeline detail, guardians panel — svc list currently hardcodes 3 of 4 projects) and the Daily Dispatch, verified at mobile viewport."
+    },
+    {
+      "id": 8,
+      "title": "end-to-end gate",
+      "status": "pending",
+      "gist": "Every gate re-run from clean state; 2-week findings measure opens — the human operator judges ≥⅓ actionable, noisy rubric lines pruned."
+    },
+    {
+      "id": 9,
+      "title": "rename + themes",
+      "status": "pending",
+      "gist": "guardian-quartet → shipyard locally (GitHub already renamed); canonical role IDs in code + events; --theme spacetime|plain|custom; fleet re-baked; legacy keys warn for one release."
+    },
+    {
+      "id": 10,
+      "title": "skills-parity",
+      "status": "pending",
+      "gist": "polish-ticket, execute-ticket, coverage-audit adapted into shipyard/skills/; install-quartet replaced; symlinked per-project so agents and humans load identical files."
+    },
+    {
+      "id": 11,
+      "title": "mentat",
+      "status": "pending",
+      "gist": "Collectors + pilot beacons + nightly proposals → dispatch Approve/Deny → polish-ticket → helldiver. Deny-suppression and budget caps proven with bats."
+    },
+    {
+      "id": 12,
+      "title": "5-day fleet trial",
+      "status": "pending",
+      "gist": "T1 ≥1 real bug caught+fixed · T2 usage assessed for ≥3 projects · T3 ≥1 feature shipped end-to-end · T4 ≥1 consequential decision surfaced and decided. Missed floors become written findings."
+    }
   ]
 }
