@@ -258,5 +258,73 @@
       "status": "pending",
       "gist": "T1 ≥1 real bug caught+fixed · T2 usage assessed for ≥3 projects · T3 ≥1 feature shipped end-to-end · T4 ≥1 consequential decision surfaced and decided. Missed floors become written findings."
     }
-  ]
+  ],
+  "install": {
+    "intro": "A harness ships in layers — generic core at the bottom, operator taste at the top. Installing is writing the top layers; upgrading is pulling the bottom one.",
+    "layers": [
+      {
+        "n": 0,
+        "name": "core",
+        "where": "shipyard repo (shared by every project)",
+        "what": "Runners, shared lib, skills, installer — generic, zero personal facts (leak-checked in CI). Units execute from the clone: a merge to trunk is fleet-live at the next timer fire."
+      },
+      {
+        "n": 1,
+        "name": "hub knobs",
+        "where": "baked into systemd units at install time",
+        "what": "Where events, notifications, and dashboard state flow (env knobs). Changing them means re-running the installer — units bake env, they don't read it live."
+      },
+      {
+        "n": 2,
+        "name": "theme",
+        "where": "--theme flag → [names] in .agents/config.toml",
+        "what": "Display names for units, svc strings, and notification voice: spacetime, plain, or five custom names. Role IDs underneath never change."
+      },
+      {
+        "n": 3,
+        "name": "project config",
+        "where": ".agents/config.toml",
+        "what": "The gates and budgets: can_merge (default no), allow_no_ci (default no), trunk branch, token caps (1M/day per agent), test/typecheck commands, paths."
+      },
+      {
+        "n": 4,
+        "name": "roles + conventions",
+        "where": ".agents/<role>.md",
+        "what": "Project-specific prompt extensions per crew role, and the ## Conventions block — the operator's stated taste (LOC economy, dependency policy, naming) that the release critic grades against."
+      },
+      {
+        "n": 5,
+        "name": "skills",
+        "where": "<project>/.claude/skills/ (symlinks)",
+        "what": "polish-ticket, execute-ticket, coverage-audit — the same files agents load headless and humans invoke in-session."
+      }
+    ],
+    "flow": "Install = recon first (coverage-audit reads the project's session history before anything is configured) → interview (theme, gates, service surface, conventions) → write layers 3–5 → bake units → verify timers fire. Uninstall = remove units + delete .agents/ — the repo keeps nothing it didn't choose."
+  },
+  "adaptation": {
+    "intro": "Adaptation is not fine-tuning. It is versioned edits to the files agents and humans share — every lesson routed to the layer where it belongs, inherited by every future caller.",
+    "channels": [
+      {
+        "name": "operator corrections → skill files",
+        "how": "When the operator corrects a behavior, the correction lands as an edit to the skill, rubric, or ticket — reviewable, revertable, inherited. From this system's own history: polish-ticket's 'traps that have bitten this box' section is accreted incident history (a stale dashboard bundle that made shipped changes look absent; a runaway headless browser that hammered an API for 42 hours), and execute-ticket's honest-blocker protocol exists because sessions faked green. Burned session → line in the skill file → no caller repeats it."
+      },
+      {
+        "name": "coverage-audit → rubric + proposals",
+        "how": "Session transcripts are mined for bugs the operator reported that tests missed. Each miss is triaged: project-specific (→ .agents/<role>.md), generic (→ core role files, upstream PR), or install-time (→ a new installer question). The audit taxonomy IS the adaptation router."
+      },
+      {
+        "name": "user feedback → build",
+        "how": "Asynchronous feedback (chat notes, fyi-requests.jsonl) is triaged nightly by the build crew into PRs; substantial asks become design proposals instead of drive-by patches."
+      },
+      {
+        "name": "agent → agent",
+        "how": "Proctor's findings drop into the working agent's live session as notes (never hard stops); suk's incidents become mentat's design signal at the top of the loop; execute-ticket's ledger notes feed the next polish pass. Agents correct each other through the same reviewable surfaces humans use."
+      },
+      {
+        "name": "pruning",
+        "how": "Rubric and convention lines that only ever produce notes for two weeks are removed. Adaptation includes forgetting — a critic that flags everything teaches nothing."
+      }
+    ],
+    "router": "The routing rule, stated once: one-off correction → the ticket's decision tables; project taste → .agents/<role>.md Conventions; project gates → config.toml; portable doctrine → a core PR (leak-checked, fleet-live on merge); a question every future install should ask → the installer interview."
+  }
 }
