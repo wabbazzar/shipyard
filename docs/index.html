@@ -779,7 +779,7 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
           const ids = CREW_IDS.filter(id => src[id] && dst[id]);
           if (!ids.length) { applyView(skills); return; }
           morphing = true;
-          const DUR = window.matchMedia('(max-width: 640px)').matches ? 250 : 350;
+          const DUR = window.matchMedia('(max-width: 640px)').matches ? 500 : 700;
           const fromView = skills ? crewView : skillsView;
           const toView = skills ? skillsView : crewView;
           const overlay = document.createElement('div');
@@ -816,7 +816,7 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
               ? toView.querySelectorAll('.sk-membership, .sk-edges, .sk-nodes, .sk-role[data-role="human"], .skill-legend, .skill-note')
               : toView.querySelectorAll('.loop-gate, .drawer-hint');
             late.forEach(el => el.animate([{ opacity: 0 }, { opacity: 1 }],
-              { duration: 220, delay: 100, easing: 'ease-in', fill: 'backwards' }));
+              { duration: 440, delay: 200, easing: 'ease-in', fill: 'backwards' }));
             overlay.remove();
             morphing = false;
           };
