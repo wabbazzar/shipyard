@@ -224,8 +224,9 @@
     {
       "id": 6,
       "title": "shoulder mode",
-      "status": "pending",
-      "gist": "Proctor's critic built + piloted on bopthere: planted-bug test, debounce test, blocking-gate test, cost guard, wrote-no-code check. Hooks merged additively into existing settings."
+      "status": "done",
+      "gist": "Proctor's critic built + piloted on bopthere: planted-bug test, debounce test, blocking-gate test, cost guard, wrote-no-code check. Hooks merged additively into existing settings.",
+      "completed": "2026-07-21"
     },
     {
       "id": 7,
