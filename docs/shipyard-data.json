@@ -266,7 +266,7 @@
     {
       "id": 12,
       "title": "5-day fleet trial",
-      "status": "pending",
+      "status": "in-progress",
       "gist": "T1 ≥1 real bug caught+fixed · T2 usage assessed for ≥3 projects · T3 ≥1 feature shipped end-to-end · T4 ≥1 consequential decision surfaced and decided. Missed floors become written findings."
     }
   ],
