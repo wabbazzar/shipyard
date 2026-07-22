@@ -191,6 +191,9 @@ def main():
     og["edges"] = g["edges"]
     out["graph"] = og
 
+    if "glossary" in ed:
+        out["glossary"] = ed["glossary"]
+
     # NOTE: the committed docs/shipyard-data.json has no trailing newline, so we
     # match it byte-for-byte (a trailing newline would make the deck-coupling
     # gate perpetually red). Normalize the committed file + this line together if

@@ -9,7 +9,7 @@
     {
       "id": "design",
       "name": "mentat",
-      "was": null,
+      "was": "",
       "loop": "design",
       "status": "Live on 4 projects, nightly. Drafted its first real proposals from fleet telemetry — e.g. “medic incident flapping: 48 events vs 4 distinct in 7d.” The human front doors /bug and /feature enter the same loop through write-ticket.",
       "tagline": "Fleet telemetry and human /bug and /feature reports both become drafted proposals.",
@@ -28,35 +28,35 @@
           "disposition": "new · front door",
           "source": "shipyard/skills/bug — human front door into the design loop",
           "summary": "Reproduce and root-cause, then write the ticket.",
-          "detail": "Reproduce first (a failing test, reliable steps, or a captured signature — no ticket until the defect is pinned), the repro fails because of the bug, falsify rival causes, separate root from symptom, scope to the minimum diff. Then write-ticket with a bug scope: acceptance is the repro passing. The repro travels in the ticket; execute-ticket commits the failing test at build as the permanent regression test. Adapted from agent-ready-repo's bug-fix. [Phase 13, D-O12]"
+          "detail": "Reproduce first (a failing test, reliable steps, or a captured signature — no ticket until the defect is pinned), the repro fails because of the bug, falsify rival causes, separate root from symptom, scope to the minimum diff. Then write-ticket with a bug scope: acceptance is the repro passing. The repro travels in the ticket; execute-ticket commits the failing test at build as the permanent regression test. [Phase 13, D-O12]"
         },
         {
           "name": "/feature",
           "disposition": "new · front door",
           "source": "shipyard/skills/feature — human front door into the design loop",
           "summary": "Clarify the ask and set a Definition of Done, then write the ticket.",
-          "detail": "Surface assumptions and verify one per candidate, confirm the unverified ones with the human, then set acceptance criteria as a checklist with Boundaries (always / ask-first / never). Uses the project's existing DoD convention. Then write-ticket with a feature scope: acceptance is the DoD met. Adapted from agent-ready-repo's new-spec. [Phase 13]"
+          "detail": "Surface assumptions and verify one per candidate, confirm the unverified ones with the human, then set acceptance criteria as a checklist with Boundaries (always / ask-first / never). Uses the project's existing DoD convention. Then write-ticket with a feature scope: acceptance is the DoD met. [Phase 13]"
         },
         {
           "name": "polish-ticket",
           "disposition": "adapted · live",
           "source": "shipyard/skills/ — symlinked into each project’s .claude/skills/ (agents + humans load the same file)",
           "summary": "Hardens a spec until a zero-context agent can build it unattended.",
-          "detail": "The A–H checklist survives unchanged: self-containment (exact files, units, ports, dated numbers with the command that produced them), orchestration protocol with the verbatim anti-cheating brief, per-phase gate assembly, toolchain proof (§C2: never hand over a ticket whose verification method you haven't run while polishing), verification surfaces where a test that can't fail is a finding, decisions split locked / open-with-default / user-class, thin-slice phasing, ledger + observable DoD. What changes: the ice gate menu, dashboard port, notify path, and sibling-repo hazards stop being baked prose and become parameters from .agents/config.toml + a hub gate file. Callers: mentat headless after a proposal is stamped; the human operator in-session. [Phase 10, D-L11]"
+          "detail": "The A–H checklist survives unchanged: self-containment (exact files, units, ports, dated numbers with the command that produced them), orchestration protocol with the verbatim anti-cheating brief, per-phase gate assembly, toolchain proof (§C2: never hand over a ticket whose verification method you haven't run while polishing), verification surfaces where a test that can't fail is a finding, decisions split locked / open-with-default / user-class, thin-slice phasing, ledger + observable DoD. What changes: the gate menu, dashboard port, notify path, and sibling-repo hazards stop being baked prose and become parameters from .agents/config.toml + a hub gate file. Callers: mentat headless after a proposal is stamped; the human operator in-session. [Phase 10, D-L11]"
         },
         {
           "name": "telemetry collectors",
           "disposition": "new",
           "source": "agents/design/ — Phase 11",
           "summary": "Read-only signal mining across the fleet.",
-          "detail": "Sources verified live 2026-07-21: caddy access logs via journald (caddy logs to stdout — /var/log/caddy/ is empty), the quartet event stream (92 day-files; pipe through jq -R 'fromjson?' — 2 corrupt lines abort bare jq), fyi-requests.jsonl, medic incident files, session transcripts under ~/.claude/projects/. Plus pilot usage beacons on shredly2 + bopthere: POST /api/usage appending {ts, path, action, session} JSONL to gitignored data/usage/ — no third-party analytics, nothing leaves the box/tailnet. Further instrumentation ships as mentat's own proposals: the loop bootstraps itself. [D-L12, D-O8]"
+          "detail": "Sources verified live 2026-07-21: caddy access logs via journald (caddy logs to stdout — /var/log/caddy/ is empty), the event stream (92 day-files; pipe through jq -R 'fromjson?' — 2 corrupt lines abort bare jq), fyi-requests.jsonl, medic incident files, session transcripts under ~/.claude/projects/. Plus pilot usage beacons on shredly2 + bopthere: POST /api/usage appending {ts, path, action, session} JSONL to gitignored data/usage/ — no third-party analytics, nothing leaves the box/tailnet. Further instrumentation ships as mentat's own proposals: the loop bootstraps itself. [D-L12, D-O8]"
         },
         {
           "name": "proposal drafting",
           "disposition": "new",
           "source": "agents/design/runner — Phase 11",
           "summary": "Nightly: signals → ≤3 open proposals per project.",
-          "detail": "Writes <project>/tmp/<project>-mentat-result.json (mirrors augur's result shape so the dispatch queue enrichment stays symmetric), emits design.proposal.opened events, respects a 1M-token daily cap (all caps are token-based, never dollars). Skips drafting when 3 proposals sit undecided. Approve in the dispatch → mentat hardens via polish-ticket into <project>/docs/tickets/ and hands to helldiver. Deny → recorded in decisions.jsonl, never re-proposed. [D-O7, D-O9, D-L13] Incident-repair proposals (from suk) emit immediately, outside the nightly cadence, against the same token cap. [D-L15]"
+          "detail": "Writes <project>/tmp/<project>-mentat-result.json (mirrors helldiver's result shape so the dispatch queue enrichment stays symmetric), emits design.proposal.opened events, respects a 1M-token daily cap (all caps are token-based, never dollars). Skips drafting when 3 proposals sit undecided. Approve in the dispatch → mentat hardens via polish-ticket into <project>/docs/tickets/ and hands to helldiver. Deny → recorded in decisions.jsonl, never re-proposed. [D-O7, D-O9, D-L13] Incident-repair proposals (from suk) emit immediately, outside the nightly cadence, against the same token cap. [D-L15]"
         },
         {
           "name": "coverage-audit",
@@ -70,7 +70,7 @@
     {
       "id": "build",
       "name": "helldiver",
-      "was": "augur",
+      "was": "",
       "loop": "build",
       "status": "Live. Merge is opt-in and a zero-CI repo can’t merge vacuously; incident repairs no longer slip in a side-door — they enter as proposals at the top of the loop.",
       "tagline": "Takes ratified tickets to shipped code.",
@@ -103,7 +103,7 @@
     {
       "id": "release",
       "name": "proctor",
-      "was": "guardian",
+      "was": "",
       "loop": "release",
       "status": "Live. The shoulder-mode critic caught a planted auth-bypass on a pilot repo and delivered it into the session — the first real regression this loop has ever surfaced.",
       "tagline": "Cold-context release-readiness critic; judges diffs while the code is being written.",
@@ -143,7 +143,7 @@
     {
       "id": "medic",
       "name": "suk",
-      "was": "medic",
+      "was": "",
       "loop": "on-call",
       "status": "Live. Reverts and restarts are logged honestly; a regression now opens an incident-repair proposal (one road into build) rather than an auto-merge side-door. Mitigation stays instant and ungated.",
       "tagline": "Answers when the ship is holed: triage, assign repair, restart, revert.",
@@ -155,7 +155,7 @@
           "disposition": "kept · rerouted (D-L15)",
           "source": "agents/medic/runner.sh — kept as a self-tested function; the auto-merge path that called it was retired by D-L15 (one road into build)",
           "summary": "Post-merge validation with an honest revert path.",
-          "detail": "The confirmed-live bug chain: post-merge validation invoked guardian without --project (runner.sh:951), guardian exits 2 before doing any work, so the outcome was always 'fail', so the revert always ran; git revert -m 1 fails on squash merges (no second parent) and the failure was swallowed by || true; the Signal notification at :962 then claimed 'reverted' no matter what. Fixed (1a/1b): pass --project; choose revert shape by commit topology (rev-parse MERGE_SHA^2); capture the exit code; notify reverted vs revert_failed truthfully; emit medic.action.revert with outcome. Proven against a bats fixture with a real bare-origin + clone topology, both commit shapes, each test first shown failing against the pre-fix code."
+          "detail": "The confirmed-live bug chain: post-merge validation invoked the release runner without --project (runner.sh:951), which exits 2 before doing any work, so the outcome was always 'fail', so the revert always ran; git revert -m 1 fails on squash merges (no second parent) and the failure was swallowed by || true; the Signal notification at :962 then claimed 'reverted' no matter what. Fixed (1a/1b): pass --project; choose revert shape by commit topology (rev-parse MERGE_SHA^2); capture the exit code; notify reverted vs revert_failed truthfully; emit medic.action.revert with outcome. Proven against a bats fixture with a real bare-origin + clone topology, both commit shapes, each test first shown failing against the pre-fix code."
         },
         {
           "name": "incident triage",
@@ -176,7 +176,7 @@
     {
       "id": "scribe",
       "name": "chronicler",
-      "was": "scribe",
+      "was": "",
       "loop": "docs",
       "status": "Live under the new name; its record meets the human operator in the Daily Dispatch.",
       "tagline": "Keeps the log: daily doc refresh, the record of what the fleet did.",
@@ -205,7 +205,7 @@
       "id": 0,
       "title": "bats test harness",
       "status": "done",
-      "gist": "First tests the quartet has ever had: PATH-shim stubs (gh/git/claude/systemctl), fixture configs, a real bare-origin git topology for both merge shapes, wired into CI.",
+      "gist": "First tests shipyard has ever had: PATH-shim stubs (gh/git/claude/systemctl), fixture configs, a real bare-origin git topology for both merge shapes, wired into CI.",
       "completed": "2026-07-21"
     },
     {
@@ -267,7 +267,7 @@
       "id": 9,
       "title": "rename + themes",
       "status": "done",
-      "gist": "guardian-quartet → shipyard locally (GitHub already renamed); canonical role IDs in code + events; --theme spacetime|plain|custom; fleet re-baked; legacy keys warn for one release.",
+      "gist": "Renamed to shipyard locally (GitHub already renamed); canonical role IDs in code + events; --theme spacetime|plain|custom; fleet re-baked; legacy keys warn for one release.",
       "completed": "2026-07-21"
     },
     {
@@ -294,7 +294,7 @@
       "id": 13,
       "title": "human front doors",
       "status": "pending",
-      "gist": "/bug and /feature — the human-initiated siblings of mentat's machine-drafted proposals. /bug reproduces + root-causes before writing; /feature clarifies the ask + sets a definition of done. Both call /write-ticket (the precursor polish-ticket assumes) → polish → execute → proctor. Adapted from the existing ticket-writer agent + agent-ready-repo's bug-fix/new-spec disciplines.",
+      "gist": "/bug and /feature — the human-initiated siblings of mentat's machine-drafted proposals. /bug reproduces + root-causes before writing; /feature clarifies the ask + sets a definition of done. Both call /write-ticket (the precursor polish-ticket assumes) → polish → execute → proctor.",
       "completed": null
     }
   ],
@@ -557,5 +557,17 @@
         "to": "execute-ticket"
       }
     ]
+  },
+  "glossary": {
+    "anti-cheating brief": "The verbatim clause every delegated subagent is handed: converge honestly or report the precise blocker with real evidence — never fake a green result, weaken a check, or hand-wave 'should work', and always run the real command and report its exact output.",
+    "per-phase gate assembly": "For each phase, polish-ticket names exactly which verification gates apply here — shell, systemd units, a served port, an event stream, sibling repos — and their exact commands drawn from the project's gate file, instead of one blanket test command.",
+    "merge-is-live": "Because the timers run the runners straight from the dev clone, anything merged to the trunk branch is live across the fleet within one timer interval, so ticket work stays on a branch until a single deliberate cutover.",
+    "skills-parity": "The property that agents running headless and humans working in-session load the exact same skill files, so there is one definition of each workflow rather than a drifting pair.",
+    "stamp": "The human approve/deny decision in the daily dispatch that a proposal must receive before it becomes buildable work — the one required human gate in the loop.",
+    "cold-context critique": "A review of a change that sees only the diff, the changed-file list, and the rubric — never the authoring session — so it cannot be contaminated by the goal the code was written to satisfy.",
+    "the gate file": "A project's .agents/gates.md, which lists the verification gates that apply to that project and the exact command for each, so skills read the checks instead of baking them in.",
+    "--check-config": "A dry run that prints each project's resolved configuration — trunk branch, which gates apply, merge policy — so the fleet can be swept for drift without running anything.",
+    "--self-test": "A mode in which the on-call runner exercises its own merge → post-merge-fail → revert logic on a throwaway git fixture, proving the recovery path works before it is ever needed.",
+    "north star": "A one-line compass for a repo — its top-line GitHub description — that the design loop reads as a directional prior, so the proposals it drafts serve what the repo is for."
   }
 }
