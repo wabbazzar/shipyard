@@ -128,7 +128,7 @@ if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
     if [ -n "$(git status --porcelain)" ]; then
       echo "[$SVC] ABORT: main checkout dirty" >> "$LOG_FILE"
       git status --short >> "$LOG_FILE"
-      quartet_notify "$PROJECT_NAME Augur aborted ($MODE)" \
+      quartet_notify "$PROJECT_NAME ${DISPLAY^} aborted ($MODE)" \
         "Main checkout has uncommitted changes." || true
       [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
         mode="$MODE" status="abort" reason="dirty" || true
@@ -137,7 +137,7 @@ if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
     CB="$(git rev-parse --abbrev-ref HEAD)"
     if [ "$CB" != "$TRUNK_BRANCH" ]; then
       echo "[$SVC] ABORT: not on $TRUNK_BRANCH ($CB)" >> "$LOG_FILE"
-      quartet_notify "$PROJECT_NAME Augur aborted ($MODE)" \
+      quartet_notify "$PROJECT_NAME ${DISPLAY^} aborted ($MODE)" \
         "Current branch is $CB, not $TRUNK_BRANCH." || true
       [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
         mode="$MODE" status="abort" reason="not_trunk" || true
@@ -217,25 +217,25 @@ $RUN_CONTEXT"
   if [ -f "$RESULT_FILE" ] && [ -s "$RESULT_FILE" ]; then
     if [ -x "$FMT" ] || [ -f "$FMT" ]; then
       node "$FMT" "$RESULT_FILE" > "$SUMMARY_FILE" 2>>"$LOG_FILE" || \
-        echo "$PROJECT_NAME augur ($MODE) — formatter failed; see $LOG_FILE" > "$SUMMARY_FILE"
+        echo "$PROJECT_NAME $DISPLAY ($MODE) — formatter failed; see $LOG_FILE" > "$SUMMARY_FILE"
     else
-      jq -r --arg name "$PROJECT_NAME" --arg mode "$MODE" \
-        '"\($name) augur (\($mode)) — pass=\(.pass) items=\(.items|length)"' \
+      jq -r --arg name "$PROJECT_NAME" --arg mode "$MODE" --arg d "$DISPLAY" \
+        '"\($name) \($d) (\($mode)) — pass=\(.pass) items=\(.items|length)"' \
         "$RESULT_FILE" > "$SUMMARY_FILE" 2>/dev/null || \
-        echo "$PROJECT_NAME augur ($MODE) — no result." > "$SUMMARY_FILE"
+        echo "$PROJECT_NAME $DISPLAY ($MODE) — no result." > "$SUMMARY_FILE"
     fi
     PASS="$(jq -r '.pass // false' "$RESULT_FILE")"
   else
-    echo "$PROJECT_NAME augur ($MODE) — no result file produced (exit=$EXIT)." > "$SUMMARY_FILE"
+    echo "$PROJECT_NAME $DISPLAY ($MODE) — no result file produced (exit=$EXIT)." > "$SUMMARY_FILE"
     PASS="false"
   fi
 
   SUMMARY="$(cat "$SUMMARY_FILE")"
   if [ "$PASS" = "true" ]; then
-    quartet_notify "$PROJECT_NAME Augur ($MODE)" "$SUMMARY" || true
+    quartet_notify "$PROJECT_NAME ${DISPLAY^} ($MODE)" "$SUMMARY" || true
     JOB_STATUS="ok"
   else
-    quartet_notify "$PROJECT_NAME Augur FAILED ($MODE)" "$SUMMARY" || true
+    quartet_notify "$PROJECT_NAME ${DISPLAY^} FAILED ($MODE)" "$SUMMARY" || true
     JOB_STATUS="fail"
   fi
 

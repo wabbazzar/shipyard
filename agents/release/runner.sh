@@ -200,9 +200,9 @@ set -e
 # post-run, telemetry) feed this file to `jq --argjson`; a 0-byte file
 # poisons them because jq exits 0 with empty output on empty input.
 if [ ! -s "$RESULT_FILE" ]; then
-  jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --argjson exit "$EXIT" '{
+  jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --argjson exit "$EXIT" --arg d "$DISPLAY" '{
     pass: false, mode: $mode, timestamp: $ts,
-    errors: ["guardian claude run exited (\($exit)) without writing result.json"]
+    errors: ["\($d) claude run exited (\($exit)) without writing result.json"]
   }' > "$RESULT_FILE"
   echo "[$SVC] claude run wrote no result.json; synthesized failure result" >> "$LOG_FILE"
 fi
@@ -241,9 +241,9 @@ PY
 SUMMARY="$(tail -30 "$LOG_FILE" | grep -A20 -i "GUARDIAN RESULT" | head -10 || true)"
 [ -z "$SUMMARY" ] && SUMMARY="$SVC completed (mode=$MODE, exit=$EXIT). See $LOG_FILE."
 if [ "$PASS" = "true" ]; then
-  quartet_notify "$PROJECT_NAME Guardian ($MODE)" "$SUMMARY" || true
+  quartet_notify "$PROJECT_NAME ${DISPLAY^} ($MODE)" "$SUMMARY" || true
 else
-  quartet_notify "$PROJECT_NAME Guardian FAILED ($MODE)" "$SUMMARY" || true
+  quartet_notify "$PROJECT_NAME ${DISPLAY^} FAILED ($MODE)" "$SUMMARY" || true
 fi
 
 JOB_DUR=$(( $(date +%s) - JOB_START ))
