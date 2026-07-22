@@ -3,7 +3,7 @@ name: install
 description: >
   Install the crew (design/build/release/medic/scribe — legacy names
   augur/guardian) on a project. Use when the user says "install the crew (or
-  quartet/trio) on <project>", "set up the agents on <project>", "add the crew
+  crew) on <project>", "set up the agents on <project>", "add the crew
   to <project>", or "wire <project> into the fleet". Drives the whole flow from
   the operator's hub: recon (via coverage-audit), the install-time interview
   (including --theme and a conventions interview), authors <project>/.agents/,
@@ -43,7 +43,7 @@ safety sweep.
 
 ## When to invoke
 
-"install the crew/quartet/trio on <project>", "set up the agents on <project>",
+"install the crew on <project>", "set up the agents on <project>",
 "add the crew to <project>", "wire <project> into the fleet".
 
 If the user only wants to know *what to configure* (not install yet), that's

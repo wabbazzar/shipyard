@@ -115,14 +115,14 @@
           "disposition": "new",
           "source": "agents/release/critic-role.md — built Phase 6, piloted on bopthere",
           "summary": "Concurrent cold-context critique of the live diff.",
-          "detail": "Input is ONLY the diff, the changed-file list, the project's .agents/guardian.md, and the rubric — explicitly never the dev session transcript, because goal contamination is the thing this design exists to avoid. Debounce: 5 min idle OR 8 touched files (D-L3). Findings graded block / warn / note and delivered into the live session via claude-note.sh (exit 2 = ambiguous target, exit 3 = session at a prompt — retry, never treat as delivered). Budget: 1M tokens/day, enforced by summing today's critique events' token counts before spawning (D-O1 — a token cap, not dollars). It never writes code (D-L7). Verified by planting a real authz bug + an untested behavior change and requiring a block + warn within one debounce window."
+          "detail": "Input is ONLY the diff, the changed-file list, the project's .agents/release.md, and the rubric — explicitly never the dev session transcript, because goal contamination is the thing this design exists to avoid. Debounce: 5 min idle OR 8 touched files (D-L3). Findings graded block / warn / note and delivered into the live session via claude-note.sh (exit 2 = ambiguous target, exit 3 = session at a prompt — retry, never treat as delivered). Budget: 1M tokens/day, enforced by summing today's critique events' token counts before spawning (D-O1 — a token cap, not dollars). It never writes code (D-L7). Verified by planting a real authz bug + an untested behavior change and requiring a block + warn within one debounce window."
         },
         {
           "name": "release-readiness rubric",
           "disposition": "new",
           "source": "critic-role.md, tuned per project in .agents/<role>.md (+ a Conventions block for operator taste)",
           "summary": "What 'ready to ship' means, written down.",
-          "detail": "v1 lines: does the change do what the task claims beyond the eval the dev agent optimized (Goodhart check); changed behavior covered by a changed/added test, deleted or weakened tests flagged; security boundaries (authz on new endpoints, input validation, secrets, injection); reversibility (migrations with down paths, no irreversible actions); blast radius (unexplained files = scope creep); observability of new failure modes; suppressions (eslint-disable, @ts-ignore, skipped tests) as explicit risk decisions. After a 2-week measure, lines that only ever produce notes get pruned. The rubric is also where the operator's conventions live: .agents/guardian.md carries a Conventions block of stated taste — fewest LOC possible, no new dependencies without justification, naming, comment density — asked for at install time. The critic grades against stated conventions, never generic taste, at warn/note severity; convention lines face the same only-ever-notes pruning."
+          "detail": "v1 lines: does the change do what the task claims beyond the eval the dev agent optimized (Goodhart check); changed behavior covered by a changed/added test, deleted or weakened tests flagged; security boundaries (authz on new endpoints, input validation, secrets, injection); reversibility (migrations with down paths, no irreversible actions); blast radius (unexplained files = scope creep); observability of new failure modes; suppressions (eslint-disable, @ts-ignore, skipped tests) as explicit risk decisions. After a 2-week measure, lines that only ever produce notes get pruned. The rubric is also where the operator's conventions live: .agents/release.md carries a Conventions block of stated taste — fewest LOC possible, no new dependencies without justification, naming, comment density — asked for at install time. The critic grades against stated conventions, never generic taste, at warn/note severity; convention lines face the same only-ever-notes pruning."
         },
         {
           "name": "daily battery",
@@ -676,7 +676,7 @@
     },
     "Conventions block": {
       "def": "A section of the project's role file holding the operator's stated taste, which the release critic grades against instead of generic style opinions.",
-      "example": "## Conventions layer\n\nIf the project's `.agents/guardian.md` contains a `## Conventions`\nblock, grade the diff against those STATED conventions only — never\nagainst generic taste. Convention findings are capped at `warn`/`note`\nseverity; a convention miss is never a `block` on its own.",
+      "example": "## Conventions layer\n\nIf the project's `.agents/release.md` contains a `## Conventions`\nblock, grade the diff against those STATED conventions only — never\nagainst generic taste. Convention findings are capped at `warn`/`note`\nseverity; a convention miss is never a `block` on its own.",
       "source": "agents/release/critic-role.md:82-87"
     },
     "daily dispatch": {
@@ -693,6 +693,11 @@
       "def": "The append-only incident-history appendix in a project's gate file — each burned session becomes a line no future caller repeats.",
       "example": "## Traps that have bitten this project  (append-only)\n\nThe accreted incident history — every burned session becomes a line here so no\nfuture caller repeats it. This is the hub's **learning surface**.\n\n- **Stale dashboard bundle** — edited `dashboard/src/**`, forgot `npm run build\n  && systemctl --user restart dashboard`, then stared at an unchanged page\n  convinced the edit didn't take. Rebuild+restart is mandatory, no \"too small …",
       "source": "~/code/wabbazzar-ice/.agents/gates.md:72-79 (live gate file)"
+    },
+    "Goodhart check": {
+      "def": "The critic's first rubric line: did the change actually do what the task claims, or just satisfy the specific eval the author optimized against?",
+      "example": "1. **Goodhart check** — does the change do what the task claims,\n   beyond the specific eval/test the author optimized? A fix that\n   special-cases the failing input is a `block`.",
+      "source": "agents/release/critic-role.md:62 — Rubric v1, line 1"
     }
   }
 }

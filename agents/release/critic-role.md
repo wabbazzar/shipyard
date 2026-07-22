@@ -11,7 +11,7 @@ You receive ONLY:
 
 1. the git diff (working tree changes + the branch's delta vs trunk);
 2. the changed-file list;
-3. the project's `.agents/guardian.md` extension — including its
+3. the project's `.agents/release.md` extension — including its
    `## Conventions` block, if present;
 4. this rubric.
 
@@ -81,7 +81,7 @@ that cries block loses its audience.
 
 ## Conventions layer
 
-If the project's `.agents/guardian.md` contains a `## Conventions`
+If the project's `.agents/release.md` contains a `## Conventions`
 block, grade the diff against those STATED conventions only — never
 against generic taste. Convention findings are capped at `warn`/`note`
 severity; a convention miss is never a `block` on its own.
