@@ -18,7 +18,10 @@
 #   3. <project>/data/fyi-requests.jsonl — user feedback lines.
 #   4. <project>/data/usage/*.jsonl — pilot usage beacons, counted by
 #      action and by path.
-#   5. <project>/tmp/*incident*.json — open medic incident files.
+#   5. <project>/tmp/*incident*.json — open medic incident files modified
+#      within the last N days (default 7, same window as source 2). Stale
+#      files are excluded from the summary, never touched on disk (this
+#      collector is read-only, see below).
 #
 # Emits a compact per-project signal summary: JSON with --json, else a
 # human-readable digest. NEVER writes anything, anywhere.
@@ -136,10 +139,14 @@ collect_signals() {
   fi
 
   # --- (5) medic incident files under tmp/ ----------------------------------
+  # Bounded by the same $days window as source 2 (mtime-based: simplest,
+  # matches "open incident files" framing, no JSON parsing needed to filter).
+  # Read-only — this only excludes stale files from the summary, it never
+  # deletes/moves them (see file header: collectors.sh never writes).
   local incidents_summary incident_files=()
   if [ -d "$project_dir/tmp" ]; then
     while IFS= read -r f; do incident_files+=("$f"); done \
-      < <(find "$project_dir/tmp" -maxdepth 1 -type f -name '*incident*.json' 2>/dev/null | sort)
+      < <(find "$project_dir/tmp" -maxdepth 1 -type f -name '*incident*.json' -mtime "-$days" 2>/dev/null | sort)
   fi
   if [ "${#incident_files[@]}" -gt 0 ]; then
     # Some incident files are a single object, others (…-current.json) a
