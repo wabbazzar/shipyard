@@ -1,9 +1,38 @@
 {
   "meta": {
     "updated": "2026-07-22",
-    "ticket": "wabbazzar-ice:docs/tickets/quartet-gaps-guardian-teeth.md",
+    "ticket": "citadel:docs/tickets/quartet-gaps-guardian-teeth.md",
     "repo": "https://github.com/wabbazzar/shipyard",
     "note": "Canonical deck data — now tracking a LIVE system (Phases 0–11 shipped; the 7-day soak and 5-day trial are the open windows). Standing gate: every phase completion and direction-changing edit updates this file in the same push."
+  },
+  "cast": {
+    "note": "Six real repos run this system. Their names are changed for this deck; the telemetry, events, and command output shown are real.",
+    "projects": [
+      {
+        "alias": "caladan",
+        "what": "a travel-planning app"
+      },
+      {
+        "alias": "salusa",
+        "what": "a workout-programming app"
+      },
+      {
+        "alias": "richese",
+        "what": "a public-spending data pipeline"
+      },
+      {
+        "alias": "arrakis",
+        "what": "a production-planning app with real end users"
+      },
+      {
+        "alias": "sietch",
+        "what": "a small club app"
+      },
+      {
+        "alias": "citadel",
+        "what": "the hub machine — dispatch queue, event stream, timers"
+      }
+    ]
   },
   "crew": [
     {
@@ -49,7 +78,7 @@
           "disposition": "new",
           "source": "agents/design/ — Phase 11",
           "summary": "Read-only signal mining across the fleet.",
-          "detail": "Sources verified live 2026-07-21: caddy access logs via journald (caddy logs to stdout — /var/log/caddy/ is empty), the event stream (92 day-files; pipe through jq -R 'fromjson?' — 2 corrupt lines abort bare jq), fyi-requests.jsonl, medic incident files, session transcripts under ~/.claude/projects/. Plus pilot usage beacons on shredly2 + bopthere: POST /api/usage appending {ts, path, action, session} JSONL to gitignored data/usage/ — no third-party analytics, nothing leaves the box/tailnet. Further instrumentation ships as mentat's own proposals: the loop bootstraps itself. [D-L12, D-O8]"
+          "detail": "Sources verified live 2026-07-21: caddy access logs via journald (caddy logs to stdout — /var/log/caddy/ is empty), the event stream (92 day-files; pipe through jq -R 'fromjson?' — 2 corrupt lines abort bare jq), fyi-requests.jsonl, medic incident files, session transcripts under ~/.claude/projects/. Plus pilot usage beacons on salusa + caladan: POST /api/usage appending {ts, path, action, session} JSONL to gitignored data/usage/ — no third-party analytics, nothing leaves the box/tailnet. Further instrumentation ships as mentat's own proposals: the loop bootstraps itself. [D-L12, D-O8]"
         },
         {
           "name": "proposal drafting",
@@ -89,7 +118,7 @@
           "disposition": "kept + hardened",
           "source": "agents/build/runner.sh + role.md",
           "summary": "Nightly fyi-requests.jsonl → autonomous PRs.",
-          "detail": "The flow stays; the gates change. Fixed (1c): augur_can_merge default flips true→false at runner.sh:226 + medic/runner.sh:84 — merge becomes opt-in per project. Fixed (1d): the green|no_checks case at runner.sh:441 splits — no_checks fails the gate unless [augur] allow_no_ci = true, and a waiver emits augur.incident.ci_waived. The hot case that forced the ordering: shredly2 runs augur_can_merge = true with zero CI workflows, so its CI must exist (Phase 2) before these gates go live (Phase 4)."
+          "detail": "The flow stays; the gates change. Fixed (1c): augur_can_merge default flips true→false at runner.sh:226 + medic/runner.sh:84 — merge becomes opt-in per project. Fixed (1d): the green|no_checks case at runner.sh:441 splits — no_checks fails the gate unless [augur] allow_no_ci = true, and a waiver emits augur.incident.ci_waived. The hot case that forced the ordering: salusa runs augur_can_merge = true with zero CI workflows, so its CI must exist (Phase 2) before these gates go live (Phase 4)."
         },
         {
           "name": "incident repairs — via the loop",
@@ -113,7 +142,7 @@
         {
           "name": "shoulder-mode critic",
           "disposition": "new",
-          "source": "agents/release/critic-role.md — built Phase 6, piloted on bopthere",
+          "source": "agents/release/critic-role.md — built Phase 6, piloted on caladan",
           "summary": "Concurrent cold-context critique of the live diff.",
           "detail": "Input is ONLY the diff, the changed-file list, the project's .agents/release.md, and the rubric — explicitly never the dev session transcript, because goal contamination is the thing this design exists to avoid. Debounce: 5 min idle OR 8 touched files (D-L3). Findings graded block / warn / note and delivered into the live session via claude-note.sh (exit 2 = ambiguous target, exit 3 = session at a prompt — retry, never treat as delivered). Budget: 1M tokens/day, enforced by summing today's critique events' token counts before spawning (D-O1 — a token cap, not dollars). It never writes code (D-L7). Verified by planting a real authz bug + an untested behavior change and requiring a block + warn within one debounce window."
         },
@@ -188,7 +217,7 @@
           "disposition": "kept",
           "source": "agents/scribe/role.md + runner.sh",
           "summary": "Daily documentation pass per project.",
-          "detail": "Unchanged behavior; rename-only changes in Phase 9 (unit names, svc strings, role: field on events). Two projects run scribe-only installs today (2pizzaclub and the ice hub itself)."
+          "detail": "Unchanged behavior; rename-only changes in Phase 9 (unit names, svc strings, role: field on events). Two projects run scribe-only installs today (sietch and the citadel hub itself)."
         },
         {
           "name": "install playbook",
@@ -217,7 +246,7 @@
     },
     {
       "id": 2,
-      "title": "shredly2 CI",
+      "title": "salusa CI",
       "status": "done",
       "gist": "The hot case: auto-merge on + zero CI workflows. vitest (1558 tests) + typecheck on PR and push; must land before the gates that would otherwise disable its auto-merge.",
       "completed": "2026-07-21"
@@ -246,7 +275,7 @@
       "id": 6,
       "title": "shoulder mode",
       "status": "done",
-      "gist": "Proctor's critic built + piloted on bopthere: planted-bug test, debounce test, blocking-gate test, cost guard, wrote-no-code check. Hooks merged additively into existing settings.",
+      "gist": "Proctor's critic built + piloted on caladan: planted-bug test, debounce test, blocking-gate test, cost guard, wrote-no-code check. Hooks merged additively into existing settings.",
       "completed": "2026-07-21"
     },
     {
@@ -581,12 +610,12 @@
     },
     "stamp": {
       "def": "The human approve/deny decision in the daily dispatch — the one required human gate before a proposal becomes buildable work.",
-      "example": "{\"ts\":\"2026-07-22T14:41:36.621Z\",\"id\":\"mentat:bopthere:cb5688e2\",\"decision\":\"approve\"}\n{\"ts\":\"2026-07-22T14:41:54.139Z\",\"id\":\"mentat:aurora:d23e2f48\",\"decision\":\"approve\"}",
+      "example": "{\"ts\":\"2026-07-22T14:41:36.621Z\",\"id\":\"mentat:caladan:cb5688e2\",\"decision\":\"approve\"}\n{\"ts\":\"2026-07-22T14:41:54.139Z\",\"id\":\"mentat:arrakis:d23e2f48\",\"decision\":\"approve\"}",
       "source": "data/news/decisions.jsonl — the live dispatch ledger (today's entries)"
     },
     "cold-context critique": {
       "def": "A review that sees only the diff, the changed-file list, and the rubric — never the authoring session — so the author's goal can't contaminate it.",
-      "example": "{\"ts\":\"2026-07-21T23:57:09Z\",\"svc\":\"bopthere-guardian\",\"event\":\"guardian.critique\",\n \"source\":\"shoulder\",\"files\":2,\"block\":1,\"warn\":3,\"note\":1,\"tokens\":1764}\n→ the block: \"any unauthenticated caller can delete any trip's conversation\" —\n  a planted auth bug, caught from the diff alone.",
+      "example": "{\"ts\":\"2026-07-21T23:57:09Z\",\"svc\":\"caladan-guardian\",\"event\":\"guardian.critique\",\n \"source\":\"shoulder\",\"files\":2,\"block\":1,\"warn\":3,\"note\":1,\"tokens\":1764}\n→ the block: \"any unauthenticated caller can delete any trip's conversation\" —\n  a planted auth bug, caught from the diff alone.",
       "source": "the live event stream (a real critique event, 2026-07-21) + its finding"
     },
     "the gate file": {
@@ -596,7 +625,7 @@
     },
     "--check-config": {
       "def": "A read-only dry run that prints a project's fully-resolved configuration, so the whole fleet can be swept for drift without running anything.",
-      "example": "$ bash agents/release/runner.sh --check-config --project ~/code/bopthere\n{\n  \"agent\": \"release\",\n  \"role\": \"release\",\n  \"display\": \"proctor\",\n  \"project\": \"bopthere\",\n  \"trunk\": \"main\", …",
+      "example": "$ bash agents/release/runner.sh --check-config --project ~/code/caladan\n{\n  \"agent\": \"release\",\n  \"role\": \"release\",\n  \"display\": \"proctor\",\n  \"project\": \"caladan\",\n  \"trunk\": \"main\", …",
       "source": "real output, run 2026-07-22"
     },
     "--self-test": {
@@ -606,7 +635,7 @@
     },
     "north star": {
       "def": "A repo's one-line compass — its top-line GitHub description — read by the design loop as a directional prior when drafting proposals.",
-      "example": "$ gh repo view wabbazzar/shipyard --json description -q .description\nDesign → build → release crews for agent-maintained repos: mentat, helldiver,\nproctor, suk, chronicler — systemd-timed, PR-gated, event-logged",
+      "example": "$ gh repo view wabbazzar/shipyard --json description -q .description\nShip real improvements at agent speed — every proposal from live evidence,\nevery merge behind an unfakeable gate, exactly one human stamp in the loop.",
       "source": "real output — shipyard's own live GitHub description"
     },
     "A–H checklist": {
@@ -666,13 +695,13 @@
     },
     "event stream": {
       "def": "The append-only JSONL log, one file per day, where every agent run and incident lands as a machine-readable line.",
-      "example": "{\"ts\":\"2026-07-22T16:30:31Z\",\"svc\":\"starbird-suk\",\"event\":\"job.start\",\"source\":\"system\",\"role\":\"medic\",\"mode\":\"scan\",\"project\":\"starbird\"}\n{\"ts\":\"2026-07-22T16:30:31Z\",\"svc\":\"starbird-suk\",\"event\":\"job.end\",\"source\":\"system\",\"role\":\"medic\",\"mode\":\"scan\",\"status\":\"ok\",\"duration_s\":0,\"incidents\":0}",
-      "source": "~/code/wabbazzar-ice/data/events/2026-07-22.jsonl (live events)"
+      "example": "{\"ts\":\"2026-07-22T16:30:31Z\",\"svc\":\"richese-suk\",\"event\":\"job.start\",\"source\":\"system\",\"role\":\"medic\",\"mode\":\"scan\",\"project\":\"richese\"}\n{\"ts\":\"2026-07-22T16:30:31Z\",\"svc\":\"richese-suk\",\"event\":\"job.end\",\"source\":\"system\",\"role\":\"medic\",\"mode\":\"scan\",\"status\":\"ok\",\"duration_s\":0,\"incidents\":0}",
+      "source": "~/code/citadel/data/events/2026-07-22.jsonl (live events)"
     },
     "fyi-requests.jsonl": {
       "def": "A per-project append-only file of asynchronous user feedback that the build crew triages nightly into PRs.",
-      "example": "{\"ts\":\"2026-06-04T19:21:18.000Z\",\"id\":\"fyi_20260604192118_k952c\",\"username\":\"wesley\", …\n \"text\":\"The badge icons look good — nice work on those.\"}",
-      "source": "~/code/shredly2/data/fyi-requests.jsonl (live line)"
+      "example": "{\"ts\":\"2026-06-04T19:21:18.000Z\",\"id\":\"fyi_20260604192118_k952c\",\"username\":\"operator\", …\n \"text\":\"The badge icons look good — nice work on those.\"}",
+      "source": "~/code/salusa/data/fyi-requests.jsonl (live line)"
     },
     "Conventions block": {
       "def": "A section of the project's role file holding the operator's stated taste, which the release critic grades against instead of generic style opinions.",
@@ -681,8 +710,8 @@
     },
     "daily dispatch": {
       "def": "The daily machine-written newspaper where the fleet's overnight activity meets the human — including the Approve/Deny queue where proposals get stamped.",
-      "example": "\"edition\": 203,\n\"title\": \"The Ice Dispatch\",\n\"motto\": \"All the agents, fit to print\",\n…\n\"kicker\": \"MEDIC-INCIDENT · ATTENTION\",\n\"headline\": \"Shredly Guardian Falters; Prod Restart Pending as 4xx Surge Hits\"",
-      "source": "~/code/wabbazzar-ice/data/newspaper/2026-07-22.json (live edition No. 203; lines 3, 9-10, 77-79)"
+      "example": "\"edition\": 203,\n\"title\": \"The Citadel Dispatch\",\n\"motto\": \"All the agents, fit to print\",\n…\n\"kicker\": \"MEDIC-INCIDENT · ATTENTION\",\n\"headline\": \"Salusa Guardian Falters; Prod Restart Pending as 4xx Surge Hits\"",
+      "source": "~/code/citadel/data/newspaper/2026-07-22.json (live edition No. 203; lines 3, 9-10, 77-79)"
     },
     "one road into build": {
       "def": "The D-L15 rule that a code fix — even for an incident — may only enter the build loop as a stamped proposal, never through a side-door.",
@@ -692,7 +721,7 @@
     "traps that have bitten this box": {
       "def": "The append-only incident-history appendix in a project's gate file — each burned session becomes a line no future caller repeats.",
       "example": "## Traps that have bitten this project  (append-only)\n\nThe accreted incident history — every burned session becomes a line here so no\nfuture caller repeats it. This is the hub's **learning surface**.\n\n- **Stale dashboard bundle** — edited `dashboard/src/**`, forgot `npm run build\n  && systemctl --user restart dashboard`, then stared at an unchanged page\n  convinced the edit didn't take. Rebuild+restart is mandatory, no \"too small …",
-      "source": "~/code/wabbazzar-ice/.agents/gates.md:72-79 (live gate file)"
+      "source": "~/code/citadel/.agents/gates.md:72-79 (live gate file)"
     },
     "Goodhart check": {
       "def": "The critic's first rubric line: did the change actually do what the task claims, or just satisfy the specific eval the author optimized against?",

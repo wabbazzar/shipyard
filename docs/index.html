@@ -127,6 +127,10 @@
     .callout { border-left: 3px solid var(--accent); background: var(--code-bg); border-radius: 0 8px 8px 0; padding: 0.9rem 1.1rem; margin: 1.4rem 0; font-size: 0.9rem; }
     .callout strong { color: var(--text); }
     .footnote { font-size: 0.8rem; color: var(--muted); margin-top: 1.6rem; }
+    #cast-block { margin-top: 1.8rem; }
+    #cast-block .cast-note { font-size: 0.78rem; font-style: italic; color: var(--muted); margin: 0 0 0.5rem; }
+    #cast-block .cast-grid { display: flex; flex-wrap: wrap; gap: 0.3rem 1.2rem; font-size: 0.75rem; color: var(--muted); line-height: 1.5; }
+    #cast-block .cast-grid .alias { font-family: var(--mono); color: var(--text); }
     #deck pre { background: var(--code-bg); border: 1px solid var(--dot-inactive); border-radius: 8px; padding: 0.9rem 1.1rem; margin: 1.2rem 0; overflow-x: auto; font-size: 0.8rem; line-height: 1.5; }
     #deck pre code { background: none; border: none; padding: 0; }
 
@@ -252,6 +256,8 @@
         <p>This page renders the live build data &mdash; crew, skills, phase
         status &mdash; from the same file the ticket&rsquo;s gates require the
         builder to update. If this page lags reality, a gate is broken.</p>
+
+        <div id="cast-block"></div>
       </div>
     </section>
 
@@ -480,6 +486,17 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
           out += s;
         }
         return out;
+      }
+
+      // Cast: the dummy project names, presented up front on the title slide.
+      const castEl = document.getElementById('cast-block');
+      if (castEl && data.cast && Array.isArray(data.cast.projects)) {
+        castEl.innerHTML =
+          `<p class="cast-note">${esc(data.cast.note || '')}</p>` +
+          `<div class="cast-grid">` +
+          data.cast.projects.map(p =>
+            `<span><span class="alias">${esc(p.alias)}</span> &mdash; ${esc(p.what)}</span>`).join('') +
+          `</div>`;
       }
 
       // Crew flow: design → gate → build → gate → release; aside: medic + scribe
