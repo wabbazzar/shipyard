@@ -11,11 +11,32 @@
       "name": "mentat",
       "was": null,
       "loop": "design",
-      "status": "Live on 4 projects, nightly. Drafted its first real proposals from fleet telemetry — e.g. “medic incident flapping: 48 events vs 4 distinct in 7d” — now awaiting a stamp in the dispatch.",
-      "tagline": "Mines fleet telemetry and drafts feature/bug proposals.",
+      "status": "Live on 4 projects, nightly. Drafted its first real proposals from fleet telemetry — e.g. “medic incident flapping: 48 events vs 4 distinct in 7d.” The human front doors /bug and /feature enter the same loop through write-ticket.",
+      "tagline": "Fleet telemetry and human /bug and /feature reports both become drafted proposals.",
       "headline": "Design was never a loop: every feature started as a chat conversation, gated by whatever the human operator happened to notice.",
       "gate": "proposal approved/denied in the daily dispatch; denied proposals are never re-proposed",
       "skills": [
+        {
+          "name": "write-ticket",
+          "disposition": "new · shared",
+          "source": "shipyard/skills/write-ticket — the precursor polish-ticket assumes; mentat drafts through it, humans invoke it",
+          "summary": "Turn an ask into a ticket with acceptance criteria.",
+          "detail": "Reads the project's own conventions from a [write_ticket] config block (context files, ticket dir, type enum, point scale, commit scopes — never baked), resolves the next id, clarifies only genuinely-blocking ambiguities (default-and-record: lock sensible defaults into the decisions table for veto at review), and emits the ticket skeleton with an explicit Definition of Done. Precursor to polish-ticket. [Phase 13, D-L16/D-O11]"
+        },
+        {
+          "name": "/bug",
+          "disposition": "new · front door",
+          "source": "shipyard/skills/bug — human front door into the design loop",
+          "summary": "Reproduce and root-cause, then write the ticket.",
+          "detail": "Reproduce first (a failing test, reliable steps, or a captured signature — no ticket until the defect is pinned), the repro fails because of the bug, falsify rival causes, separate root from symptom, scope to the minimum diff. Then write-ticket with a bug scope: acceptance is the repro passing. The repro travels in the ticket; execute-ticket commits the failing test at build as the permanent regression test. Adapted from agent-ready-repo's bug-fix. [Phase 13, D-O12]"
+        },
+        {
+          "name": "/feature",
+          "disposition": "new · front door",
+          "source": "shipyard/skills/feature — human front door into the design loop",
+          "summary": "Clarify the ask and set a Definition of Done, then write the ticket.",
+          "detail": "Surface assumptions and verify one per candidate, confirm the unverified ones with the human, then set acceptance criteria as a checklist with Boundaries (always / ask-first / never). Uses the project's existing DoD convention. Then write-ticket with a feature scope: acceptance is the DoD met. Adapted from agent-ready-repo's new-spec. [Phase 13]"
+        },
         {
           "name": "polish-ticket",
           "disposition": "adapted · live",
@@ -320,7 +341,7 @@
     "flow": "Install = recon first (coverage-audit reads the project's session history before anything is configured) → interview (theme, gates, service surface, conventions) → write layers 3–5 → bake units → verify timers fire. Uninstall = remove units + delete .agents/ — the repo keeps nothing it didn't choose."
   },
   "adaptation": {
-    "intro": "Adaptation is not fine-tuning. It is versioned edits to the files agents and humans share — every lesson routed to the layer where it belongs, inherited by every future caller.",
+    "intro": "Adaptation is versioned edits to the files agents and humans share — every lesson routed to the layer where it belongs, inherited by every future caller.",
     "channels": [
       {
         "name": "operator corrections → skill files",
@@ -344,5 +365,197 @@
       }
     ],
     "router": "The routing rule, stated once: one-off correction → the ticket's decision tables; project taste → .agents/<role>.md Conventions; project gates → config.toml; portable doctrine → a core PR (leak-checked, fleet-live on merge); a question every future install should ask → the installer interview."
+  },
+  "graph": {
+    "note": "Every agent inherits a subset of one shared skill set. The spine write-ticket → polish-ticket → execute-ticket is the pipeline both a human and an agent run; /bug and /feature are the human front doors into it; coverage-audit and check-config span several agents. Dotted membership lines show the overlap.",
+    "roles": [
+      {
+        "id": "human",
+        "name": "operator",
+        "loop": "human"
+      },
+      {
+        "id": "design",
+        "name": "mentat",
+        "loop": "design"
+      },
+      {
+        "id": "build",
+        "name": "helldiver",
+        "loop": "build"
+      },
+      {
+        "id": "release",
+        "name": "proctor",
+        "loop": "release"
+      },
+      {
+        "id": "medic",
+        "name": "suk",
+        "loop": "on-call"
+      },
+      {
+        "id": "scribe",
+        "name": "chronicler",
+        "loop": "docs"
+      }
+    ],
+    "skills": [
+      {
+        "id": "bug",
+        "label": "/bug",
+        "roles": [
+          "human"
+        ],
+        "kind": "frontdoor"
+      },
+      {
+        "id": "feature",
+        "label": "/feature",
+        "roles": [
+          "human"
+        ],
+        "kind": "frontdoor"
+      },
+      {
+        "id": "write-ticket",
+        "label": "write-ticket",
+        "roles": [
+          "human",
+          "design"
+        ],
+        "kind": "pipeline"
+      },
+      {
+        "id": "polish-ticket",
+        "label": "polish-ticket",
+        "roles": [
+          "human",
+          "design"
+        ],
+        "kind": "pipeline"
+      },
+      {
+        "id": "execute-ticket",
+        "label": "execute-ticket",
+        "roles": [
+          "human",
+          "build"
+        ],
+        "kind": "pipeline"
+      },
+      {
+        "id": "coverage-audit",
+        "label": "coverage-audit",
+        "roles": [
+          "human",
+          "design",
+          "release"
+        ],
+        "kind": "shared"
+      },
+      {
+        "id": "collectors",
+        "label": "telemetry collectors",
+        "roles": [
+          "design"
+        ],
+        "kind": "owned"
+      },
+      {
+        "id": "proposals",
+        "label": "proposal drafting",
+        "roles": [
+          "design"
+        ],
+        "kind": "owned"
+      },
+      {
+        "id": "triage",
+        "label": "feedback triage → PRs",
+        "roles": [
+          "build"
+        ],
+        "kind": "owned"
+      },
+      {
+        "id": "critic",
+        "label": "shoulder-mode critic",
+        "roles": [
+          "release"
+        ],
+        "kind": "owned"
+      },
+      {
+        "id": "rubric",
+        "label": "release-readiness rubric",
+        "roles": [
+          "release"
+        ],
+        "kind": "owned"
+      },
+      {
+        "id": "battery",
+        "label": "daily battery",
+        "roles": [
+          "release"
+        ],
+        "kind": "owned"
+      },
+      {
+        "id": "revert",
+        "label": "merge→validate→revert",
+        "roles": [
+          "medic"
+        ],
+        "kind": "owned"
+      },
+      {
+        "id": "incident",
+        "label": "incident triage",
+        "roles": [
+          "medic"
+        ],
+        "kind": "owned"
+      },
+      {
+        "id": "docrefresh",
+        "label": "doc refresh",
+        "roles": [
+          "scribe"
+        ],
+        "kind": "owned"
+      },
+      {
+        "id": "checkconfig",
+        "label": "--check-config / --self-test",
+        "roles": [
+          "design",
+          "build",
+          "release",
+          "medic",
+          "scribe"
+        ],
+        "kind": "infra"
+      }
+    ],
+    "edges": [
+      {
+        "from": "bug",
+        "to": "write-ticket"
+      },
+      {
+        "from": "feature",
+        "to": "write-ticket"
+      },
+      {
+        "from": "write-ticket",
+        "to": "polish-ticket"
+      },
+      {
+        "from": "polish-ticket",
+        "to": "execute-ticket"
+      }
+    ]
   }
 }

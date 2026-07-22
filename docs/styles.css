@@ -182,15 +182,21 @@ body.present-mode section {
   scroll-snap-stop: always;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;   /* top-align; slide-inner's auto margins center it when short */
   align-items: center;
   padding: 3rem 2rem;
-  overflow: hidden;
+  overflow-y: auto;              /* tall slides scroll internally instead of clipping */
+  overflow-x: hidden;
+  scrollbar-width: none;         /* Firefox — hide the internal scrollbar */
+  -ms-overflow-style: none;
 }
+
+body.present-mode section::-webkit-scrollbar { display: none; }
 
 body.present-mode section > .slide-inner {
   max-width: var(--max-w);
   width: 100%;
+  margin: auto 0;               /* centers vertically when content fits, collapses to top when it overflows */
 }
 
 /* --- Typography --- */
