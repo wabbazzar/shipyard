@@ -268,6 +268,13 @@
       "title": "5-day fleet trial",
       "status": "in-progress",
       "gist": "T1 ≥1 real bug caught+fixed · T2 usage assessed for ≥3 projects · T3 ≥1 feature shipped end-to-end · T4 ≥1 consequential decision surfaced and decided. Missed floors become written findings."
+    },
+    {
+      "id": 13,
+      "title": "human front doors",
+      "status": "pending",
+      "gist": "/bug and /feature — the human-initiated siblings of mentat's machine-drafted proposals. /bug reproduces + root-causes before writing; /feature clarifies the ask + sets a definition of done. Both call /write-ticket (the precursor polish-ticket assumes) → polish → execute → proctor. Adapted from the existing ticket-writer agent + agent-ready-repo's bug-fix/new-spec disciplines.",
+      "completed": null
     }
   ],
   "install": {
