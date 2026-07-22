@@ -133,6 +133,8 @@ def main():
 
     out = collections.OrderedDict()
     out["meta"] = ed["meta"]
+    if "cast" in ed:
+        out["cast"] = ed["cast"]
 
     out_crew = []
     for c in ed["crew"]:
