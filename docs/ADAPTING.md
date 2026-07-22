@@ -49,6 +49,15 @@ Asynchronous feedback (chat notes, `fyi-requests.jsonl`) is triaged nightly by
 the build crew into PRs. Substantial asks become design proposals instead of
 drive-by patches — recurring pain becomes design signal, not a one-off fix.
 
+A **synchronous** human ask enters the same loop through the front-door skills:
+`bug` (reproduce-and-root-cause first) and `feature` (clarify and set a
+Definition of Done first) do the intent-specific intake and hand `write-ticket`
+a scope. `write-ticket → polish-ticket → execute-ticket` is the one road, and a
+stamped mentat proposal drafts into a ticket through the identical
+`write-ticket` file the human front doors use — the machine path and the human
+path converge, no agent-only fork. Each front door stops at the human stamp
+unless the operator says "and build it."
+
 ### 4. Agent → agent
 Agents correct each other through the same reviewable surfaces humans use:
 - the **release critic's** findings drop into the working agent's live session

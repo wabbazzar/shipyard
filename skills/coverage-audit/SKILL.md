@@ -1,5 +1,8 @@
 ---
 name: coverage-audit
+roles: [design, release, human]
+disposition: adapted
+kind: shared
 description: >
   Audit a project's automated coverage for gaps, using its Claude Code session
   transcripts as ground truth. Use when the user asks "is the release critic
