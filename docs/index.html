@@ -730,12 +730,15 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
         const btnSkills = document.getElementById('loops-btn-skills');
         const crewView = document.getElementById('loops-crew-view');
         const skillsView = document.getElementById('loops-skills-view');
-        const applyView = (skills) => {
-          crewView.hidden = skills; skillsView.hidden = !skills;
+        const applyButtons = (skills) => {
           btnCrew.classList.toggle('active', !skills);
           btnSkills.classList.toggle('active', skills);
           btnCrew.setAttribute('aria-selected', String(!skills));
           btnSkills.setAttribute('aria-selected', String(skills));
+        };
+        const applyView = (skills) => {
+          crewView.hidden = skills; skillsView.hidden = !skills;
+          applyButtons(skills);
         };
 
         // FLIP morph: the five crew boxes travel into their same-colored role
@@ -779,6 +782,7 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
           const ids = CREW_IDS.filter(id => src[id] && dst[id]);
           if (!ids.length) { applyView(skills); return; }
           morphing = true;
+          applyButtons(skills); // the pill answers the click immediately; only the views animate
           const DUR = window.matchMedia('(max-width: 640px)').matches ? 500 : 700;
           const fromView = skills ? crewView : skillsView;
           const toView = skills ? skillsView : crewView;
