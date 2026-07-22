@@ -1,5 +1,5 @@
 #!/bin/bash
-# agents/augur/runner.sh — generic augur wrapper.
+# agents/build/runner.sh — generic build (augur) wrapper.
 #
 # Live and dry-run modes run natively here (nightly feedback triage →
 # autonomous PRs). Incident mode is the medic handoff path — single
@@ -51,6 +51,17 @@ CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
 
 PROJECT_NAME="$(jq -r '.project_name' <<<"$CFG_JSON")"
+
+# Canonical role identity + resolved display name (svc string). Legacy
+# configs (no [names] block) resolve build→"augur", so the svc/units stay
+# exactly as they are today.
+ROLE="build"
+export QUARTET_ROLE="$ROLE"
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/naming.sh"
+DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
+SVC="$PROJECT_NAME-$DISPLAY"
+
 # Trunk branch — config wins, else origin/HEAD; unresolvable fails loudly.
 TRUNK_BRANCH="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")" || exit 2
 RESULT_DIR_REL="$(jq -r '.paths.result_dir // "tmp"' <<<"$CFG_JSON")"
@@ -60,18 +71,21 @@ WORKTREE_DIR_REL="$(jq -r '.paths.worktree_dir // ".worktrees"' <<<"$CFG_JSON")"
 # STRICTLY read-only: no result files, no events, no claude, no gh.
 if [ "$CHECK_CONFIG" -eq 1 ]; then
   jq -n \
-    --arg agent "augur" \
+    --arg agent "$ROLE" \
+    --arg role "$ROLE" \
+    --arg display "$DISPLAY" \
     --arg dir "$PROJECT_DIR" \
     --arg trunk "$TRUNK_BRANCH" \
     --argjson cfg "$CFG_JSON" \
-    '{agent:$agent, project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
-      can_merge:($cfg.medic.augur_can_merge // false),
-      allow_no_ci:($cfg.augur.allow_no_ci // false),
-      in_scope_paths:($cfg.augur.in_scope_paths // []),
-      forbidden_paths:($cfg.augur.forbidden_paths // []),
-      budgets:{live_usd:($cfg.augur.budget // 2.00),
-               incident_usd:($cfg.augur.budget_incident // 1.50),
-               wall_clock_sec:($cfg.augur.wall_clock_sec // 3600)}}'
+    '{agent:$agent, role:$role, display:$display,
+      project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
+      can_merge:($cfg.medic.can_merge // false),
+      allow_no_ci:($cfg.build.allow_no_ci // false),
+      in_scope_paths:($cfg.build.in_scope_paths // []),
+      forbidden_paths:($cfg.build.forbidden_paths // []),
+      budgets:{live_usd:($cfg.build.budget // 2.00),
+               incident_usd:($cfg.build.budget_incident // 1.50),
+               wall_clock_sec:($cfg.build.wall_clock_sec // 3600)}}'
   exit 0
 fi
 
@@ -88,17 +102,17 @@ if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
   [ -f "$ROLE_FILE" ]      || { echo "role.md missing: $ROLE_FILE" >&2; exit 2; }
   [ -f "$PROJECT_PROMPT" ] || { echo "project augur.md missing: $PROJECT_PROMPT" >&2; exit 2; }
 
-  WALL_CLOCK="$(jq -r '.augur.wall_clock_sec // 3600' <<<"$CFG_JSON")"
-  BUDGET="$(jq -r '.augur.budget // 2.00' <<<"$CFG_JSON")"
+  WALL_CLOCK="$(jq -r '.build.wall_clock_sec // 3600' <<<"$CFG_JSON")"
+  BUDGET="$(jq -r '.build.budget // 2.00' <<<"$CFG_JSON")"
   PROJECT_OWNER="$(jq -r '.project_owner // ""' <<<"$CFG_JSON")"
 
-  RESULT_FILE="$RESULT_DIR/$PROJECT_NAME-augur-result.json"
-  LOG_FILE="$RESULT_DIR/$PROJECT_NAME-augur-last-run.log"
-  FYI_LOG="$PROJECT_DIR/$(jq -r '.augur.fyi_log // "data/fyi-requests.jsonl"' <<<"$CFG_JSON")"
+  RESULT_FILE="$RESULT_DIR/$SVC-result.json"
+  LOG_FILE="$RESULT_DIR/$SVC-last-run.log"
+  FYI_LOG="$PROJECT_DIR/$(jq -r '.build.fyi_log // "data/fyi-requests.jsonl"' <<<"$CFG_JSON")"
 
   JOB_START="$(date +%s)"
-  echo "[$PROJECT_NAME-augur] $(now_iso) start mode=$MODE" > "$LOG_FILE"
-  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-augur" job.start \
+  echo "[$SVC] $(now_iso) start mode=$MODE" > "$LOG_FILE"
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.start \
     mode="$MODE" project="$PROJECT_NAME" || true
 
   cd "$PROJECT_DIR"
@@ -106,28 +120,28 @@ if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
   # Pre-flight: live only. dry-run does no git ops, so skip.
   if [ "$MODE" = "live" ]; then
     if [ -n "$(git status --porcelain)" ]; then
-      echo "[$PROJECT_NAME-augur] ABORT: main checkout dirty" >> "$LOG_FILE"
+      echo "[$SVC] ABORT: main checkout dirty" >> "$LOG_FILE"
       git status --short >> "$LOG_FILE"
       quartet_notify "$PROJECT_NAME Augur aborted ($MODE)" \
         "Main checkout has uncommitted changes." || true
-      [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-augur" job.end \
+      [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
         mode="$MODE" status="abort" reason="dirty" || true
       exit 1
     fi
     CB="$(git rev-parse --abbrev-ref HEAD)"
     if [ "$CB" != "$TRUNK_BRANCH" ]; then
-      echo "[$PROJECT_NAME-augur] ABORT: not on $TRUNK_BRANCH ($CB)" >> "$LOG_FILE"
+      echo "[$SVC] ABORT: not on $TRUNK_BRANCH ($CB)" >> "$LOG_FILE"
       quartet_notify "$PROJECT_NAME Augur aborted ($MODE)" \
         "Current branch is $CB, not $TRUNK_BRANCH." || true
-      [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-augur" job.end \
+      [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
         mode="$MODE" status="abort" reason="not_trunk" || true
       exit 1
     fi
     git fetch origin "$TRUNK_BRANCH" --quiet 2>>"$LOG_FILE" || true
     if [ -n "$(git rev-list "origin/$TRUNK_BRANCH..$TRUNK_BRANCH" 2>/dev/null)" ]; then
-      echo "[$PROJECT_NAME-augur] pushing local $TRUNK_BRANCH ahead-of-origin commits" >> "$LOG_FILE"
+      echo "[$SVC] pushing local $TRUNK_BRANCH ahead-of-origin commits" >> "$LOG_FILE"
       git push origin "$TRUNK_BRANCH" >> "$LOG_FILE" 2>&1 || {
-        [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-augur" job.end \
+        [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
           mode="$MODE" status="abort" reason="push_failed" || true
         exit 1
       }
@@ -173,7 +187,7 @@ $RUN_CONTEXT"
     >> "$LOG_FILE" 2>&1
   EXIT=$?
   set -e
-  echo "[$PROJECT_NAME-augur] claude exit=$EXIT" >> "$LOG_FILE"
+  echo "[$SVC] claude exit=$EXIT" >> "$LOG_FILE"
 
   # Live mode only — clean up any worktrees augur left behind. Belt-and-
   # suspenders for the case where claude crashed mid-run.
@@ -183,7 +197,7 @@ $RUN_CONTEXT"
       path="$(awk '{print $1}' <<<"$wt")"
       case "$path" in
         *"/.worktrees/augur-"*|*"/.worktrees/medic-incident-"*)
-          echo "[$PROJECT_NAME-augur] cleanup leftover worktree $path" >> "$LOG_FILE"
+          echo "[$SVC] cleanup leftover worktree $path" >> "$LOG_FILE"
           git worktree remove --force "$path" 2>>"$LOG_FILE" || true ;;
       esac
     done < <(git worktree list --porcelain 2>/dev/null | grep '^worktree ' | sed 's/^worktree //')
@@ -193,7 +207,7 @@ $RUN_CONTEXT"
   # scripts/augur-format-signal.mjs (optional per-project); fall back to a
   # generic line if not.
   FMT="$PROJECT_DIR/scripts/augur-format-signal.mjs"
-  SUMMARY_FILE="$RESULT_DIR/$PROJECT_NAME-augur-signal.txt"
+  SUMMARY_FILE="$RESULT_DIR/$SVC-signal.txt"
   if [ -f "$RESULT_FILE" ] && [ -s "$RESULT_FILE" ]; then
     if [ -x "$FMT" ] || [ -f "$FMT" ]; then
       node "$FMT" "$RESULT_FILE" > "$SUMMARY_FILE" 2>>"$LOG_FILE" || \
@@ -222,10 +236,10 @@ $RUN_CONTEXT"
   JOB_DUR=$(( $(date +%s) - JOB_START ))
   # shellcheck disable=SC1091
   source "$QUARTET_DIR/agents/lib/post-run.sh"
-  agent_finish "$PROJECT_NAME-augur" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
+  agent_finish "$SVC" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
     mode="$MODE" exit_code="$EXIT" >> "$LOG_FILE" 2>&1
 
-  echo "[$PROJECT_NAME-augur] done pass=$PASS exit=$EXIT" >> "$LOG_FILE"
+  echo "[$SVC] done pass=$PASS exit=$EXIT" >> "$LOG_FILE"
   exit "$EXIT"
 fi
 
@@ -242,19 +256,19 @@ INCIDENT_SUMMARY="$(jq -r '.summary // "(no summary)"' "$INCIDENT_FILE")"
 ID_PREFIX="${INCIDENT_ID:0:12}"
 BRANCH="medic-incident-$ID_PREFIX"
 WORKTREE_PATH="$WORKTREE_DIR/medic-incident-$ID_PREFIX"
-RESULT_FILE="$RESULT_DIR/$PROJECT_NAME-augur-result.json"
-LOG_FILE="$RESULT_DIR/$PROJECT_NAME-augur-incident-$ID_PREFIX.log"
+RESULT_FILE="$RESULT_DIR/$SVC-result.json"
+LOG_FILE="$RESULT_DIR/$SVC-incident-$ID_PREFIX.log"
 
-INCIDENT_BUDGET="$(jq -r '.augur.budget_incident // 1.50' <<<"$CFG_JSON")"
-WALL_CLOCK="$(jq -r '.augur.wall_clock_sec // 3600' <<<"$CFG_JSON")"
-AUGUR_CAN_MERGE="$(jq -r '.medic.augur_can_merge // false' <<<"$CFG_JSON")"
-ALLOW_NO_CI="$(jq -r '.augur.allow_no_ci // false' <<<"$CFG_JSON")"
-IN_SCOPE_PATHS="$(jq -c '.augur.in_scope_paths // []' <<<"$CFG_JSON")"
-FORBIDDEN_PATHS="$(jq -c '.augur.forbidden_paths // []' <<<"$CFG_JSON")"
+INCIDENT_BUDGET="$(jq -r '.build.budget_incident // 1.50' <<<"$CFG_JSON")"
+WALL_CLOCK="$(jq -r '.build.wall_clock_sec // 3600' <<<"$CFG_JSON")"
+AUGUR_CAN_MERGE="$(jq -r '.medic.can_merge // false' <<<"$CFG_JSON")"
+ALLOW_NO_CI="$(jq -r '.build.allow_no_ci // false' <<<"$CFG_JSON")"
+IN_SCOPE_PATHS="$(jq -c '.build.in_scope_paths // []' <<<"$CFG_JSON")"
+FORBIDDEN_PATHS="$(jq -c '.build.forbidden_paths // []' <<<"$CFG_JSON")"
 
 JOB_START="$(date +%s)"
 echo "[augur-incident] $(now_iso) start id=$INCIDENT_ID branch=$BRANCH" > "$LOG_FILE"
-[ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-augur" job.start \
+[ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.start \
   mode="incident" incident_id="$INCIDENT_ID" project="$PROJECT_NAME" || true
 
 write_failure() {
@@ -267,7 +281,7 @@ write_failure() {
     '{pass:false, incident_id:$iid, branch:$br, pr_url:"", merge_sha:"",
       files_changed:[], errors:[$reason], timestamp:$ts}' > "$RESULT_FILE"
   JOB_DUR=$(( $(date +%s) - JOB_START ))
-  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-augur" job.end \
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
     mode="incident" status="fail" reason="$1" duration_s="$JOB_DUR" \
     incident_id="$INCIDENT_ID" || true
 }
@@ -368,7 +382,7 @@ if [ "$PASS" != "true" ] || [ -z "$PR_URL" ]; then
   # Augur reported failure inline — preserve its result, just confirm
   # status=fail in the event stream.
   JOB_DUR=$(( $(date +%s) - JOB_START ))
-  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-augur" job.end \
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
     mode="incident" status="fail" duration_s="$JOB_DUR" \
     incident_id="$INCIDENT_ID" || true
   exit 1
@@ -387,13 +401,13 @@ gate_fail() {
   # Dedicated lifecycle event so the dashboard can join a "merge_blocked"
   # state without falling back to job.end. Carries the PR URL so
   # /incidents can link to the PR even when no merge happened.
-  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-augur" augur.incident.merge_blocked \
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" build.incident.merge_blocked \
     incident_id="$INCIDENT_ID" project="$PROJECT_NAME" \
     pr_url="$PR_URL" reason="$1" || true
   quartet_notify "Augur incident PR opened ($PROJECT_NAME)" \
     "PR: $PR_URL"$'\n'"Merge gate failed: $1. Human review needed."
   JOB_DUR=$(( $(date +%s) - JOB_START ))
-  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-augur" job.end \
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
     mode="incident" status="merge_blocked" reason="$1" duration_s="$JOB_DUR" \
     incident_id="$INCIDENT_ID" pr_url="$PR_URL" || true
   exit 0  # not an augur failure — PR is open, just wasn't merged
@@ -470,7 +484,7 @@ case "$CI_STATE" in
     # the dashboard/owner can see merges that skipped CI.
     if [ "$ALLOW_NO_CI" = "true" ]; then
       echo "[augur-incident] CI has no checks — waived (augur.allow_no_ci=true)" >> "$LOG_FILE"
-      [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-augur" augur.incident.ci_waived \
+      [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" build.incident.ci_waived \
         incident_id="$INCIDENT_ID" project="$PROJECT_NAME" pr_url="$PR_URL" || true
     else
       gate_fail "ci_no_checks"
@@ -518,7 +532,7 @@ jq --arg sha "$MERGE_SHA" '. + {merge_sha:$sha}' "$RESULT_FILE" > "$RESULT_FILE.
   && mv "$RESULT_FILE.tmp" "$RESULT_FILE"
 
 JOB_DUR=$(( $(date +%s) - JOB_START ))
-[ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-augur" job.end \
+[ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
   mode="incident" status="ok" duration_s="$JOB_DUR" \
   incident_id="$INCIDENT_ID" pr_url="$PR_URL" merge_sha="$MERGE_SHA" || true
 

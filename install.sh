@@ -1,12 +1,21 @@
 #!/bin/bash
-# install-quartet.sh — idempotent installer for guardian/augur/medic/scribe.
+# install-quartet.sh — idempotent installer for the quartet agents.
 #
 # Usage:
-#   scripts/install-quartet.sh --project <project_dir> [--dry-run] [--agents LIST]
+#   scripts/install-quartet.sh --project <project_dir> [--dry-run] [--agents LIST] [--theme T]
 #
 #   --project   Path to the target project (must contain .agents/config.toml).
 #   --dry-run   Print every change without writing anything.
-#   --agents    Comma list of agents to install. Default: guardian,augur,medic,scribe.
+#   --agents    Comma list of roles to install. Default: build,release,medic,scribe
+#               (design is opt-in). Legacy names accepted and mapped:
+#               guardian→release, augur→build.
+#   --theme     Display-name theme baked into the project's [names] block:
+#                 plain      role IDs verbatim (default): build/release/medic/scribe
+#                 spacetime  mentat/helldiver/proctor/suk/chronicler
+#                 custom:d,b,r,m,s  five names in role order design,build,release,medic,scribe
+#               Unit/svc names come from [names]; the canonical role drives the
+#               agent dir + config section. Existing installs (no [names]) are a
+#               no-op until re-baked with a theme.
 #
 # What it does (idempotent — re-running is safe):
 #
@@ -47,25 +56,43 @@ done
 QUARTET_DIR="${QUARTET_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/naming.sh"
+
 usage() {
-  sed -n '2,38p' "$0"
+  sed -n '2,46p' "$0"
   exit "${1:-2}"
 }
 
 # ---------- argv ------------------------------------------------------------
 PROJECT_DIR=""
 DRY_RUN=0
-AGENTS="guardian,augur,medic,scribe"
+AGENTS="build,release,medic,scribe"
+THEME="plain"
 while [ $# -gt 0 ]; do
   case "$1" in
     --project) PROJECT_DIR="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --agents)  AGENTS="$2"; shift 2 ;;
+    --theme)   THEME="$2"; shift 2 ;;
     -h|--help) usage 0 ;;
     *) echo "unknown arg: $1" >&2; usage ;;
   esac
 done
 [ -z "$PROJECT_DIR" ] && { echo "--project required" >&2; usage; }
+
+# Normalize the --agents list to canonical role IDs (accept legacy names).
+map_agent_token() {
+  case "$1" in
+    guardian) echo release ;;
+    augur)    echo build ;;
+    *)        echo "$1" ;;
+  esac
+}
+ROLES_LIST=""
+for tok in ${AGENTS//,/ }; do
+  ROLES_LIST+="$(map_agent_token "$tok") "
+done
 PROJECT_DIR="$(cd "$PROJECT_DIR" 2>/dev/null && pwd)" || \
   { echo "project_dir not found: $PROJECT_DIR" >&2; exit 2; }
 
@@ -80,30 +107,78 @@ CFG_JSON="$(load_config_json "$CFG")" || { echo "failed to parse $CFG" >&2; exit
 PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON")"
 [ -z "$PROJECT_NAME" ] && { echo "config missing project_name" >&2; exit 2; }
 
-# ---------- defaults --------------------------------------------------------
+# ---------- theme → [names] block -------------------------------------------
+# Resolve the theme into a display name per role (order: design build release
+# medic scribe), then bake a [names] block into the project's config.toml so
+# the runners + this installer resolve the same svc/unit names.
+declare -A THEME_NAMES
+case "$THEME" in
+  plain)
+    THEME_NAMES=( [design]=design [build]=build [release]=release [medic]=medic [scribe]=scribe ) ;;
+  spacetime)
+    THEME_NAMES=( [design]=mentat [build]=helldiver [release]=proctor [medic]=suk [scribe]=chronicler ) ;;
+  custom:*)
+    IFS=',' read -r c_d c_b c_r c_m c_s <<<"${THEME#custom:}"
+    if [ -z "$c_d" ] || [ -z "$c_b" ] || [ -z "$c_r" ] || [ -z "$c_m" ] || [ -z "$c_s" ]; then
+      echo "bad --theme custom: need 5 names (design,build,release,medic,scribe)" >&2; exit 2
+    fi
+    THEME_NAMES=( [design]="$c_d" [build]="$c_b" [release]="$c_r" [medic]="$c_m" [scribe]="$c_s" ) ;;
+  *)
+    echo "unknown --theme: $THEME (want plain|spacetime|custom:d,b,r,m,s)" >&2; exit 2 ;;
+esac
+
+# Build the [names] TOML block (canonical role order).
+names_block="[names]"$'\n'
+for role in $QUARTET_ROLES; do
+  names_block+="$role = \"${THEME_NAMES[$role]}\""$'\n'
+done
+
+echo "==> theme '$THEME' → [names] block in $CFG"
+if [ "$DRY_RUN" = "1" ]; then
+  echo "  would write:"; printf '%s' "$names_block" | sed 's/^/    /'
+else
+  # Idempotent: strip any existing [names] block, then append the new one.
+  tmp_cfg="$(mktemp)"
+  awk '
+    /^[[:space:]]*\[names\]/ { skip=1; next }
+    skip && /^[[:space:]]*\[/ { skip=0 }
+    !skip { print }
+  ' "$CFG" > "$tmp_cfg"
+  # Drop a trailing blank line to keep spacing tidy, then append the block.
+  printf '\n%s' "$names_block" >> "$tmp_cfg"
+  mv "$tmp_cfg" "$CFG"
+  echo "  wrote [names] ($THEME)"
+  # Reload so unit generation sees the freshly baked names.
+  CFG_JSON="$(load_config_json "$CFG")" || { echo "failed to re-parse $CFG" >&2; exit 2; }
+fi
+
+# ---------- defaults (keyed by canonical role) ------------------------------
 default_schedule() {
   case "$1" in
-    guardian) echo "*-*-* 06:00:00" ;;
-    medic)    echo "*-*-* *:0/10:00" ;;
-    augur)    echo "*-*-* 03:30:00" ;;
-    scribe)   echo "*-*-* 01:00:00" ;;
+    design)  echo "*-*-* 05:00:00" ;;
+    release) echo "*-*-* 06:00:00" ;;
+    medic)   echo "*-*-* *:0/10:00" ;;
+    build)   echo "*-*-* 03:30:00" ;;
+    scribe)  echo "*-*-* 01:00:00" ;;
   esac
 }
 default_mode() {
   case "$1" in
-    guardian) echo "daily" ;;
-    medic)    echo "scan" ;;
-    augur)    echo "live" ;;
-    scribe)   echo "daily" ;;
+    design)  echo "design" ;;
+    release) echo "daily" ;;
+    medic)   echo "scan" ;;
+    build)   echo "live" ;;
+    scribe)  echo "daily" ;;
   esac
 }
 description() {
   local cap="$(tr '[:lower:]' '[:upper:]' <<<"${PROJECT_NAME:0:1}")${PROJECT_NAME:1}"
   case "$1" in
-    guardian) echo "$cap Guardian — daily tests + typecheck + data audit + build" ;;
-    medic)    echo "$cap Medic — failure-triggered triage agent (scan tick)" ;;
-    augur)    echo "$cap Augur — nightly user-feedback triage + autonomous fixer" ;;
-    scribe)   echo "$cap Scribe — daily doc-as-code refresh" ;;
+    design)  echo "$cap Design — pre-build design/architecture pass" ;;
+    release) echo "$cap Release — daily tests + typecheck + data audit + build" ;;
+    medic)   echo "$cap Medic — failure-triggered triage agent (scan tick)" ;;
+    build)   echo "$cap Build — nightly user-feedback triage + autonomous fixer" ;;
+    scribe)  echo "$cap Scribe — daily doc-as-code refresh" ;;
   esac
 }
 
@@ -130,15 +205,22 @@ write_or_show() {
 echo "==> systemd units (project=$PROJECT_NAME dir=$PROJECT_DIR)"
 [ "$DRY_RUN" = "1" ] || mkdir -p "$SYSTEMD_DIR"
 
-for agent in ${AGENTS//,/ }; do
-  schedule="$(jq -r --arg a "$agent" '.install.timers[$a] // empty' <<<"$CFG_JSON")"
-  [ -z "$schedule" ] && schedule="$(default_schedule "$agent")"
-  [ -z "$schedule" ] && { echo "  skip $agent: no schedule"; continue; }
-  mode="$(default_mode "$agent")"
-  desc="$(description "$agent")"
+for role in $ROLES_LIST; do
+  # Timer schedule: config's [install.timers] wins (accept role id OR the
+  # legacy display key), else the baked-in default.
+  legacy_key="$(role_display "$role" '{}')"
+  schedule="$(jq -r --arg r "$role" --arg l "$legacy_key" \
+    '.install.timers[$r] // .install.timers[$l] // empty' <<<"$CFG_JSON")"
+  [ -z "$schedule" ] && schedule="$(default_schedule "$role")"
+  [ -z "$schedule" ] && { echo "  skip $role: no schedule"; continue; }
+  mode="$(default_mode "$role")"
+  desc="$(description "$role")"
 
-  service_path="$SYSTEMD_DIR/${PROJECT_NAME}-${agent}.service"
-  timer_path="$SYSTEMD_DIR/${PROJECT_NAME}-${agent}.timer"
+  dir="$(dir_for_role "$role")"
+  display="$(role_display "$role" "$CFG_JSON")"
+
+  service_path="$SYSTEMD_DIR/${PROJECT_NAME}-${display}.service"
+  timer_path="$SYSTEMD_DIR/${PROJECT_NAME}-${display}.timer"
 
   # Propagate quartet runtime knobs set at install time into the unit —
   # systemd user services get a near-empty environment otherwise, which
@@ -149,9 +231,9 @@ for agent in ${AGENTS//,/ }; do
     [ -n "$val" ] && quartet_env+="Environment=$var=$val"$'\n'
   done
 
-  # Guardian wants network; the others don't.
+  # The release role (tests + build) wants network; the others don't.
   unit_extras=""
-  [ "$agent" = "guardian" ] && unit_extras=$'Wants=network-online.target\nAfter=network-online.target\n'
+  [ "$role" = "release" ] && unit_extras=$'Wants=network-online.target\nAfter=network-online.target\n'
 
   service_content="[Unit]
 Description=$desc
@@ -159,7 +241,7 @@ ${unit_extras}
 [Service]
 Type=oneshot
 WorkingDirectory=$PROJECT_DIR
-ExecStart=/bin/bash $QUARTET_DIR/agents/$agent/runner.sh --project $PROJECT_DIR --mode $mode
+ExecStart=/bin/bash $QUARTET_DIR/agents/$dir/runner.sh --project $PROJECT_DIR --mode $mode
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=$HOME
 ${quartet_env}TimeoutStartSec=3900
@@ -182,8 +264,9 @@ if [ "$DRY_RUN" = "1" ]; then
   echo "  would: systemctl --user daemon-reload + enable --now each timer"
 else
   systemctl --user daemon-reload
-  for agent in ${AGENTS//,/ }; do
-    systemctl --user enable --now "${PROJECT_NAME}-${agent}.timer" 2>&1 | sed 's/^/  /'
+  for role in $ROLES_LIST; do
+    display="$(role_display "$role" "$CFG_JSON")"
+    systemctl --user enable --now "${PROJECT_NAME}-${display}.timer" 2>&1 | sed 's/^/  /'
   done
 fi
 
@@ -224,17 +307,20 @@ fi
 # ---------- step 4: legacy launcher script removal --------------------------
 echo ""
 echo "==> legacy launcher scripts in $PROJECT_DIR/scripts/"
-for agent in ${AGENTS//,/ }; do
-  legacy="$PROJECT_DIR/scripts/${PROJECT_NAME}-${agent}.sh"
+for role in $ROLES_LIST; do
+  dir="$(dir_for_role "$role")"
+  # Pre-quartet launchers are named by the legacy display (guardian/augur/…).
+  legacy_name="$(role_display "$role" '{}')"
+  legacy="$PROJECT_DIR/scripts/${PROJECT_NAME}-${legacy_name}.sh"
   [ -f "$legacy" ] || continue
-  if grep -q "$QUARTET_DIR/agents/$agent/runner.sh" "$legacy" 2>/dev/null; then
+  if grep -q "$QUARTET_DIR/agents/$dir/runner.sh" "$legacy" 2>/dev/null; then
     echo "  ok (already a shim): $legacy"
     continue
   fi
   echo "  removing legacy:    $legacy"
   companions=()
   for ext in -prompt.md -checklist.md; do
-    f="$PROJECT_DIR/scripts/${PROJECT_NAME}-${agent}${ext}"
+    f="$PROJECT_DIR/scripts/${PROJECT_NAME}-${legacy_name}${ext}"
     [ -f "$f" ] && companions+=("$f")
   done
   if [ "$DRY_RUN" = "0" ]; then
@@ -254,8 +340,9 @@ done
 echo ""
 echo "==> verification"
 all_ok=1
-for agent in ${AGENTS//,/ }; do
-  unit="${PROJECT_NAME}-${agent}.timer"
+for role in $ROLES_LIST; do
+  display="$(role_display "$role" "$CFG_JSON")"
+  unit="${PROJECT_NAME}-${display}.timer"
   if systemctl --user is-enabled "$unit" >/dev/null 2>&1; then
     next="$(systemctl --user list-timers "$unit" --no-pager 2>/dev/null | awk 'NR==2 {print $1, $2, $3, $4}')"
     echo "  $unit: enabled, next=$next"

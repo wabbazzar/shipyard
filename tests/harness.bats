@@ -105,9 +105,9 @@ esac'
 }
 
 @test "make_fixture_project accepts an alternate config fixture" {
-  proj="$(make_fixture_project demo2 augur-can-merge-false.toml)"
+  proj="$(make_fixture_project demo2 can-merge-false.toml)"
   cfg="$(source "$QUARTET_ROOT/agents/lib/load-config.sh"; load_config_json "$proj/.agents/config.toml")"
-  [ "$(jq -r '.medic.augur_can_merge' <<<"$cfg")" = "false" ]
+  [ "$(jq -r '.medic.can_merge' <<<"$cfg")" = "false" ]
   [ "$(jq -r '.project_name' <<<"$cfg")" = "demo2" ]
 }
 
@@ -115,15 +115,18 @@ esac'
 # Config fixtures through the real loader
 # ---------------------------------------------------------------------------
 
-@test "absent-keys fixture: branch, augur_can_merge and allow_no_ci are all absent" {
+@test "absent-keys fixture: branch, can_merge and allow_no_ci are all absent" {
   cfg="$(load_fixture_config absent-keys.toml)"
   [ -n "$cfg" ]
   [ "$(jq -r '.branch // "ABSENT"' <<<"$cfg")" = "ABSENT" ]
-  [ "$(jq -r '.medic.augur_can_merge // "ABSENT"' <<<"$cfg")" = "ABSENT" ]
-  [ "$(jq -r '.augur.allow_no_ci // "ABSENT"' <<<"$cfg")" = "ABSENT" ]
+  [ "$(jq -r '.medic.can_merge // "ABSENT"' <<<"$cfg")" = "ABSENT" ]
+  [ "$(jq -r '.build.allow_no_ci // "ABSENT"' <<<"$cfg")" = "ABSENT" ]
   [ "$(jq -r 'has("branch")' <<<"$cfg")" = "false" ]
-  [ "$(jq -r '.medic | has("augur_can_merge")' <<<"$cfg")" = "false" ]
-  [ "$(jq -r '.augur | has("allow_no_ci")' <<<"$cfg")" = "false" ]
+  [ "$(jq -r '.medic | has("can_merge")' <<<"$cfg")" = "false" ]
+  [ "$(jq -r '.build | has("allow_no_ci")' <<<"$cfg")" = "false" ]
+  # canonical config has no legacy sections at all
+  [ "$(jq -r 'has("augur")' <<<"$cfg")" = "false" ]
+  [ "$(jq -r 'has("guardian")' <<<"$cfg")" = "false" ]
 }
 
 @test "branch-present fixture: branch parses as main" {
@@ -131,21 +134,21 @@ esac'
   [ "$(jq -r '.branch' <<<"$cfg")" = "main" ]
 }
 
-@test "augur_can_merge fixtures parse as true and false" {
-  cfg_true="$(load_fixture_config augur-can-merge-true.toml)"
-  cfg_false="$(load_fixture_config augur-can-merge-false.toml)"
-  [ "$(jq -r '.medic.augur_can_merge' <<<"$cfg_true")" = "true" ]
-  [ "$(jq -r '.medic.augur_can_merge' <<<"$cfg_false")" = "false" ]
+@test "can_merge fixtures parse as true and false" {
+  cfg_true="$(load_fixture_config can-merge-true.toml)"
+  cfg_false="$(load_fixture_config can-merge-false.toml)"
+  [ "$(jq -r '.medic.can_merge' <<<"$cfg_true")" = "true" ]
+  [ "$(jq -r '.medic.can_merge' <<<"$cfg_false")" = "false" ]
   # booleans, not strings — the runners compare against literal true/false
-  [ "$(jq -r '.medic.augur_can_merge | type' <<<"$cfg_true")" = "boolean" ]
+  [ "$(jq -r '.medic.can_merge | type' <<<"$cfg_true")" = "boolean" ]
 }
 
 @test "allow-no-ci fixture: present-true parses, absent variant has no key" {
   cfg_true="$(load_fixture_config allow-no-ci-true.toml)"
   cfg_absent="$(load_fixture_config absent-keys.toml)"
-  [ "$(jq -r '.augur.allow_no_ci' <<<"$cfg_true")" = "true" ]
-  [ "$(jq -r '.augur.allow_no_ci | type' <<<"$cfg_true")" = "boolean" ]
-  [ "$(jq -r '.augur | has("allow_no_ci")' <<<"$cfg_absent")" = "false" ]
+  [ "$(jq -r '.build.allow_no_ci' <<<"$cfg_true")" = "true" ]
+  [ "$(jq -r '.build.allow_no_ci | type' <<<"$cfg_true")" = "boolean" ]
+  [ "$(jq -r '.build | has("allow_no_ci")' <<<"$cfg_absent")" = "false" ]
 }
 
 @test "load_config_json fails loudly on a missing file" {
@@ -257,11 +260,11 @@ esac'
   # No --mode: the runner must reach its own mode validation, which proves
   # --project was accepted (a bad --project exits earlier, with a different
   # message).
-  run run_runner guardian "$proj"
+  run run_runner release "$proj"
   [ "$status" -eq 2 ]
   [[ "$output" == *"--mode required"* ]]
 
-  run run_runner guardian "$BATS_TEST_TMPDIR/does-not-exist" --mode daily
+  run run_runner release "$BATS_TEST_TMPDIR/does-not-exist" --mode daily
   [ "$status" -eq 2 ]
   [[ "$output" == *"project dir missing"* ]]
 }
@@ -270,7 +273,7 @@ esac'
   proj="$(make_fixture_project ev)"
   head_sha="$(git -C "$proj" rev-parse HEAD)"
 
-  run run_runner guardian "$proj" --mode post-merge --merge-sha "$head_sha"
+  run run_runner release "$proj" --mode post-merge --merge-sha "$head_sha"
   [ "$status" -eq 0 ]
 
   # Nothing leaked into the repo's own data/events.
@@ -295,7 +298,7 @@ esac'
   # Make the test command fail — post-merge must report status=fail, exit 1.
   sed -i 's/^test_cmd .*/test_cmd     = "false"/' "$proj/.agents/config.toml"
 
-  run run_runner guardian "$proj" --mode post-merge --merge-sha "$(git -C "$proj" rev-parse HEAD)"
+  run run_runner release "$proj" --mode post-merge --merge-sha "$(git -C "$proj" rev-parse HEAD)"
   [ "$status" -eq 1 ]
 
   line="$(events_json | jq -c 'select(.event=="job.end")')"

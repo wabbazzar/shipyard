@@ -61,6 +61,17 @@ CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
 
 PROJECT_NAME="$(jq -r '.project_name' <<<"$CFG_JSON")"
+
+# Canonical role identity + resolved display name (svc string). scribe is
+# already a role id; legacy configs (no [names] block) resolve it to
+# "scribe", so the svc/units stay exactly as they are today.
+ROLE="scribe"
+export QUARTET_ROLE="$ROLE"
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/naming.sh"
+DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
+SVC="$PROJECT_NAME-$DISPLAY"
+
 RESULT_DIR_REL="$(jq -r '.paths.result_dir // "tmp"' <<<"$CFG_JSON")"
 BUDGET="$(jq -r '.scribe.budget // 1.50' <<<"$CFG_JSON")"
 COMMIT_PREFIX="$(jq -r '.scribe.commit_message_prefix // "scribe: nightly refresh"' <<<"$CFG_JSON")"
@@ -75,13 +86,16 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
   source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
   TRUNK_BRANCH="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")" || exit 2
   jq -n \
-    --arg agent "scribe" \
+    --arg agent "$ROLE" \
+    --arg role "$ROLE" \
+    --arg display "$DISPLAY" \
     --arg dir "$PROJECT_DIR" \
     --arg trunk "$TRUNK_BRANCH" \
     --argjson cfg "$CFG_JSON" \
-    '{agent:$agent, project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
-      can_merge:($cfg.medic.augur_can_merge // false),
-      allow_no_ci:($cfg.augur.allow_no_ci // false),
+    '{agent:$agent, role:$role, display:$display,
+      project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
+      can_merge:($cfg.medic.can_merge // false),
+      allow_no_ci:($cfg.build.allow_no_ci // false),
       content_paths:($cfg.scribe.content_paths // []),
       auto_commit:($cfg.scribe.auto_commit // true),
       auto_push:($cfg.scribe.auto_push // false),
@@ -91,22 +105,22 @@ fi
 
 RESULT_DIR="$PROJECT_DIR/$RESULT_DIR_REL"
 mkdir -p "$RESULT_DIR"
-RESULT_FILE="$RESULT_DIR/$PROJECT_NAME-scribe-result.json"
-LOG_FILE="$RESULT_DIR/$PROJECT_NAME-scribe-last-run.log"
+RESULT_FILE="$RESULT_DIR/$SVC-result.json"
+LOG_FILE="$RESULT_DIR/$SVC-last-run.log"
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 JOB_START="$(date +%s)"
 
 cd "$PROJECT_DIR"
 
-[ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-scribe" job.start \
+[ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.start \
   mode="$MODE" project="$PROJECT_NAME" || true
-echo "[$PROJECT_NAME-scribe] $(now_iso) start mode=$MODE" > "$LOG_FILE"
+echo "[$SVC] $(now_iso) start mode=$MODE" > "$LOG_FILE"
 
 # Optional pre-hook: a project can run a cheap, AI-free refresh step
 # before scribe (e.g. regenerate a state snapshot scribe reads).
 if [ -n "${QUARTET_SCRIBE_PRE_HOOK:-}" ] && [ -x "${QUARTET_SCRIBE_PRE_HOOK}" ]; then
-  echo "[$PROJECT_NAME-scribe] running pre-hook $QUARTET_SCRIBE_PRE_HOOK" >> "$LOG_FILE"
+  echo "[$SVC] running pre-hook $QUARTET_SCRIBE_PRE_HOOK" >> "$LOG_FILE"
   "$QUARTET_SCRIBE_PRE_HOOK" >> "$LOG_FILE" 2>&1 || true
 fi
 
@@ -146,7 +160,7 @@ claude -p \
   >> "$LOG_FILE" 2>&1
 EXIT=$?
 set -e
-echo "[$PROJECT_NAME-scribe] claude exit=$EXIT" >> "$LOG_FILE"
+echo "[$SVC] claude exit=$EXIT" >> "$LOG_FILE"
 
 # Determine pass/fail. Scribe's own result.json is the source of truth;
 # a non-zero claude exit alone isn't enough (it may have written the
@@ -170,7 +184,7 @@ if [ "$(jq 'length' <<<"$CONTENT_PATHS_JSON")" -gt 0 ]; then
     CHANGED=$(git status --porcelain -- "${PATHSPECS[@]}" 2>/dev/null | wc -l | xargs)
   fi
 fi
-echo "[$PROJECT_NAME-scribe] changed_files=$CHANGED in content_paths" >> "$LOG_FILE"
+echo "[$SVC] changed_files=$CHANGED in content_paths" >> "$LOG_FILE"
 
 # Auto-commit (daily mode only, if enabled, if there's drift).
 # Pathspec-scoped commit: only paths inside content_paths land in the
@@ -185,7 +199,7 @@ if [ "$MODE" = "daily" ] && [ "$AUTO_COMMIT" = "true" ] && [ "$CHANGED" -gt 0 ];
   # commit while the runner returns ok.
   if git commit -m "$COMMIT_PREFIX ($CHANGED file(s))
 
-Co-Authored-By: $PROJECT_NAME-scribe <noreply@anthropic.com>" -- "${PATHSPECS[@]}" >> "$LOG_FILE" 2>&1; then
+Co-Authored-By: $SVC <noreply@anthropic.com>" -- "${PATHSPECS[@]}" >> "$LOG_FILE" 2>&1; then
     COMMIT_OUTCOME="ok"
     if [ "$AUTO_PUSH" = "true" ]; then
       if git push origin "$(git rev-parse --abbrev-ref HEAD)" >> "$LOG_FILE" 2>&1; then
@@ -202,7 +216,7 @@ fi
 
 # Notify only on failure — successful nightly refreshes are noise.
 if [ "$JOB_STATUS" = "fail" ] && true; then
-  quartet_notify "$PROJECT_NAME-scribe FAILED ($MODE)" \
+  quartet_notify "$SVC FAILED ($MODE)" \
     "exit=$EXIT changed=$CHANGED — see $LOG_FILE" || true
 fi
 
@@ -212,10 +226,10 @@ JOB_DUR=$(( $(date +%s) - JOB_START ))
 # aren't medic territory.
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/post-run.sh"
-agent_finish "$PROJECT_NAME-scribe" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
+agent_finish "$SVC" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
   --no-escalate \
   mode="$MODE" exit_code="$EXIT" changed="$CHANGED" \
   commit_outcome="$COMMIT_OUTCOME" >> "$LOG_FILE" 2>&1
 
-echo "[$PROJECT_NAME-scribe] done status=$JOB_STATUS changed=$CHANGED commit=$COMMIT_OUTCOME" >> "$LOG_FILE"
+echo "[$SVC] done status=$JOB_STATUS changed=$CHANGED commit=$COMMIT_OUTCOME" >> "$LOG_FILE"
 exit 0

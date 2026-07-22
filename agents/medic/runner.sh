@@ -151,6 +151,19 @@ CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
 
 # Cherry-pick fields we need into shell vars (jq -r is fine here).
 PROJECT_NAME="$(echo "$CFG_JSON" | jq -r '.project_name // ""')"
+
+# Canonical role identity + resolved display names. Legacy configs (no
+# [names] block) resolve medic→"medic", build→"augur", release→"guardian",
+# so svc strings, sibling unit names, and the result file medic reads all
+# stay exactly as they are today.
+ROLE="medic"
+export QUARTET_ROLE="$ROLE"
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/naming.sh"
+DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
+BUILD_DISPLAY="$(role_display build "$CFG_JSON")"
+SVC="$PROJECT_NAME-$DISPLAY"
+
 # Trunk branch — config wins, else origin/HEAD; unresolvable fails loudly.
 TRUNK_BRANCH="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")" || exit 2
 DEV_PORT="$(echo "$CFG_JSON" | jq -r '.dev_port // empty')"
@@ -162,8 +175,8 @@ RESTART_SYSTEMD="$(echo "$CFG_JSON" | jq -r '.medic.restart_systemd // true')"
 # have no local user-unit to bounce (e.g. an HTTP probe outage on a service
 # managed outside `systemctl --user`). Unset = current behavior (no-op).
 RESTART_CMD="$(echo "$CFG_JSON" | jq -r '.medic.restart_cmd // empty')"
-AUGUR_CAN_MERGE="$(echo "$CFG_JSON" | jq -r '.medic.augur_can_merge // false')"
-AUGUR_WALL_CLOCK="$(echo "$CFG_JSON" | jq -r '.augur.wall_clock_sec // 3600')"
+AUGUR_CAN_MERGE="$(echo "$CFG_JSON" | jq -r '.medic.can_merge // false')"
+AUGUR_WALL_CLOCK="$(echo "$CFG_JSON" | jq -r '.build.wall_clock_sec // 3600')"
 RESULT_DIR_REL="$(echo "$CFG_JSON" | jq -r '.paths.result_dir // "tmp"')"
 
 [ -z "$PROJECT_NAME" ] && { echo "config missing project_name" >&2; exit 2; }
@@ -172,18 +185,21 @@ RESULT_DIR_REL="$(echo "$CFG_JSON" | jq -r '.paths.result_dir // "tmp"')"
 # STRICTLY read-only: no result files, no events, no claude, no network.
 if [ "$CHECK_CONFIG" -eq 1 ]; then
   jq -n \
-    --arg agent "medic" \
+    --arg agent "$ROLE" \
+    --arg role "$ROLE" \
+    --arg display "$DISPLAY" \
     --arg dir "$PROJECT_DIR" \
     --arg trunk "$TRUNK_BRANCH" \
     --argjson cfg "$CFG_JSON" \
-    '{agent:$agent, project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
-      can_merge:($cfg.medic.augur_can_merge // false),
-      allow_no_ci:($cfg.augur.allow_no_ci // false),
+    '{agent:$agent, role:$role, display:$display,
+      project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
+      can_merge:($cfg.medic.can_merge // false),
+      allow_no_ci:($cfg.build.allow_no_ci // false),
       restart_systemd:($cfg.medic.restart_systemd // true),
       sync_to_augur:($cfg.medic.sync_to_augur // true),
       budgets:{claude_usd:0.50,
                daily_escalation_cap:($cfg.medic.daily_escalation_cap // 5),
-               augur_wall_clock_sec:($cfg.augur.wall_clock_sec // 3600)}}'
+               augur_wall_clock_sec:($cfg.build.wall_clock_sec // 3600)}}'
   exit 0
 fi
 
@@ -230,7 +246,7 @@ DAILY_USED="$(state_get ".daily_escalations[\"$DAY\"] // 0")"
 # ---------- bookkeeping for the run -----------------------------------------
 JOB_START="$(date +%s)"
 echo "[medic] $(now_iso) starting mode=$MODE project=$PROJECT_NAME dry_run=$DRY_RUN" > "$LOG_FILE"
-[ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-medic" job.start \
+[ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.start \
   mode="$MODE" project="$PROJECT_NAME" || true
 
 # ---------- detect: build candidate incidents -------------------------------
@@ -346,12 +362,12 @@ detect_scan_runners() {
     # incident was classified `regression` on tick N (escalating to
     # augur, which aborted dirty-trunk) and `forbidden` on tick N+1.
     # We bake in the right answer.
-    if [ "$name" = "$PROJECT_NAME-augur" ] || [ "$name" = "$PROJECT_NAME-medic" ]; then
+    if [ "$name" = "$PROJECT_NAME-$BUILD_DISPLAY" ] || [ "$name" = "$SVC" ]; then
       echo "[medic] self-failure $name → auto-classify forbidden, skip Claude" >> "$LOG_FILE"
       local until_ts
       until_ts="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
       state_set ".cooldowns[\"$id\"] = {\"frozen_until\":\"$until_ts\",\"reason\":\"self_failure\"}"
-      [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-medic" medic.incident.frozen \
+      [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" medic.incident.frozen \
         incident_id="$id" project="$PROJECT_NAME" frozen_until="$until_ts" \
         reason="self_failure" unit="$name" || true
       quartet_notify "Medic $PROJECT_NAME (self_failure)" \
@@ -772,7 +788,7 @@ if [ "$INCIDENTS_DETECTED" -eq 0 ]; then
     augur_lock_contention: 0, daily_cap_hit: false, errors: []
   }' > "$RESULT_FILE"
   JOB_DUR=$(( $(date +%s) - JOB_START ))
-  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-medic" job.end \
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
     mode="$MODE" status="ok" duration_s="$JOB_DUR" \
     incidents=0 || true
   echo "[medic] no incidents; exiting clean" >> "$LOG_FILE"
@@ -833,7 +849,7 @@ if [ ! -s "$RESULT_FILE" ]; then
   }' > "$RESULT_FILE"
   quartet_notify "Medic ($PROJECT_NAME) FAILED" \
     "Medic detected $INCIDENTS_DETECTED incident(s) but claude did not classify. See $LOG_FILE."
-  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-medic" job.end \
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
     mode="$MODE" status="fail" exit_code="$CLAUDE_EXIT" || true
   exit 1
 fi
@@ -857,7 +873,7 @@ emit() {
   # emit <event> <incident_id> [extra_kv...]
   local ev="$1"; shift
   local iid="$1"; shift
-  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-medic" "$ev" \
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" "$ev" \
     incident_id="$iid" project="$PROJECT_NAME" "$@" || true
 }
 
@@ -990,7 +1006,7 @@ while [ "$i" -lt "$N_CLASS" ]; do
           }' <<< "[$CFG_JSON]" > "$INC_FILE"
 
       # Acquire augur.lock with non-blocking flock; on contention, notify.
-      AUGUR_RUNNER="$QUARTET_DIR/agents/augur/runner.sh"
+      AUGUR_RUNNER="$QUARTET_DIR/agents/build/runner.sh"
       if [ ! -x "$AUGUR_RUNNER" ]; then
         echo "[medic] augur runner not present yet at $AUGUR_RUNNER" >> "$LOG_FILE"
         quartet_notify "Medic $PROJECT_NAME (regression)" \
@@ -1005,7 +1021,7 @@ while [ "$i" -lt "$N_CLASS" ]; do
       exec 9>"$AUGUR_LOCK"
       if flock -n 9; then
         AUGUR_INVOCATIONS=$((AUGUR_INVOCATIONS + 1))
-        emit augur.incident.attempted "$iid" mode="incident"
+        emit build.incident.attempted "$iid" mode="incident"
         timeout "$AUGUR_WALL_CLOCK" "$AUGUR_RUNNER" \
           --project "$PROJECT_DIR" \
           --mode incident \
@@ -1027,7 +1043,7 @@ while [ "$i" -lt "$N_CLASS" ]; do
       fi
 
       # Parse augur result + run retrigger phase.
-      AUGUR_RESULT="$RESULT_DIR/$PROJECT_NAME-augur-result.json"
+      AUGUR_RESULT="$RESULT_DIR/$PROJECT_NAME-$BUILD_DISPLAY-result.json"
       [ ! -f "$AUGUR_RESULT" ] && AUGUR_RESULT="$RESULT_DIR/augur-result.json"
       if [ -f "$AUGUR_RESULT" ]; then
         AUGUR_PASS="$(jq -r '.pass // false' "$AUGUR_RESULT")"
@@ -1042,19 +1058,19 @@ while [ "$i" -lt "$N_CLASS" ]; do
       state_set ".daily_escalations[\"$DAY\"] = $DAILY_USED"
 
       if [ "$AUGUR_PASS" = "true" ] && [ -n "$MERGE_SHA" ]; then
-        emit augur.incident.merged "$iid" pr_url="$PR_URL" merge_sha="$MERGE_SHA"
+        emit build.incident.merged "$iid" pr_url="$PR_URL" merge_sha="$MERGE_SHA"
 
         # Run guardian post-merge against the merge sha. `|| GRC=$?` keeps
         # a failing child from killing us — set -e is active here, and a
         # bare `GRC=$?` after a failing command never executes.
-        GUARDIAN_RUNNER="$QUARTET_DIR/agents/guardian/runner.sh"
+        GUARDIAN_RUNNER="$QUARTET_DIR/agents/release/runner.sh"
         GUARDIAN_OUTCOME="skipped"
         if [ -x "$GUARDIAN_RUNNER" ]; then
           GRC=0
           "$GUARDIAN_RUNNER" --project "$PROJECT_DIR" --mode post-merge \
             --merge-sha "$MERGE_SHA" >> "$LOG_FILE" 2>&1 || GRC=$?
           GUARDIAN_OUTCOME=$([ "$GRC" = "0" ] && echo "ok" || echo "fail")
-          emit guardian.post_merge.run "$iid" merge_sha="$MERGE_SHA" outcome="$GUARDIAN_OUTCOME"
+          emit release.post_merge.run "$iid" merge_sha="$MERGE_SHA" outcome="$GUARDIAN_OUTCOME"
         fi
 
         if [ "$GUARDIAN_OUTCOME" = "fail" ]; then
@@ -1155,7 +1171,7 @@ FINAL="$(jq -n \
 echo "$FINAL" > "$RESULT_FILE"
 
 JOB_DUR=$(( $(date +%s) - JOB_START ))
-[ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-medic" job.end \
+[ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
   mode="$MODE" status="ok" duration_s="$JOB_DUR" \
   incidents="$INCIDENTS_DETECTED" \
   augur_invocations="$AUGUR_INVOCATIONS" \

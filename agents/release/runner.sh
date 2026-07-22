@@ -1,12 +1,12 @@
 #!/bin/bash
-# agents/guardian/runner.sh — generic guardian wrapper.
+# agents/release/runner.sh — generic release (guardian) wrapper.
 #
 # Usage:
 #   runner.sh --project DIR --mode {hook|daily}
 #   runner.sh --project DIR --mode post-merge --merge-sha SHA
 #   runner.sh --project DIR --check-config   # print effective gates, read-only
 #
-# Reads <project>/.agents/config.toml. Prompt = agents/guardian/role.md
+# Reads <project>/.agents/config.toml. Prompt = agents/release/role.md
 # + <project>/.agents/guardian.md + RUN CONTEXT block. Writes result to
 # <project>/tmp/<project>-guardian-result.json. Trailer via
 # agents/lib/post-run.sh emits job.end and (on fail) escalates to medic.
@@ -60,11 +60,22 @@ CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
 
 PROJECT_NAME="$(jq -r '.project_name' <<<"$CFG_JSON")"
+
+# Canonical role identity + resolved display name (svc string). Legacy
+# configs (no [names] block) resolve release→"guardian", so the svc/units
+# stay exactly as they are today.
+ROLE="release"
+export QUARTET_ROLE="$ROLE"
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/naming.sh"
+DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
+SVC="$PROJECT_NAME-$DISPLAY"
+
 RESULT_DIR_REL="$(jq -r '.paths.result_dir // "tmp"' <<<"$CFG_JSON")"
-TEST_CMD="$(jq -r '.guardian.test_cmd // "npx vitest run"' <<<"$CFG_JSON")"
-TYPECHECK_CMD="$(jq -r '.guardian.typecheck // "npx tsc --noEmit"' <<<"$CFG_JSON")"
-BUDGET_HOOK="$(jq -r '.guardian.budget_hook // 0.50' <<<"$CFG_JSON")"
-BUDGET_DAILY="$(jq -r '.guardian.budget_daily // 2.00' <<<"$CFG_JSON")"
+TEST_CMD="$(jq -r '.release.test_cmd // "npx vitest run"' <<<"$CFG_JSON")"
+TYPECHECK_CMD="$(jq -r '.release.typecheck // "npx tsc --noEmit"' <<<"$CFG_JSON")"
+BUDGET_HOOK="$(jq -r '.release.budget_hook // 0.50' <<<"$CFG_JSON")"
+BUDGET_DAILY="$(jq -r '.release.budget_daily // 2.00' <<<"$CFG_JSON")"
 
 # ---------- --check-config: print effective gates, then stop ----------------
 # STRICTLY read-only: no result files, no events, no claude, no network.
@@ -73,49 +84,52 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
   source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
   TRUNK_BRANCH="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")" || exit 2
   jq -n \
-    --arg agent "guardian" \
+    --arg agent "$ROLE" \
+    --arg role "$ROLE" \
+    --arg display "$DISPLAY" \
     --arg dir "$PROJECT_DIR" \
     --arg trunk "$TRUNK_BRANCH" \
     --arg test_cmd "$TEST_CMD" \
     --arg typecheck "$TYPECHECK_CMD" \
     --argjson cfg "$CFG_JSON" \
-    '{agent:$agent, project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
-      can_merge:($cfg.medic.augur_can_merge // false),
-      allow_no_ci:($cfg.augur.allow_no_ci // false),
+    '{agent:$agent, role:$role, display:$display,
+      project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
+      can_merge:($cfg.medic.can_merge // false),
+      allow_no_ci:($cfg.build.allow_no_ci // false),
       test_cmd:$test_cmd, typecheck:$typecheck,
-      budgets:{hook_usd:($cfg.guardian.budget_hook // 0.50),
-               daily_usd:($cfg.guardian.budget_daily // 2.00)}}'
+      budgets:{hook_usd:($cfg.release.budget_hook // 0.50),
+               daily_usd:($cfg.release.budget_daily // 2.00)}}'
   exit 0
 fi
 
 RESULT_DIR="$PROJECT_DIR/$RESULT_DIR_REL"
 mkdir -p "$RESULT_DIR"
-RESULT_FILE="$RESULT_DIR/$PROJECT_NAME-guardian-result.json"
-LOG_FILE="$RESULT_DIR/$PROJECT_NAME-guardian-last-run.log"
+RESULT_FILE="$RESULT_DIR/$SVC-result.json"
+LOG_FILE="$RESULT_DIR/$SVC-last-run.log"
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 JOB_START="$(date +%s)"
 cd "$PROJECT_DIR"
 
-[ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-guardian" job.start \
+[ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.start \
   mode="$MODE" project="$PROJECT_NAME" || true
 
 # ---------- post-merge: deterministic, no Claude ----------------------------
 if [ "$MODE" = "post-merge" ]; then
-  PM_LOG="$RESULT_DIR/$PROJECT_NAME-guardian-post-merge.log"
-  echo "[$PROJECT_NAME-guardian] post-merge $(now_iso) merge_sha=$MERGE_SHA" > "$PM_LOG"
+  PM_LOG="$RESULT_DIR/$SVC-post-merge.log"
+  echo "[$SVC] post-merge $(now_iso) merge_sha=$MERGE_SHA" > "$PM_LOG"
   HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
   if [ -n "$MERGE_SHA" ] && [ "$HEAD_SHA" != "$MERGE_SHA" ] \
      && [ "${HEAD_SHA:0:${#MERGE_SHA}}" != "$MERGE_SHA" ]; then
-    echo "[$PROJECT_NAME-guardian] WARN: HEAD ($HEAD_SHA) != merge_sha ($MERGE_SHA)" >> "$PM_LOG"
+    echo "[$SVC] WARN: HEAD ($HEAD_SHA) != merge_sha ($MERGE_SHA)" >> "$PM_LOG"
   fi
 
   PM_STATUS="ok"; PM_REASON=""
   set +e
-  echo "[$PROJECT_NAME-guardian] $TYPECHECK_CMD" >> "$PM_LOG"
+  echo "[$SVC] $TYPECHECK_CMD" >> "$PM_LOG"
   eval "$TYPECHECK_CMD" >> "$PM_LOG" 2>&1
   TC_RC=$?
-  echo "[$PROJECT_NAME-guardian] $TEST_CMD" >> "$PM_LOG"
+  echo "[$SVC] $TEST_CMD" >> "$PM_LOG"
   eval "$TEST_CMD" >> "$PM_LOG" 2>&1
   TS_RC=$?
   set -e
@@ -125,7 +139,7 @@ if [ "$MODE" = "post-merge" ]; then
   PM_DUR=$(( $(date +%s) - JOB_START ))
   # Direct log_event — do NOT use agent_finish here (medic invoked us;
   # escalating back to medic would loop on a different surface).
-  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$PROJECT_NAME-guardian" job.end \
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
     mode="post-merge" status="$PM_STATUS" duration_s="$PM_DUR" \
     merge_sha="$MERGE_SHA" reason="${PM_REASON:-none}" || true
 
@@ -133,7 +147,7 @@ if [ "$MODE" = "post-merge" ]; then
 fi
 
 # ---------- hook | daily: invoke Claude -------------------------------------
-echo "[$PROJECT_NAME-guardian] $(now_iso) start mode=$MODE" > "$LOG_FILE"
+echo "[$SVC] $(now_iso) start mode=$MODE" > "$LOG_FILE"
 
 # Pick budget by mode.
 if [ "$MODE" = "daily" ]; then
@@ -188,7 +202,7 @@ if [ ! -s "$RESULT_FILE" ]; then
     pass: false, mode: $mode, timestamp: $ts,
     errors: ["guardian claude run exited (\($exit)) without writing result.json"]
   }' > "$RESULT_FILE"
-  echo "[$PROJECT_NAME-guardian] claude run wrote no result.json; synthesized failure result" >> "$LOG_FILE"
+  echo "[$SVC] claude run wrote no result.json; synthesized failure result" >> "$LOG_FILE"
 fi
 
 # Determine pass/fail from result.json (caller-written).
@@ -223,7 +237,7 @@ PY
 # Notify the human (Signal) — kept human-readable; the dashboard reads
 # from the events stream, not from the notification body.
 SUMMARY="$(tail -30 "$LOG_FILE" | grep -A20 -i "GUARDIAN RESULT" | head -10 || true)"
-[ -z "$SUMMARY" ] && SUMMARY="$PROJECT_NAME-guardian completed (mode=$MODE, exit=$EXIT). See $LOG_FILE."
+[ -z "$SUMMARY" ] && SUMMARY="$SVC completed (mode=$MODE, exit=$EXIT). See $LOG_FILE."
 if [ "$PASS" = "true" ]; then
   quartet_notify "$PROJECT_NAME Guardian ($MODE)" "$SUMMARY" || true
 else
@@ -235,8 +249,8 @@ JOB_DUR=$(( $(date +%s) - JOB_START ))
 # Emit job.end + (on fail) escalate to medic, via shared trailer.
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/post-run.sh"
-agent_finish "$PROJECT_NAME-guardian" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
+agent_finish "$SVC" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
   mode="$MODE" exit_code="$EXIT" category="$CATEGORY" >> "$LOG_FILE" 2>&1
 
-echo "[$PROJECT_NAME-guardian] done pass=$PASS exit=$EXIT" >> "$LOG_FILE"
+echo "[$SVC] done pass=$PASS exit=$EXIT" >> "$LOG_FILE"
 exit "$EXIT"

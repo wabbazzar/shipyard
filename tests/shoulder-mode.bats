@@ -11,9 +11,9 @@ setup() {
   quartet_setup
 }
 
-QUEUE_HOOK="agents/guardian/critic-queue.sh"
-WATCH="agents/guardian/critic-watch.sh"
-STOP_GATE="agents/guardian/critic-stop-gate.sh"
+QUEUE_HOOK="agents/release/critic-queue.sh"
+WATCH="agents/release/critic-watch.sh"
+STOP_GATE="agents/release/critic-stop-gate.sh"
 
 # Canned critic reply: 1 block, 2 warn, 1 note. 1200+345 = 1545 tokens.
 CANNED_CLAUDE_JSON='{"type":"result","result":"block|src/auth.ts|removes session check on /admin\nwarn|src/api.ts|changed behavior without a test\nwarn|package.json|new dependency leftpad\nnote|README.md|doc gap\nTOKENS_HINT|<none>","usage":{"input_tokens":1200,"output_tokens":345}}'
@@ -37,7 +37,7 @@ queue_files() {
 }
 
 critique_events() {
-  events_json | jq -c 'select(.event=="guardian.critique")'
+  events_json | jq -c 'select(.event=="release.critique")'
 }
 
 # ---------------------------------------------------------------------------
@@ -169,7 +169,7 @@ critique_events() {
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
   # Pre-seed today's stream with a critique that already blew the budget.
   printf '%s\n' \
-    '{"ts":"2026-01-01T00:00:00Z","svc":"crite-guardian","event":"guardian.critique","tokens":999999999}' \
+    '{"ts":"2026-01-01T00:00:00Z","svc":"crite-guardian","event":"release.critique","tokens":999999999}' \
     >> "$(events_file)"
   queue_files "$P" s1 2
   touch -d "2 minutes ago" "$P/tmp/guardian-critic-queue-s1"
@@ -178,7 +178,7 @@ critique_events() {
   run run_watch "$P" --session s1 --once
   [ "$status" -eq 0 ]
 
-  SKIP="$(events_json | jq -c 'select(.event=="guardian.critique.skipped")')"
+  SKIP="$(events_json | jq -c 'select(.event=="release.critique.skipped")')"
   [ -n "$SKIP" ]
   [ "$(jq -r '.reason' <<<"$SKIP")" = "budget" ]
   # only the pre-seeded critique event exists — no new one

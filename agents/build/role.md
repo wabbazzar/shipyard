@@ -27,7 +27,7 @@ result-JSON schema).
 
 - **live** — full triage + chat review + autonomous fix attempts.
   Worktree create, npm test, git push, gh pr create, all of it.
-  Wall-clock budget from `config.augur.wall_clock_sec` (default 1h).
+  Wall-clock budget from `config.build.wall_clock_sec` (default 1h).
 - **dry-run** — triage + chat review + write result JSON only. NO
   `git worktree add`, NO `npm test`, NO push, NO PR. Just classify
   and report. Used for nightly previews and for testing the runner
@@ -62,10 +62,10 @@ block has the full criteria; the generic gates everyone honors are:
 
 - **Diff size cap**: ≤ 8 source files AND ≤ 400 LOC added+modified.
   (Generated files don't count — the project block lists them.)
-- **Forbidden paths** from `config.augur.forbidden_paths`. ANY edit
+- **Forbidden paths** from `config.build.forbidden_paths`. ANY edit
   inside one of these → SKIP with reason `forbidden_path:<path>`,
   always.
-- **In-scope paths** from `config.augur.in_scope_paths`. The diff
+- **In-scope paths** from `config.build.in_scope_paths`. The diff
   must be entirely inside this set, otherwise SKIP with reason
   `out_of_scope:<path>`.
 - **Unambiguous expected behavior**. If the fix requires a product

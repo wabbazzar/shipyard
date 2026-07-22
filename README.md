@@ -3,12 +3,20 @@
 **Four autonomous agents that keep a repo healthy while you sleep**, each a
 [Claude Code](https://claude.com/claude-code) instance on a systemd timer:
 
-| agent | cadence (default) | job |
-|---|---|---|
-| **guardian** | daily | run the test/audit battery, fix what it safely can, report |
-| **augur** | nightly | triage user feedback (`data/fyi-requests.jsonl`) → autonomous PRs |
-| **medic** | every 10 min | failure-triggered triage: classify incidents, drive augur, merge, re-trigger |
-| **scribe** | daily | keep docs/content in sync with the code |
+| role id | display (default) | cadence | job |
+|---|---|---|---|
+| **release** | guardian | daily | run the test/audit battery, fix what it safely can, report |
+| **build** | augur | nightly | triage user feedback (`data/fyi-requests.jsonl`) → autonomous PRs |
+| **medic** | medic | every 10 min | failure-triggered triage: classify incidents, drive build, merge, re-trigger |
+| **scribe** | scribe | daily | keep docs/content in sync with the code |
+
+The **role id** is the stable identity (agent dir, `[<role>]` config section,
+the event `role:` field, event-name prefix). The **display name** is what the
+systemd unit / notification voice is called; it's chosen at install time by a
+`--theme` (default `plain` = the role ids verbatim). The `guardian`/`augur`
+column above is the *legacy* display, still the default for any project
+installed before the rename (a config with no `[names]` block). See
+[Display themes](#display-themes).
 
 They cooperate: a failed guardian run escalates to medic; medic classifies
 the incident and can task augur with a fix; augur opens a PR with the
@@ -50,28 +58,64 @@ project_dir   = "/home/user/code/myproject"   # informational only — runners t
 project_owner = "your-github-user"            # PR reviewer — required
 branch        = "main"   # optional — omitted: detected from origin/HEAD; runners FAIL (exit 2) if neither resolves, never assume a default
 
-[install.timers]   # optional — override the default schedules
-guardian = "*-*-* 04:30:00"
-augur    = "*-*-* 03:30:00"
-medic    = "*-*-* 00,05..23:00/10:00"
-scribe   = "*-*-* 01:00:00"
+[install.timers]   # optional — override the default schedules (role ids;
+release = "*-*-* 04:30:00"   # legacy keys guardian/augur are still accepted)
+build   = "*-*-* 03:30:00"
+medic   = "*-*-* 00,05..23:00/10:00"
+scribe  = "*-*-* 01:00:00"
+
+[release]           # test/audit gate config (legacy section name: [guardian])
+test_cmd  = "npx vitest run"
+typecheck = "npx tsc --noEmit"
+
+[build]             # feedback/fix agent config (legacy section name: [augur])
+allow_no_ci = false
+
+[medic]
+can_merge = false   # kill switch for build self-merge (legacy: augur_can_merge)
 ```
 
    plus per-agent prompt blocks: `guardian.md`, `augur.md`, `medic.md`,
-   `scribe.md` (project-specific instructions appended to each agent's
-   generic role).
+   `scribe.md` (project-specific instructions appended to each role's generic
+   role.md — these keep the legacy filenames for install compatibility).
+
+   Legacy configs using `[guardian]`/`[augur]` sections and
+   `medic.augur_can_merge` still work: the loader normalizes them to
+   `[release]`/`[build]`/`medic.can_merge` and prints a one-time deprecation
+   warning to stderr.
 
 2. Run the installer:
 
 ```bash
 ./install.sh --project /path/to/myproject --dry-run   # inspect first
 ./install.sh --project /path/to/myproject             # then for real
-./install.sh --project /path/to/myproject --agents guardian,medic  # subset
+./install.sh --project /path/to/myproject --agents build,medic  # subset
+./install.sh --project /path/to/myproject --theme spacetime  # themed names
 ```
 
-It writes `~/.config/systemd/user/<project>-<agent>.{service,timer}`,
-enables the timers, removes legacy cron entries that would race them
-(crontab is backed up first), and prints next-fire times.
+It bakes a `[names]` block into the config (see [Display themes](#display-themes)),
+writes `~/.config/systemd/user/<project>-<display>.{service,timer}`, enables the
+timers, removes legacy cron entries that would race them (crontab is backed up
+first), and prints next-fire times. Default `--agents` is
+`build,release,medic,scribe`; legacy names (`guardian`→release, `augur`→build)
+are accepted.
+
+## Display themes
+
+The canonical role ids (`build`/`release`/`medic`/`scribe`) never change, but
+the unit and notification display names are chosen at install time with
+`--theme` and stored in a `[names]` block in the project's config:
+
+| `--theme` | build | release | medic | scribe |
+|---|---|---|---|---|
+| `plain` (default) | build | release | medic | scribe |
+| `spacetime` | helldiver | proctor | suk | chronicler |
+| `custom:d,b,r,m,s` | your five names in role order `design,build,release,medic,scribe` |
+
+A config with **no `[names]` block** resolves to the legacy display map
+(build→`augur`, release→`guardian`) — so an install that predates this rename
+keeps its exact unit names until it's re-baked with a `--theme`. This is the
+safety property: merging the rename is a no-op for the running fleet.
 
 ## Liveness probes & drift checks (medic)
 
@@ -123,13 +167,13 @@ CORS wildcard), and a secrets-in-commits grep over the last 24h
 Enable by adding the block to `.agents/config.toml`:
 
 ```toml
-[guardian.security]
+[release.security]   # legacy section name: [guardian.security]
 audit_dirs       = [".", "subpackage"]   # package dirs to dependency-audit
 header_probe_url = "https://api.example.com/api/auth/me"  # optional
 ```
 
-Omit the block and guardian skips the sweep entirely. Details in
-`agents/guardian/role.md`.
+Omit the block and the release (guardian) run skips the sweep entirely.
+Details in `agents/release/role.md`.
 
 ## Notifications
 
@@ -157,8 +201,10 @@ systemd units (user services don't inherit your shell env).
 
 Every run appends JSONL to `data/events/YYYY-MM-DD.jsonl` (override with
 `QUARTET_EVENTS_DIR`): `job.start` / `job.end` with status + duration,
-`medic.*` incident lifecycle, `augur.*` PR lifecycle. Build dashboards on
-it, or just `jq` it.
+`medic.*` incident lifecycle, `build.*` PR lifecycle, `release.post_merge.*`
++ `release.critique.*`. Every event also carries a canonical `role:` field
+(`build`/`release`/`medic`/`scribe`) alongside the display-named `svc`. Build
+dashboards on it, or just `jq` it.
 
 ## Using as a BopBop pack
 
@@ -177,12 +223,13 @@ commands; per-project installs remain explicit (`install.sh --project …`).
 
 ```
 agents/
-├── guardian/   role.md + runner.sh
-├── augur/      role.md + incident-role.md + runner.sh
+├── release/    role.md + runner.sh + critic-* (shoulder mode)   [display: guardian]
+├── build/      role.md + incident-role.md + runner.sh           [display: augur]
 ├── medic/      role.md + runner.sh + check-examples/
 ├── scribe/     role.md + runner.sh
-└── lib/        load-config.sh, post-run.sh, log_event.sh
-install.sh      per-project installer (idempotent)
+├── guardian → release, augur → build   (back-compat symlinks for pre-rebake units)
+└── lib/        load-config.sh, naming.sh, post-run.sh, log_event.sh
+install.sh      per-project installer (idempotent; --theme names)
 pack.toml       BopBop pack manifest
 ```
 

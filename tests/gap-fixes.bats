@@ -11,6 +11,8 @@
 #   1f  --check-config on all four runners (read-only effective-gates JSON)
 #   1g  medic --self-test (both commit shapes, honest failure)
 
+bats_require_minimum_version 1.5.0   # `run --separate-stderr` (Phase 9 tests)
+
 setup() {
   load helpers
   quartet_setup
@@ -52,31 +54,31 @@ topo_commit_all() {
 # (they're called by absolute path, so PATH shims can't catch them).
 make_fake_quartet() {
   FAKE_QD="$BATS_TEST_TMPDIR/fake-quartet"
-  mkdir -p "$FAKE_QD/agents/augur" "$FAKE_QD/agents/guardian"
+  mkdir -p "$FAKE_QD/agents/build" "$FAKE_QD/agents/release"
   ln -s "$QUARTET_ROOT/agents/lib" "$FAKE_QD/agents/lib"
   export FAKE_QD
 }
 
 # write_guardian_stub <exit-code> — recording guardian runner in FAKE_QD.
 write_guardian_stub() {
-  cat >"$FAKE_QD/agents/guardian/runner.sh" <<STUB
+  cat >"$FAKE_QD/agents/release/runner.sh" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$SHIM_LOG/guardian-runner.argv"
 exit $1
 STUB
-  chmod +x "$FAKE_QD/agents/guardian/runner.sh"
+  chmod +x "$FAKE_QD/agents/release/runner.sh"
 }
 
 # write_augur_stub <result-dest> <result-src> — recording augur runner in
 # FAKE_QD that "succeeds" by copying a prepared result file into place.
 write_augur_stub() {
-  cat >"$FAKE_QD/agents/augur/runner.sh" <<STUB
+  cat >"$FAKE_QD/agents/build/runner.sh" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$SHIM_LOG/augur-runner.argv"
 cp "$2" "$1"
 exit 0
 STUB
-  chmod +x "$FAKE_QD/agents/augur/runner.sh"
+  chmod +x "$FAKE_QD/agents/build/runner.sh"
 }
 
 # medic_incident_iid <unit-name> — the incident_id medic's detect_scan_runners
@@ -252,14 +254,14 @@ run_medic_scan() {
   # absent-keys has no branch either — give the repo a resolvable origin/HEAD.
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" absent-keys.toml c1c
-  run run_runner augur "$p" --check-config
+  run run_runner build "$p" --check-config
   [ "$status" -eq 0 ]
   jq -e . <<<"$output" >/dev/null
   [ "$(jq -r '.can_merge' <<<"$output")" = "false" ]
 }
 
 @test "1c: check-config reports can_merge=true when configured true" {
-  proj="$(make_fixture_project c1ct augur-can-merge-true.toml)"
+  proj="$(make_fixture_project c1ct can-merge-true.toml)"
   run run_runner medic "$proj" --check-config
   [ "$status" -eq 0 ]
   jq -e . <<<"$output" >/dev/null
@@ -310,16 +312,16 @@ esac'
 @test "1d: no CI checks + allow_no_ci absent -> gate_fail ci_no_checks, no merge" {
   # can_merge=true so the run reaches the CI gate; allow_no_ci absent.
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
-  install_agents "$p" augur-can-merge-true.toml a1d
+  install_agents "$p" can-merge-true.toml a1d
   sed -i '/^wall_clock_sec/a in_scope_paths = ["*"]' "$p/.agents/config.toml"
   topo_commit_all "$p"
   prep_augur_incident "$p" a1d
 
-  run run_runner augur "$p" --mode incident --incident-file "$INC_FILE"
+  run run_runner build "$p" --mode incident --incident-file "$INC_FILE"
   [ "$status" -eq 0 ]   # gate_fail exits 0 — PR stays open for review
 
   # The gate refused: merge_blocked event with reason ci_no_checks...
-  ev="$(events_json | jq -c 'select(.event=="augur.incident.merge_blocked")')"
+  ev="$(events_json | jq -c 'select(.event=="build.incident.merge_blocked")')"
   [ -n "$ev" ]
   [ "$(jq -r '.reason' <<<"$ev")" = "ci_no_checks" ]
   # ...result records the refusal...
@@ -337,11 +339,11 @@ esac'
   topo_commit_all "$p"
   prep_augur_incident "$p" a1dw
 
-  run run_runner augur "$p" --mode incident --incident-file "$INC_FILE"
+  run run_runner build "$p" --mode incident --incident-file "$INC_FILE"
   [ "$status" -eq 0 ]
 
   # The waiver is loud:
-  ev="$(events_json | jq -c 'select(.event=="augur.incident.ci_waived")')"
+  ev="$(events_json | jq -c 'select(.event=="build.incident.ci_waived")')"
   [ -n "$ev" ]
   [ "$(jq -r '.project' <<<"$ev")" = "a1dw" ]
   # And the merge went ahead (gh pr merge invoked, job ended ok).
@@ -390,7 +392,7 @@ esac'
 
 @test "1e: runner on a trunk-less project exits 2 mentioning trunk" {
   proj="$(make_fixture_project dt4 absent-keys.toml)"
-  run run_runner augur "$proj" --check-config
+  run run_runner build "$proj" --check-config
   [ "$status" -eq 2 ]
   [[ "$output" == *trunk* ]]
   [[ "$output" != *"master"* ]]
@@ -406,11 +408,12 @@ esac'
   make_stub claude 97
   make_stub gh 97
 
-  for agent in guardian augur medic scribe; do
+  for agent in build release medic scribe; do
     run run_runner "$agent" "$proj" --check-config
     [ "$status" -eq 0 ]
     jq -e . <<<"$output" >/dev/null
     [ "$(jq -r '.agent' <<<"$output")" = "$agent" ]
+    [ "$(jq -r '.role' <<<"$output")" = "$agent" ]
     [ "$(jq -r '.project' <<<"$output")" = "cc1" ]
     [ "$(jq -r '.trunk' <<<"$output")" = "main" ]
     [ "$(jq -r '.can_merge' <<<"$output")" = "true" ]
@@ -428,7 +431,7 @@ esac'
 @test "1f: check-config defaults — absent keys report false gates" {
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" absent-keys.toml cc2
-  run run_runner guardian "$p" --check-config
+  run run_runner release "$p" --check-config
   [ "$status" -eq 0 ]
   [ "$(jq -r '.can_merge' <<<"$output")" = "false" ]
   [ "$(jq -r '.allow_no_ci' <<<"$output")" = "false" ]
@@ -438,7 +441,7 @@ esac'
 
 @test "1f: augur and scribe check-config include their scope globs" {
   proj="$(make_fixture_project cc3 allow-no-ci-true.toml)"
-  run run_runner augur "$proj" --check-config
+  run run_runner build "$proj" --check-config
   [ "$status" -eq 0 ]
   [ "$(jq -r '.in_scope_paths | type' <<<"$output")" = "array" ]
   [ "$(jq -r '.forbidden_paths | type' <<<"$output")" = "array" ]
@@ -501,18 +504,119 @@ EOF
 @test "phase3: synthetic incident with augur_can_merge absent — PR stays open, no merge" {
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" absent-keys.toml p3neg
-  sed -i '/^\[augur\]/a in_scope_paths = ["*"]' "$p/.agents/config.toml"
+  sed -i '/^\[build\]/a in_scope_paths = ["*"]' "$p/.agents/config.toml"
   topo_commit_all "$p"
   prep_augur_incident "$p" p3neg
 
-  run run_runner augur "$p" --mode incident --incident-file "$INC_FILE"
+  run run_runner build "$p" --mode incident --incident-file "$INC_FILE"
   [ "$status" -eq 0 ]
 
   # gh pr merge was never invoked — the PR is left open for human review.
   run stub_argv gh
   [[ "$output" != *"pr merge"* ]]
   # And the refusal is on the record.
-  ev="$(events_json | jq -c 'select(.event=="augur.incident.merge_blocked")')"
+  ev="$(events_json | jq -c 'select(.event=="build.incident.merge_blocked")')"
   [ -n "$ev" ]
   [ "$(jq -r '.reason' <<<"$ev")" = "merge_disabled_by_config" ]
+}
+
+# ---------------------------------------------------------------------------
+# Phase 9 — canonical role IDs + install-time theme layer
+#
+# THE SAFETY PROPERTY: a config with no [names] block must keep the exact
+# unit/svc display names it has today (build→augur, release→guardian), while
+# the event `role:` field and event-name prefixes move to canonical ids.
+# ---------------------------------------------------------------------------
+
+@test "phase9: legacy config (no [names]) — release svc stays -guardian, event role=release, deprecation warned" {
+  proj="$(make_fixture_project glegacy legacy-augur-can-merge-true.toml)"
+  head_sha="$(git -C "$proj" rev-parse HEAD)"
+
+  run --separate-stderr run_runner release "$proj" --mode post-merge --merge-sha "$head_sha"
+  [ "$status" -eq 0 ]
+  # deprecation warning went to stderr (NOT stdout — it must not corrupt JSON)
+  [[ "$stderr" == *"deprecated"* ]]
+
+  line="$(events_json | jq -c 'select(.event=="job.end")')"
+  [ -n "$line" ]
+  [ "$(jq -r '.svc'  <<<"$line")" = "glegacy-guardian" ]   # legacy display preserved
+  [ "$(jq -r '.role' <<<"$line")" = "release" ]            # canonical role id
+  [ "$(jq -r '.status' <<<"$line")" = "ok" ]
+}
+
+@test "phase9: legacy config — build check-config role=build display=augur, keys normalized" {
+  proj="$(make_fixture_project blegacy legacy-augur-can-merge-true.toml)"
+
+  run --separate-stderr run_runner build "$proj" --check-config
+  [ "$status" -eq 0 ]
+  jq -e . <<<"$output" >/dev/null                          # clean JSON on stdout
+  [ "$(jq -r '.role'    <<<"$output")" = "build" ]
+  [ "$(jq -r '.display' <<<"$output")" = "augur" ]         # svc safety: legacy name
+  [ "$(jq -r '.can_merge'   <<<"$output")" = "true" ]      # augur_can_merge normalized
+  [ "$(jq -r '.allow_no_ci' <<<"$output")" = "true" ]      # [augur] allow_no_ci normalized
+  [[ "$stderr" == *"deprecated"* ]]
+}
+
+@test "phase9: spacetime [names] — check-config shows role:release display:proctor, build:helldiver" {
+  proj="$(make_fixture_project stc names-spacetime.toml)"
+
+  run run_runner release "$proj" --check-config
+  [ "$status" -eq 0 ]
+  jq -e . <<<"$output" >/dev/null
+  [ "$(jq -r '.role'    <<<"$output")" = "release" ]
+  [ "$(jq -r '.display' <<<"$output")" = "proctor" ]
+
+  run run_runner build "$proj" --check-config
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.role'    <<<"$output")" = "build" ]
+  [ "$(jq -r '.display' <<<"$output")" = "helldiver" ]
+}
+
+@test "phase9: spacetime — release runner post-merge emits svc <proj>-proctor role release" {
+  proj="$(make_fixture_project stp names-spacetime.toml)"
+  head_sha="$(git -C "$proj" rev-parse HEAD)"
+
+  run run_runner release "$proj" --mode post-merge --merge-sha "$head_sha"
+  [ "$status" -eq 0 ]
+  line="$(events_json | jq -c 'select(.event=="job.end")')"
+  [ "$(jq -r '.svc'  <<<"$line")" = "stp-proctor" ]        # themed display
+  [ "$(jq -r '.role' <<<"$line")" = "release" ]            # role is still canonical
+}
+
+@test "phase9: config normalization — legacy augur_can_merge=true → can_merge; [augur] allow_no_ci → [build]" {
+  cfg="$(load_fixture_config legacy-augur-can-merge-true.toml)"
+  [ "$(jq -r '.medic.can_merge'   <<<"$cfg")" = "true" ]
+  [ "$(jq -r '.build.allow_no_ci' <<<"$cfg")" = "true" ]
+  [ "$(jq -r '.release.test_cmd'  <<<"$cfg")" = "true" ]
+  # canonical keys are back-filled; the legacy originals stay intact
+  [ "$(jq -r '.medic.augur_can_merge' <<<"$cfg")" = "true" ]
+  [ "$(jq -r '.augur.allow_no_ci'     <<<"$cfg")" = "true" ]
+}
+
+@test "phase9: medic loop on legacy config uses NEW event prefixes build.incident.* + release.post_merge.*" {
+  make_fake_quartet
+  p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
+  install_agents "$p" legacy-augur-can-merge-true.toml m9
+  topo_commit_all "$p"
+  sha="$(topo_true_merge "$p" feat-fix web.txt "fixed web")"
+  git -C "$p" push -q origin main
+
+  prep_medic_loop "$p" m9 "$sha"
+  write_guardian_stub 0   # post-merge validation passes
+
+  run_medic_scan "$p"
+  [ "$status" -eq 0 ]
+
+  # NEW canonical event-name prefixes are emitted...
+  [ -n "$(events_json | jq -c 'select(.event=="build.incident.attempted")')" ]
+  [ -n "$(events_json | jq -c 'select(.event=="build.incident.merged")')" ]
+  pmr="$(events_json | jq -c 'select(.event=="release.post_merge.run")')"
+  [ -n "$pmr" ]
+  # medic keeps its legacy svc display, events carry role=medic
+  [ "$(jq -r '.svc'  <<<"$pmr")" = "m9-medic" ]
+  [ "$(jq -r '.role' <<<"$pmr")" = "medic" ]
+
+  # ...and the OLD prefixes are gone.
+  [ -z "$(events_json | jq -c 'select(.event=="augur.incident.attempted")')" ]
+  [ -z "$(events_json | jq -c 'select(.event=="guardian.post_merge.run")')" ]
 }
