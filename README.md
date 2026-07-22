@@ -37,7 +37,10 @@ Proposals wait for a **human stamp** in a dispatch queue; decisions land in
 `write-ticket → polish-ticket → execute-ticket → PR`, with `project_owner` as
 the reviewer. The same crew triages asynchronous user feedback
 (`data/fyi-requests.jsonl`) nightly into small PRs; substantial asks become
-design proposals instead of drive-by patches.
+design proposals instead of drive-by patches. A hardened ticket can also be
+driven headless — `runner.sh --mode ticket --ticket-file <path>` — gated
+behind `[build] ticket_mode` (default **false**; unset is exactly today's
+behavior).
 
 **Release.** Two surfaces. A **shoulder-mode critic**
 (`agents/release/critic-watch.sh`) batches a dev session's edits and, when the
@@ -46,6 +49,18 @@ never sees the author's transcript (goal contamination), never writes code,
 and delivers findings into the live session as notes, never hard stops. The
 **daily battery** runs the project's tests, typecheck, and every configured
 audit, fixes what it safely can, and reports.
+
+Shoulder mode is wired per project, not by the installer: merge a
+`PostToolUse` hook (matcher `Edit|Write|MultiEdit`) into
+`<project>/.claude/settings.json` running `agents/release/critic-queue.sh` —
+it appends each edited file to a per-session queue and always exits 0 — and
+keep `critic-watch.sh --project <dir>` running (a long-lived user service
+works; it polls every 30s and fires at 5 min idle or 8 queued files).
+Delivery is `$CLAUDE_NOTE_CMD <session> <message>`; exit 2/3 means
+not-delivered and keeps the queue, and the critique is **cached across
+retries** — a failed delivery never re-spends the model. Spend is capped by
+`[release] budget_tokens_daily` (default 1M/day), counted from the project's
+own `release.critique` events.
 
 Two crews sit outside the loop:
 
@@ -155,6 +170,12 @@ timers, symlinks the six shared skills into `<project>/.claude/skills/`,
 drops `skills/gates.md.template` into `.agents/gates.md` (never clobbering an
 existing gate file), removes legacy cron launchers that would race the timers
 (crontab backed up first), and prints next-fire times.
+
+Re-runs are safe: without `--theme`, an existing `[names]` block is honored
+(only an explicit `--theme` renames a fleet), and the installer **sweeps any
+stale unit set for the same project+role left under an old display name** —
+including the legacy `augur`/`guardian` dir aliases — so a theme change or
+rename can never leave two sets of timers firing the same agent twice.
 
 **Uninstall** — the crew leaves nothing behind but the config you wrote:
 

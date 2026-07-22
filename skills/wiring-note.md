@@ -17,20 +17,18 @@ plumbing is needed for a headless agent to *load* the skill. What's missing is
 the **invocation path**: the runner deciding "this run is a ticket, drive it
 with execute-ticket" rather than the nightly feedback-triage prompt.
 
-## Status: documented, NOT yet wired (deferred to Phase 11)
+## Status: WIRED (Phase 11, 2026-07-21) — default OFF
 
-`agents/build/runner.sh` is a 540-line orchestrator of merge / CI / `gh` /
-revert logic, executed by **every project's timers from the dev clone** — the
-merge-is-live hazard. Adding a ticket-execution branch to it is a real behavior
-change to the live fleet's core path and deserves its own tested phase (bats
-fixtures for the new mode + the default-off flag, each first shown failing).
-That is precisely Phase 11's scope (mentat: proposals → polish-ticket →
-helldiver). **Prefer safety: no change to the live runner in the skills-parity
-phase.**
+`agents/build/runner.sh` now carries the gated mode:
+`--mode ticket --ticket-file <path>`, a no-op unless
+`[build] ticket_mode = true` (see the guard around `runner.sh:256`). An
+unset/false flag is exactly the pre-Phase-11 behavior, covered by bats. What
+remains manual is flipping the flag per project once its ticket flow is
+trusted.
 
-## The intended hook (for Phase 11 to implement, DEFAULT OFF)
+## The hook (as shipped, DEFAULT OFF)
 
-A new opt-in mode, gated so an unset flag is exactly today's behavior:
+An opt-in mode, gated so an unset flag is exactly the prior behavior:
 
 ```toml
 # .agents/config.toml  — default off; absent = current behavior
@@ -47,8 +45,7 @@ ticket_mode = false          # when true, --mode ticket drives execute-ticket
 # contract the live/incident modes already use.
 ```
 
-**Test before wiring (Phase 11):** a bats case proving `--mode ticket` exits 2
-(no-op) when `ticket_mode` is absent/false, and a second proving it dispatches
-to the skill path when true — each first shown failing against the pre-change
-runner, per the harness convention. Until those land, the live fleet's build
-behavior is unchanged.
+**Tests (landed with Phase 11):** bats cases prove `--mode ticket` is a no-op
+when `ticket_mode` is absent/false and dispatches to the skill path when true
+— each first shown failing against the pre-change runner, per the harness
+convention.
