@@ -169,6 +169,9 @@
       position: fixed; pointer-events: none; z-index: 60; box-sizing: border-box;
       border: 2px solid var(--mp-color, var(--muted)); background: var(--code-bg);
     }
+    /* flow-root: child margins stay inside the view box, so the morph can
+       animate its height without content shifting when overflow clips. */
+    .loops-view { display: flow-root; }
     .loops-view[hidden] { display: none; }
 
     /* --- Skills graph (data-driven, self-contained SVG) --- */
@@ -776,19 +779,22 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
         const setView = (skills) => {
           if (morphing) return;
           if (reducedMotion.matches || crewView.hidden === skills) { applyView(skills); return; }
+          const fromView = skills ? crewView : skillsView;
+          const toView = skills ? skillsView : crewView;
           const src = skills ? boxRects() : chipRects();
-          const dst = skills ? measureFinal(skillsView, crewView, chipRects)
-                             : measureFinal(crewView, skillsView, boxRects);
+          const srcH = fromView.getBoundingClientRect().height;
+          const fin = skills
+            ? measureFinal(skillsView, crewView, () => ({ rects: chipRects(), h: skillsView.getBoundingClientRect().height }))
+            : measureFinal(crewView, skillsView, () => ({ rects: boxRects(), h: crewView.getBoundingClientRect().height }));
+          const dst = fin.rects;
           const ids = CREW_IDS.filter(id => src[id] && dst[id]);
           if (!ids.length) { applyView(skills); return; }
           morphing = true;
           applyButtons(skills); // the pill answers the click immediately; only the views animate
           const DUR = window.matchMedia('(max-width: 640px)').matches ? 500 : 700;
-          const fromView = skills ? crewView : skillsView;
-          const toView = skills ? skillsView : crewView;
           const overlay = document.createElement('div');
           overlay.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:60;';
-          const anims = [];
+          const proxyAnims = [];
           ids.forEach(id => {
             const a = src[id];
             const b = dst[id];
@@ -797,7 +803,7 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
             p.style.setProperty('--mp-color', `var(--loop-${id})`);
             p.style.left = '0px'; p.style.top = '0px';
             overlay.appendChild(p);
-            anims.push(p.animate([
+            proxyAnims.push(p.animate([
               { transform: `translate(${a.left}px,${a.top}px)`, width: `${a.width}px`,
                 height: `${a.height}px`, borderRadius: skills ? '8px' : '15px' },
               { transform: `translate(${b.left}px,${b.top}px)`, width: `${b.width}px`,
@@ -805,15 +811,22 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
             ], { duration: DUR, easing: 'ease-in-out', fill: 'both' }));
           });
           document.body.appendChild(overlay);
-          // Departing view (gates, hint / nodes, edges, legend) fades with it.
-          anims.push(fromView.animate([{ opacity: 1 }, { opacity: 0 }],
+          // The arriving view stays hidden until settle. The departing view
+          // fades in place while its box glides to the arriving view's
+          // height, so the centered slide recenters smoothly instead of
+          // snapping when the swap lands (the old end-of-morph "jump").
+          const viewAnims = [];
+          fromView.style.overflow = 'hidden';
+          viewAnims.push(fromView.animate(
+            [{ height: `${srcH}px` }, { height: `${fin.h}px` }],
+            { duration: DUR, easing: 'ease-in-out', fill: 'both' }));
+          viewAnims.push(fromView.animate([{ opacity: 1 }, { opacity: 0 }],
             { duration: Math.round(DUR * 0.6), easing: 'ease-out', fill: 'forwards' }));
-          // Arriving view rendered but invisible during flight.
-          toView.style.opacity = '0'; toView.hidden = false;
           const settle = () => {
             applyView(skills);
+            viewAnims.forEach(an => { try { an.cancel(); } catch (e) {} });
+            fromView.style.overflow = '';
             toView.style.opacity = ''; fromView.style.opacity = '';
-            anims.forEach(an => { try { an.cancel(); } catch (e) {} });
             // Chips/boxes are already at their real positions; graph internals
             // (or crew-side extras) fade in just after the proxies land.
             const late = skills
@@ -821,12 +834,16 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
               : toView.querySelectorAll('.loop-gate, .drawer-hint');
             late.forEach(el => el.animate([{ opacity: 0 }, { opacity: 1 }],
               { duration: 440, delay: 200, easing: 'ease-in', fill: 'backwards' }));
-            overlay.remove();
+            // Proxies dissolve over the real elements they landed on, so
+            // labels fade in instead of popping when the overlay vanishes.
+            const fade = overlay.animate([{ opacity: 1 }, { opacity: 0 }],
+              { duration: 220, easing: 'ease-out', fill: 'forwards' });
+            fade.finished.catch(() => {}).then(() => overlay.remove());
             morphing = false;
           };
           let done = false;
           const finish = () => { if (!done) { done = true; settle(); } };
-          Promise.all(anims.map(an => an.finished.catch(() => {}))).then(finish);
+          Promise.all([...proxyAnims, ...viewAnims].map(an => an.finished.catch(() => {}))).then(finish);
           setTimeout(finish, DUR + 800); // safety: never strand a proxy
         };
         btnCrew.addEventListener('click', () => setView(false));
