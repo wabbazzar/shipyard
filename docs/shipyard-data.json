@@ -56,7 +56,7 @@
           "disposition": "new",
           "source": "agents/design/runner — Phase 11",
           "summary": "Nightly: signals → ≤3 open proposals per project.",
-          "detail": "Writes <project>/tmp/<project>-mentat-result.json (mirrors helldiver's result shape so the dispatch queue enrichment stays symmetric), emits design.proposal.opened events, respects a 1M-token daily cap (all caps are token-based, never dollars). Skips drafting when 3 proposals sit undecided. Approve in the dispatch → mentat hardens via polish-ticket into <project>/docs/tickets/ and hands to helldiver. Deny → recorded in decisions.jsonl, never re-proposed. [D-O7, D-O9, D-L13] Incident-repair proposals (from suk) emit immediately, outside the nightly cadence, against the same token cap. [D-L15]"
+          "detail": "Writes <project>/tmp/<project>-mentat-result.json (mirrors helldiver's result shape so the dispatch queue enrichment stays symmetric), emits design.proposal.opened events, respects a 1M-token daily cap. Skips drafting when 3 proposals sit undecided. Approve in the dispatch → mentat hardens via polish-ticket into <project>/docs/tickets/ and hands to helldiver. Deny → recorded in decisions.jsonl, never re-proposed. [D-O7, D-O9, D-L13] Incident-repair proposals (from suk) emit immediately, outside the nightly cadence, against the same token cap. [D-L15]"
         },
         {
           "name": "coverage-audit",
@@ -75,7 +75,7 @@
       "status": "Live. Merge is opt-in and a zero-CI repo can’t merge vacuously; incident repairs no longer slip in a side-door — they enter as proposals at the top of the loop.",
       "tagline": "Takes ratified tickets to shipped code.",
       "headline": "Auto-merge was opt-out (default true), and a repo with zero CI checks passed the CI gate vacuously.",
-      "gate": "CI green + explicit opt-in merge; no checks = red (waivable only by allow_no_ci, with a loud ci_waived event)",
+      "gate": "CI green + explicit opt-in merge; no checks = red (waivable only by allow_no_ci)",
       "skills": [
         {
           "name": "execute-ticket",
@@ -115,7 +115,7 @@
           "disposition": "new",
           "source": "agents/release/critic-role.md — built Phase 6, piloted on bopthere",
           "summary": "Concurrent cold-context critique of the live diff.",
-          "detail": "Input is ONLY the diff, the changed-file list, the project's .agents/guardian.md, and the rubric — explicitly never the dev session transcript, because goal contamination is the thing this design exists to avoid. Debounce: 5 min idle OR 8 touched files (D-L3). Findings graded block / warn / note and delivered into the live session via claude-note.sh (exit 2 = ambiguous target, exit 3 = session at a prompt — retry, never treat as delivered). Budget: 1M tokens/day, enforced by summing today's critique events' token counts before spawning (D-O1 — all caps are token-based, never dollars). It never writes code (D-L7). Verified by planting a real authz bug + an untested behavior change and requiring a block + warn within one debounce window."
+          "detail": "Input is ONLY the diff, the changed-file list, the project's .agents/guardian.md, and the rubric — explicitly never the dev session transcript, because goal contamination is the thing this design exists to avoid. Debounce: 5 min idle OR 8 touched files (D-L3). Findings graded block / warn / note and delivered into the live session via claude-note.sh (exit 2 = ambiguous target, exit 3 = session at a prompt — retry, never treat as delivered). Budget: 1M tokens/day, enforced by summing today's critique events' token counts before spawning (D-O1 — a token cap, not dollars). It never writes code (D-L7). Verified by planting a real authz bug + an untested behavior change and requiring a block + warn within one debounce window."
         },
         {
           "name": "release-readiness rubric",

@@ -50,7 +50,7 @@ the build crew into PRs. Substantial asks become design proposals instead of
 drive-by patches — recurring pain becomes design signal, not a one-off fix.
 
 A **synchronous** human ask enters the same loop through the front-door skills:
-`bug` (reproduce-and-root-cause first) and `feature` (clarify and set a
+`bugfix` (reproduce-and-root-cause first) and `feature` (clarify and set a
 Definition of Done first) do the intent-specific intake and hand `write-ticket`
 a scope. `write-ticket → polish-ticket → execute-ticket` is the one road, and a
 stamped mentat proposal drafts into a ticket through the identical
