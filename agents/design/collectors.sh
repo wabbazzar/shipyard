@@ -93,6 +93,15 @@ collect_signals() {
       job_fail:[.[] | select(.event=="job.end" and (.status=="fail" or .status=="abort"))] | length,
       medic_incidents: [.[] | select((.event // "") | startswith("medic."))
                              | select((.event // "") | contains("incident"))] | length,
+      # Verbatim examples (mentat:aurora:d23e2f48): prefer the consolidated
+      # medic.incident events (probe + http_status + restart_action), fall
+      # back to any medic.*incident* event for pre-upgrade windows.
+      medic_incident_examples:
+        (([.[] | select((.event // "") == "medic.incident")] | .[-3:]) as $full
+         | if ($full | length) > 0 then $full
+           else ([.[] | select((.event // "") | startswith("medic."))
+                      | select((.event // "") | contains("incident"))] | .[-3:])
+           end),
       release_findings: {
         block: ([.[] | select(.event=="release.critique") | (.block // 0)] | add // 0),
         warn:  ([.[] | select(.event=="release.critique") | (.warn  // 0)] | add // 0),
@@ -193,6 +202,11 @@ _render_human() {
   jq -r '
     "project: \(.project)   window: \(.window_days)d",
     "  events:  job_ok=\(.sources.events.job_ok)  job_fail=\(.sources.events.job_fail)  medic_incidents=\(.sources.events.medic_incidents)  release(block/warn/note)=\(.sources.events.release_findings.block)/\(.sources.events.release_findings.warn)/\(.sources.events.release_findings.note)",
+    ((.sources.events.medic_incident_examples // []) |
+      if length > 0 then
+        "  medic incident examples (verbatim, last \(length)):",
+        (.[] | "    " + tojson)
+      else empty end),
     "  fyi:     \(.sources.fyi.count) line(s)",
     "  usage:   \(.sources.usage.count) beacon(s)",
     "  incidents(tmp): \(.sources.medic_incidents.count) file(s)",

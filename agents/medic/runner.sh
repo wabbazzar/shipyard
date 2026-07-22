@@ -877,6 +877,20 @@ emit() {
     incident_id="$iid" project="$PROJECT_NAME" "$@" || true
 }
 
+# One consolidated per-incident event (mentat:aurora:d23e2f48): probe name,
+# HTTP status, and the mitigation action actually taken ride together so the
+# design collectors can surface verbatim incidents instead of a bare count.
+# probe/http_status are empty for non-probe (cron/systemd/post-run) sources.
+emit_incident_detail() {
+  # emit_incident_detail <iid> <probe_name> <http_status> <summary>
+  local iid="$1" pn="$2" hs="$3" sm="$4" act_taken
+  act_taken="$(jq -r --arg iid "$iid" \
+    '[.[] | select(.incident_id==$iid)] | (last // {}) |
+     [(.action // "none"), (.outcome // empty)] | join(":")' <<<"$ACTIONS_TAKEN")"
+  emit medic.incident "$iid" probe="$pn" http_status="$hs" \
+    restart_action="$act_taken" summary="$sm"
+}
+
 # Iterate classified incidents.
 i=0
 while [ "$i" -lt "$N_CLASS" ]; do
@@ -888,14 +902,27 @@ while [ "$i" -lt "$N_CLASS" ]; do
   source="$(jq -r '.source' <<<"$inc")"
   summary="$(jq -r '.incident_summary // .hypothesis // ""' <<<"$inc")"
 
+  # Per-incident detail: probe name + HTTP status. Classification output may
+  # strip evidence, so fall back to the detected-incidents file by id.
+  probe_name="$(jq -r '.evidence.probe.name // empty' <<<"$inc")"
+  http_status="$(jq -r '.evidence.probe.status_code // empty' <<<"$inc")"
+  if [ -z "$probe_name" ] && [ -f "$INCIDENTS_FILE" ]; then
+    probe_name="$(jq -r --arg iid "$iid" \
+      '.[] | select(.incident_id==$iid) | .evidence.probe.name // empty' "$INCIDENTS_FILE" | head -1)"
+    http_status="$(jq -r --arg iid "$iid" \
+      '.[] | select(.incident_id==$iid) | .evidence.probe.status_code // empty' "$INCIDENTS_FILE" | head -1)"
+  fi
+
   emit medic.incident.detected "$iid" source="$source" surface="$surface" \
-    summary="$summary"
-  emit medic.incident.classified "$iid" class="$cls" action="$act"
+    summary="$summary" probe="$probe_name" http_status="$http_status"
+  emit medic.incident.classified "$iid" class="$cls" action="$act" \
+    probe="$probe_name" http_status="$http_status"
 
   # Honor dry-run: classify-only, no side effects.
   if [ "$DRY_RUN" -eq 1 ]; then
     push_action "$(jq -n --arg iid "$iid" --arg act "$act" \
       '{incident_id:$iid, action:$act, outcome:"dry-run"}')"
+    emit_incident_detail "$iid" "$probe_name" "$http_status" "$summary"
     i=$((i+1)); continue
   fi
 
@@ -991,6 +1018,7 @@ while [ "$i" -lt "$N_CLASS" ]; do
           "Daily incident-repair cap ($DAILY_CAP) reached. Notify-only: $summary"
         push_action "$(jq -n --arg iid "$iid" \
           '{incident_id:$iid, action:"propose_repair", outcome:"cap_hit"}')"
+        emit_incident_detail "$iid" "$probe_name" "$http_status" "$summary"
         i=$((i+1)); continue
       fi
 
@@ -1046,6 +1074,7 @@ while [ "$i" -lt "$N_CLASS" ]; do
         '{incident_id:$iid, action:"unknown", outcome:$cls}')"
       ;;
   esac
+  emit_incident_detail "$iid" "$probe_name" "$http_status" "$summary"
   i=$((i+1))
 done
 
