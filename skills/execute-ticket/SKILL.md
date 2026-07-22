@@ -1,5 +1,8 @@
 ---
 name: execute-ticket
+roles: [build, human]
+disposition: adapted
+kind: pipeline
 description: >
   BUILD a project ticket (docs/tickets/*.md) to completion from its spec (not
   write it — that's polish-ticket). Use when the user says "execute ticket X",

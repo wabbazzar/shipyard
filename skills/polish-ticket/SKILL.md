@@ -1,5 +1,8 @@
 ---
 name: polish-ticket
+roles: [design, human]
+disposition: adapted
+kind: pipeline
 description: >
   HARDEN a project ticket (docs/tickets/*.md) so a FRESH, zero-context agent
   (or execute-ticket) can build it start-to-finish, fully autonomously,
