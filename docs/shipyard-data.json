@@ -11,8 +11,8 @@
       "name": "mentat",
       "was": "",
       "loop": "design",
-      "status": "Live on 4 projects, nightly. Drafted its first real proposals from fleet telemetry — e.g. “medic incident flapping: 48 events vs 4 distinct in 7d.” The human front doors /bug and /feature enter the same loop through write-ticket.",
-      "tagline": "Fleet telemetry and human /bug and /feature reports both become drafted proposals.",
+      "status": "Live on 4 projects, nightly. Drafted its first real proposals from fleet telemetry — e.g. “medic incident flapping: 48 events vs 4 distinct in 7d.” The human front doors /bugfix and /feature enter the same loop through write-ticket.",
+      "tagline": "Fleet telemetry and human /bugfix and /feature reports both become drafted proposals.",
       "headline": "Design was never a loop: every feature started as a chat conversation, gated by whatever the human operator happened to notice.",
       "gate": "proposal approved/denied in the daily dispatch; denied proposals are never re-proposed",
       "skills": [
@@ -24,9 +24,9 @@
           "detail": "Reads the project's own conventions from a [write_ticket] config block (context files, ticket dir, type enum, point scale, commit scopes — never baked), resolves the next id, clarifies only genuinely-blocking ambiguities (default-and-record: lock sensible defaults into the decisions table for veto at review), and emits the ticket skeleton with an explicit Definition of Done. Precursor to polish-ticket. [Phase 13, D-L16/D-O11]"
         },
         {
-          "name": "/bug",
+          "name": "/bugfix",
           "disposition": "new · front door",
-          "source": "shipyard/skills/bug — human front door into the design loop",
+          "source": "shipyard/skills/bugfix — human front door into the design loop",
           "summary": "Reproduce and root-cause, then write the ticket.",
           "detail": "Reproduce first (a failing test, reliable steps, or a captured signature — no ticket until the defect is pinned), the repro fails because of the bug, falsify rival causes, separate root from symptom, scope to the minimum diff. Then write-ticket with a bug scope: acceptance is the repro passing. The repro travels in the ticket; execute-ticket commits the failing test at build as the permanent regression test. [Phase 13, D-O12]"
         },
@@ -294,7 +294,7 @@
       "id": 13,
       "title": "human front doors",
       "status": "pending",
-      "gist": "/bug and /feature — the human-initiated siblings of mentat's machine-drafted proposals. /bug reproduces + root-causes before writing; /feature clarifies the ask + sets a definition of done. Both call /write-ticket (the precursor polish-ticket assumes) → polish → execute → proctor.",
+      "gist": "/bugfix and /feature — the human-initiated siblings of mentat's machine-drafted proposals. /bugfix reproduces + root-causes before writing; /feature clarifies the ask + sets a definition of done. Both call /write-ticket (the precursor polish-ticket assumes) → polish → execute → proctor.",
       "completed": null
     }
   ],
@@ -345,7 +345,7 @@
     "channels": [
       {
         "name": "operator corrections → skill files",
-        "how": "When the operator corrects a behavior, the correction lands as an edit to the skill, rubric, or ticket — reviewable, revertable, inherited. From this system's own history: polish-ticket's 'traps that have bitten this box' section is accreted incident history (a stale dashboard bundle that made shipped changes look absent; a runaway headless browser that hammered an API for 42 hours), and execute-ticket's honest-blocker protocol exists because sessions faked green. Burned session → line in the skill file → no caller repeats it."
+        "how": "When the operator corrects a behavior, the correction lands as an edit to the skill, rubric, or ticket — reviewable, revertable, inherited. From this system's own history: polish-ticket's 'traps that have bitten this box' section is accreted incident history (a stale dashboard bundle that made shipped changes look absent; a runaway headless browser that hammered an API for 1d 17h), and execute-ticket's honest-blocker protocol exists because sessions faked green. Burned session → line in the skill file → no caller repeats it."
       },
       {
         "name": "coverage-audit → rubric + proposals",
@@ -367,7 +367,7 @@
     "router": "The routing rule, stated once: one-off correction → the ticket's decision tables; project taste → .agents/<role>.md Conventions; project gates → config.toml; portable doctrine → a core PR (leak-checked, fleet-live on merge); a question every future install should ask → the installer interview."
   },
   "graph": {
-    "note": "Every agent inherits a subset of one shared skill set. The spine write-ticket → polish-ticket → execute-ticket is the pipeline both a human and an agent run; /bug and /feature are the human front doors into it; coverage-audit and check-config span several agents. Dotted membership lines show the overlap.",
+    "note": "Every agent inherits a subset of one shared skill set. The spine write-ticket → polish-ticket → execute-ticket is the pipeline both a human and an agent run; /bugfix and /feature are the human front doors into it; coverage-audit and check-config span several agents. Dotted membership lines show the overlap.",
     "roles": [
       {
         "id": "human",
@@ -402,8 +402,8 @@
     ],
     "skills": [
       {
-        "id": "bug",
-        "label": "/bug",
+        "id": "bugfix",
+        "label": "/bugfix",
         "roles": [
           "human"
         ],
@@ -541,7 +541,7 @@
     ],
     "edges": [
       {
-        "from": "bug",
+        "from": "bugfix",
         "to": "write-ticket"
       },
       {
@@ -559,15 +559,140 @@
     ]
   },
   "glossary": {
-    "anti-cheating brief": "The verbatim clause every delegated subagent is handed: converge honestly or report the precise blocker with real evidence — never fake a green result, weaken a check, or hand-wave 'should work', and always run the real command and report its exact output.",
-    "per-phase gate assembly": "For each phase, polish-ticket names exactly which verification gates apply here — shell, systemd units, a served port, an event stream, sibling repos — and their exact commands drawn from the project's gate file, instead of one blanket test command.",
-    "merge-is-live": "Because the timers run the runners straight from the dev clone, anything merged to the trunk branch is live across the fleet within one timer interval, so ticket work stays on a branch until a single deliberate cutover.",
-    "skills-parity": "The property that agents running headless and humans working in-session load the exact same skill files, so there is one definition of each workflow rather than a drifting pair.",
-    "stamp": "The human approve/deny decision in the daily dispatch that a proposal must receive before it becomes buildable work — the one required human gate in the loop.",
-    "cold-context critique": "A review of a change that sees only the diff, the changed-file list, and the rubric — never the authoring session — so it cannot be contaminated by the goal the code was written to satisfy.",
-    "the gate file": "A project's .agents/gates.md, which lists the verification gates that apply to that project and the exact command for each, so skills read the checks instead of baking them in.",
-    "--check-config": "A dry run that prints each project's resolved configuration — trunk branch, which gates apply, merge policy — so the fleet can be swept for drift without running anything.",
-    "--self-test": "A mode in which the on-call runner exercises its own merge → post-merge-fail → revert logic on a throwaway git fixture, proving the recovery path works before it is ever needed.",
-    "north star": "A one-line compass for a repo — its top-line GitHub description — that the design loop reads as a directional prior, so the proposals it drafts serve what the repo is for."
+    "anti-cheating brief": {
+      "def": "The clause handed verbatim to every delegated subagent before it starts work.",
+      "example": "> Converge honestly or report the precise blocker with the actual evidence —\n> NEVER fake green, weaken a check, or hand-wave \"should work\". Run the real\n> command, read the real file, curl the real port, and report exact output\n> (exit codes, JSONL lines, HTTP codes), not adjectives.",
+      "source": "skills/polish-ticket/SKILL.md:79 — §B Orchestration protocol"
+    },
+    "per-phase gate assembly": {
+      "def": "Each ticket phase names which gate classes apply to it and their exact commands, drawn from the project's gate file — no blanket test command.",
+      "example": "The ticket must state, for EVERY phase, which gate classes from\n.agents/gates.md apply and the exact commands. \"The code looks right\" is never\nproof. The standard menu the gate file draws from:\n- Shell: `bash -n` on every touched script; then run it for real and\n  read the output. Scripts with a `--check`/`--dry-run` flag: run that too.\n- systemd (user) changes: `systemctl --user daemon-reload`, then\n  `list-timers` shows the expected next fire …",
+      "source": "skills/polish-ticket/SKILL.md:84 — §C The gate (make it inescapable)"
+    },
+    "merge-is-live": {
+      "def": "The systemd timers run the runners straight from the dev clone, so a merge to trunk is live across the fleet within one timer tick.",
+      "example": "merge-is-live: systemd units run runners from this dev clone; a merge to\n`main` is fleet-live at the next timer fire, and medic/suk timers fire\nevery 10 min — work on a branch until tested, and CI only triggers on a\nPR (not a branch push)",
+      "source": "a live install's .agents/gates.md — cross-repo gate table"
+    },
+    "skills-parity": {
+      "def": "Headless agents and in-session humans load the exact same skill files — one definition of each workflow, no drifting pair.",
+      "example": "**Where:** `<project>/.claude/skills/` (symlinks into `<harness>/skills/`).\n**What:** `write-ticket`, `bug`, `feature`, `polish-ticket`, `execute-ticket`,\n`coverage-audit` — **the same files agents load headless and humans invoke\nin-session.** One implementation, two callers, no agent-only fork.",
+      "source": "docs/INSTALL.md — §L5 skills"
+    },
+    "stamp": {
+      "def": "The human approve/deny decision in the daily dispatch — the one required human gate before a proposal becomes buildable work.",
+      "example": "{\"ts\":\"2026-07-22T14:41:36.621Z\",\"id\":\"mentat:bopthere:cb5688e2\",\"decision\":\"approve\"}\n{\"ts\":\"2026-07-22T14:41:54.139Z\",\"id\":\"mentat:aurora:d23e2f48\",\"decision\":\"approve\"}",
+      "source": "data/news/decisions.jsonl — the live dispatch ledger (today's entries)"
+    },
+    "cold-context critique": {
+      "def": "A review that sees only the diff, the changed-file list, and the rubric — never the authoring session — so the author's goal can't contaminate it.",
+      "example": "{\"ts\":\"2026-07-21T23:57:09Z\",\"svc\":\"bopthere-guardian\",\"event\":\"guardian.critique\",\n \"source\":\"shoulder\",\"files\":2,\"block\":1,\"warn\":3,\"note\":1,\"tokens\":1764}\n→ the block: \"any unauthenticated caller can delete any trip's conversation\" —\n  a planted auth bug, caught from the diff alone.",
+      "source": "the live event stream (a real critique event, 2026-07-21) + its finding"
+    },
+    "the gate file": {
+      "def": "A project's .agents/gates.md — the single source of truth for how to prove a change works on that project.",
+      "example": "> The single source of truth for **how to prove a change works on this\n> project**. `polish-ticket` reads this file to assemble the per-phase\n> verification surface; `execute-ticket` reads it to know which gates to run\n> before every commit. There is no one test command that covers everything —\n> a phase declares which of the classes below apply, and this file supplies\n> the exact commands.",
+      "source": "skills/gates.md.template:3 — dropped at install, never clobbered"
+    },
+    "--check-config": {
+      "def": "A read-only dry run that prints a project's fully-resolved configuration, so the whole fleet can be swept for drift without running anything.",
+      "example": "$ bash agents/release/runner.sh --check-config --project ~/code/bopthere\n{\n  \"agent\": \"release\",\n  \"role\": \"release\",\n  \"display\": \"proctor\",\n  \"project\": \"bopthere\",\n  \"trunk\": \"main\", …",
+      "source": "real output, run 2026-07-22"
+    },
+    "--self-test": {
+      "def": "The on-call runner proves its own merge → post-merge-fail → revert recovery path on a throwaway git fixture, for both commit shapes.",
+      "example": "$ bash agents/medic/runner.sh --self-test\nself-test: squash — merge -> post-merge-fail -> revert OK\nself-test: true-merge — merge -> post-merge-fail -> revert OK\nself-test: PASS (shapes exercised: squash, true-merge)",
+      "source": "real output, run 2026-07-22"
+    },
+    "north star": {
+      "def": "A repo's one-line compass — its top-line GitHub description — read by the design loop as a directional prior when drafting proposals.",
+      "example": "$ gh repo view wabbazzar/shipyard --json description -q .description\nDesign → build → release crews for agent-maintained repos: mentat, helldiver,\nproctor, suk, chronicler — systemd-timed, PR-gated, event-logged",
+      "source": "real output — shipyard's own live GitHub description"
+    },
+    "A–H checklist": {
+      "def": "The eight-section hardening checklist polish-ticket runs a ticket through before it is safe to build unattended.",
+      "example": "### A. Self-containment\n### B. Orchestration protocol\n### C. The gate (make it inescapable) — assembled per phase from the gate file\n### D. System discipline — traps; pin the relevant ones\n### E. Verification surface (the heart of it)\n### F. Decisions\n### G. Phasing\n### H. Ledger + Definition of Done",
+      "source": "skills/polish-ticket/SKILL.md:68–160 (the eight `### A.`–`### H.` headings)"
+    },
+    "self-containment": {
+      "def": "Checklist item A: the ticket must name everything exactly so a zero-context agent never has to guess.",
+      "example": "### A. Self-containment\nA zero-context agent must not have to guess. Name exact files with paths\n(`repo:file:line` where it matters), exact unit/timer names, exact ports,\nexact config keys. Cross-repo work names the target repo, branch strategy,\nand that repo's own gate. Numbers cited from live state (event counts, config\nvalues) get a **date and the command that produced them** — the system drifts.",
+      "source": "skills/polish-ticket/SKILL.md:68-73"
+    },
+    "orchestration protocol": {
+      "def": "Checklist item B: the builder acts as an orchestrator that delegates heavy work to subagents but re-verifies everything itself.",
+      "example": "### B. Orchestration protocol\nState that the builder is an orchestrator: delegate heavy/wide work to\nsubagents with tight briefs, keep the orchestrator lean, re-verify personally.\nEmbed the verbatim anti-cheating brief:",
+      "source": "skills/polish-ticket/SKILL.md:75-78"
+    },
+    "toolchain proof": {
+      "def": "Checklist item C2: the polisher must have personally run every verification tool the ticket relies on before handing it over.",
+      "example": "### C2. VERIFY THE TICKET'S OWN TOOLCHAIN EXISTS\nDo not hand over a ticket whose verification method you have not run at least\nonce **while polishing**. If it calls for bats, shellcheck, a browser, gh, an\nAPI token — prove it works on this box now and record the exact invocation\n(and any install fix) in the ticket. Where you can, replace adjectives with\n**measured baseline numbers** taken during polishing (event-stream counts, …",
+      "source": "skills/polish-ticket/SKILL.md:108-113"
+    },
+    "verification surface": {
+      "def": "The per-behavior proof plan: for each thing the ticket adds, exactly which command to run and what it must show.",
+      "example": "### E. Verification surface (the heart of it)\nFor EACH behavior the ticket adds, write down exactly how to prove it:\nwhich command to run, which file/port/JSONL line to read, what it must show,\nand — where a test harness exists or the ticket creates one — the **specific\ntest case to add, which must be able to FAIL on the real defect** (a test\nthat can't fail is a finding, not a test). Prefer deterministic checks;\nanything time/timer-dependent gets an explicit wait-or-trigger instruction …",
+      "source": "skills/polish-ticket/SKILL.md:130-136"
+    },
+    "thin vertical slices": {
+      "def": "The phasing rule: each phase is a small, independently verifiable, single-commit slice that never leaves the live system broken.",
+      "example": "### G. Phasing\nThin vertical slices, each independently verifiable and a single clean\ncommit, ordered so **the live system is never left broken between phases**\n(a half-migrated unit, a stopped service, an unbaked env). Cross-repo tickets\nsequence sibling-repo phases before the hub phases that depend on them. No\nbig-bang phase. A final phase re-runs the whole ticket's gate end-to-end.",
+      "source": "skills/polish-ticket/SKILL.md:153-158"
+    },
+    "ledger": {
+      "def": "A running section in the ticket where the builder records its plan, commit hash, and honest notes for every phase.",
+      "example": "### H. Ledger + Definition of Done\nGive the ticket a **Ledger** section (builder appends plan + commit hash per\nphase, honest notes on anything deferred) and an observable DoD per phase —\nstated as \"this command shows X / this JSONL line appears / this port\nreturns 200,\" not \"implemented.\" …",
+      "source": "skills/polish-ticket/SKILL.md:160-164"
+    },
+    "honest-blocker protocol": {
+      "def": "Execute-ticket's rule for when a phase can't be made green: stop, revert to the last green state, and report precisely — never fake it.",
+      "example": "If a phase can't be made green by legitimate means: STOP iterating. Do NOT\nfake green, weaken a check, loosen a gate, or leave a unit disabled to dodge\na failure. Diagnose with evidence — exactly what fails, the actual output,\nwhy the approach can't work. If it needs a user decision → §4. If it's\ngenuinely bigger than the ticket assumed → report it, revert to the last\nGREEN state (preserve work as a patch + note where), record the honest state\nin the Ledger. A precise \"here's what's left and why\" beats a faked-green\ntree every time. This is the single most valuable behavior in the skill.",
+      "source": "skills/execute-ticket/SKILL.md:121-128"
+    },
+    "user-decision class": {
+      "def": "The only category of question an autonomous build may stop for — decisions that genuinely belong to the owner.",
+      "example": "Autonomous by default. Stop and ASK only when the decision is genuinely the\nowner's: (a) **spending money**; (b) **outward-facing or public actions**\n(DNS, newly exposed ports/services, publishing, messaging anyone who isn't\nthe owner); (c) **destructive or hard-to-reverse system changes** (deleting\ndata, firewall edits beyond the ticket's pre-approved ones, disabling\nservices other things depend on); (d) **overriding a deliberately-configured\nlive behavior** (a config value whose comment shows intent); (e) **a real\ndesign fork with no sensible default** where guessing wrong burns large …",
+      "source": "skills/execute-ticket/SKILL.md:132-139"
+    },
+    "shoulder mode": {
+      "def": "The release critic running concurrently beside the authoring session, judging the diff cold while the code is still being written.",
+      "example": "You are **guardian's shoulder-mode critic**. You review a diff the way a\nrelease engineer would: cold, with no attachment to the goal that\nproduced it. You NEVER write code — you critique. Another agent (or a\nhuman) decides what to do with your findings.",
+      "source": "agents/release/critic-role.md:3-6"
+    },
+    "debounce window": {
+      "def": "The batching rule that decides when the shoulder-mode critic actually fires instead of critiquing every keystroke.",
+      "example": "# Trigger: (queue idle >= CRITIC_IDLE_SEC AND non-empty)\n#          OR (>= CRITIC_BATCH_FILES distinct files queued).\n# Env knobs (test overrides): CRITIC_IDLE_SEC (300), CRITIC_BATCH_FILES (8),\n# CRITIC_POLL_SEC (30), GUARDIAN_CRITIC_MODEL (claude default model if unset).",
+      "source": "agents/release/critic-watch.sh:13-16"
+    },
+    "event stream": {
+      "def": "The append-only JSONL log, one file per day, where every agent run and incident lands as a machine-readable line.",
+      "example": "{\"ts\":\"2026-07-22T16:30:31Z\",\"svc\":\"starbird-suk\",\"event\":\"job.start\",\"source\":\"system\",\"role\":\"medic\",\"mode\":\"scan\",\"project\":\"starbird\"}\n{\"ts\":\"2026-07-22T16:30:31Z\",\"svc\":\"starbird-suk\",\"event\":\"job.end\",\"source\":\"system\",\"role\":\"medic\",\"mode\":\"scan\",\"status\":\"ok\",\"duration_s\":0,\"incidents\":0}",
+      "source": "~/code/wabbazzar-ice/data/events/2026-07-22.jsonl (live events)"
+    },
+    "fyi-requests.jsonl": {
+      "def": "A per-project append-only file of asynchronous user feedback that the build crew triages nightly into PRs.",
+      "example": "{\"ts\":\"2026-06-04T19:21:18.000Z\",\"id\":\"fyi_20260604192118_k952c\",\"username\":\"wesley\", …\n \"text\":\"The badge icons look good — nice work on those.\"}",
+      "source": "~/code/shredly2/data/fyi-requests.jsonl (live line)"
+    },
+    "Conventions block": {
+      "def": "A section of the project's role file holding the operator's stated taste, which the release critic grades against instead of generic style opinions.",
+      "example": "## Conventions layer\n\nIf the project's `.agents/guardian.md` contains a `## Conventions`\nblock, grade the diff against those STATED conventions only — never\nagainst generic taste. Convention findings are capped at `warn`/`note`\nseverity; a convention miss is never a `block` on its own.",
+      "source": "agents/release/critic-role.md:82-87"
+    },
+    "daily dispatch": {
+      "def": "The daily machine-written newspaper where the fleet's overnight activity meets the human — including the Approve/Deny queue where proposals get stamped.",
+      "example": "\"edition\": 203,\n\"title\": \"The Ice Dispatch\",\n\"motto\": \"All the agents, fit to print\",\n…\n\"kicker\": \"MEDIC-INCIDENT · ATTENTION\",\n\"headline\": \"Shredly Guardian Falters; Prod Restart Pending as 4xx Surge Hits\"",
+      "source": "~/code/wabbazzar-ice/data/newspaper/2026-07-22.json (live edition No. 203; lines 3, 9-10, 77-79)"
+    },
+    "one road into build": {
+      "def": "The D-L15 rule that a code fix — even for an incident — may only enter the build loop as a stamped proposal, never through a side-door.",
+      "example": "      # D-L15 — incident repair no longer escalates to build/augur (that\n      # side-door is retired). Medic writes an IMMEDIATE incident-repair\n      # proposal into the design loop's result file (mentat → helldiver via\n      # the dispatch), pages once, and lets the owner stamp it. This is a\n      # deterministic write: no augur.lock, no model spend, no merge. The\n      # restart/revert MITIGATION classes above are untouched — suk still\n      # restarts/reverts immediately; only the CODE FIX is rerouted.",
+      "source": "agents/medic/runner.sh:1008-1014"
+    },
+    "traps that have bitten this box": {
+      "def": "The append-only incident-history appendix in a project's gate file — each burned session becomes a line no future caller repeats.",
+      "example": "## Traps that have bitten this project  (append-only)\n\nThe accreted incident history — every burned session becomes a line here so no\nfuture caller repeats it. This is the hub's **learning surface**.\n\n- **Stale dashboard bundle** — edited `dashboard/src/**`, forgot `npm run build\n  && systemctl --user restart dashboard`, then stared at an unchanged page\n  convinced the edit didn't take. Rebuild+restart is mandatory, no \"too small …",
+      "source": "~/code/wabbazzar-ice/.agents/gates.md:72-79 (live gate file)"
+    }
   }
 }

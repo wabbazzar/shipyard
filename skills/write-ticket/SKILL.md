@@ -8,7 +8,7 @@ description: >
   build X" or "Y is broken" into a comprehensive, numbered, implementation-ready
   ticket with an explicit Definition of Done. Use when the user says "write a
   ticket for X", "create a ticket", "draft a ticket for this", or hands you a
-  feature/bug/refactor ask that should become tracked work. This is the
+  feature/bugfix/refactor ask that should become tracked work. This is the
   REQUIREMENTS-GATHERING precursor to polish-ticket: you establish WHAT and WHY
   (scope, acceptance criteria, phased plan); polish-ticket then hardens HOW to
   build it safely. You do NOT build the work and you do NOT harden the ticket —
@@ -29,8 +29,8 @@ three jobs distinct — do not harden here (no per-phase gate assembly, no
 verification-surface commands — that is polish-ticket's job) and do not build.
 
 **You are the front of the loop.** A machine ask (a stamped design proposal) or
-a human ask (`/bug`, `/feature`, or a direct "write a ticket for…") both
-converge here. `/bug` and `/feature` do the intent-specific intake
+a human ask (`/bugfix`, `/feature`, or a direct "write a ticket for…") both
+converge here. `/bugfix` and `/feature` do the intent-specific intake
 (reproduce-first / clarify-first) and then call you with a scope; a direct
 invocation does the intake inline.
 
@@ -90,7 +90,7 @@ many (if any) questions you need — "I need to ask 2 clarifying questions" — 
 ask one, wait, ask the next. A ticket that stalls on questions a config read or
 a code read would have answered is a tax on the user's time.
 
-(When called by `/bug` or `/feature`, the intent-specific clarification —
+(When called by `/bugfix` or `/feature`, the intent-specific clarification —
 reproduce-first or assumptions-and-verify — has already happened; don't repeat
 it. Take the scope they hand you.)
 
@@ -111,7 +111,7 @@ the project's prior-ticket style; keep the substance):
   `Phase:` **only if** the project declares a `phase_taxonomy`.
 - **Summary** — 1–2 sentences: what needs to be done.
 - **Problem / Background** — why this work exists, the gap it closes, context
-  for the decision. For a bug, this carries the reproduction the `/bug` intake
+  for the decision. For a bug, this carries the reproduction the `/bugfix` intake
   captured (the acceptance anchor).
 - **Technical Requirements** — data structures/types, code locations (files to
   create vs modify, with `path:line`/function names), dependencies. Cite the
@@ -144,7 +144,7 @@ Say the ticket is a **draft ready for `polish-ticket`** — you established scop
 and acceptance; polish-ticket hardens the verification surface and phasing for
 autonomous build. Unless the user said "and build it," stop at the human gate:
 the ticket is queued/surfaced for a stamp, exactly as a stamped design proposal
-would be. `/bug` and `/feature` respect the same gate.
+would be. `/bugfix` and `/feature` respect the same gate.
 
 ## Adaptation Contract
 

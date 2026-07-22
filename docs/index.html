@@ -194,12 +194,20 @@
     }
     button.gloss:hover { border-bottom-style: solid; }
     .gloss-pop {
-      position: fixed; z-index: 200; max-width: min(320px, 88vw);
+      position: fixed; z-index: 200; max-width: min(560px, 92vw);
       background: var(--card, var(--code-bg)); border: 1px solid var(--rule, var(--dot-inactive));
       border-radius: 8px; padding: 0.7rem 0.9rem; box-shadow: 0 8px 30px rgba(0,0,0,0.35);
     }
     .gloss-pop h4 { margin: 0 0 0.35rem; font-size: 0.82rem; color: var(--text); font-family: var(--mono); }
     .gloss-pop p { margin: 0; font-size: 0.8rem; line-height: 1.5; color: var(--muted); }
+    .gloss-ex {
+      margin: 0.55rem 0 0; padding: 0.55rem 0.7rem; max-height: 40vh; overflow: auto;
+      background: var(--code-bg); border: 1px solid var(--rule, var(--dot-inactive)); border-radius: 6px;
+      font-family: var(--mono); font-size: 0.72rem; line-height: 1.45; color: var(--text);
+      white-space: pre; text-align: left;
+    }
+    .gloss-src { margin-top: 0.45rem; font-size: 0.68rem; color: var(--muted); font-family: var(--mono); }
+    .gloss-src::before { content: "source: "; }
 
     @media (max-width: 640px) {
       .loop-flow { flex-direction: column; }
@@ -253,7 +261,7 @@
         <h2>Three loops, five crew</h2>
 
         <p>Two agents sit outside the shipment loops: on-call and docs. A
-        human enters the loop through <code>/bug</code> and
+        human enters the loop through <code>/bugfix</code> and
         <code>/feature</code>, which run <code>write-ticket</code>. Every
         gate takes a human stamp.</p>
 
@@ -276,7 +284,7 @@
 
         <div class="callout"><strong>Skills-parity.</strong> Agents run the
         <em>same skill files</em> a human session invokes. A human enters
-        through <code>/bug</code> and <code>/feature</code> &mdash; both run
+        through <code>/bugfix</code> and <code>/feature</code> &mdash; both run
         <code>write-ticket</code> &mdash; then <code>polish-ticket</code>,
         <code>execute-ticket</code>, <code>coverage-audit</code>: installed
         per-project, one implementation, N callers. The full disposition
@@ -550,7 +558,7 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
 
         // Hand-tuned skill coordinates for this fixed graph; unknown ids fall back to a grid.
         const P = {
-          bug: { x: 90, y: 150 }, feature: { x: 90, y: 232 },
+          bugfix: { x: 90, y: 150 }, feature: { x: 90, y: 232 },
           'write-ticket': { x: 255, y: 300 }, 'polish-ticket': { x: 425, y: 300 }, 'execute-ticket': { x: 595, y: 300 },
           'coverage-audit': { x: 425, y: 412 },
           collectors: { x: 150, y: 482 }, proposals: { x: 150, y: 560 },
@@ -646,7 +654,7 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
            </svg>`;
 
         const kinds = [
-          ['pipeline', 'ticket pipeline'], ['frontdoor', 'front door · /bug /feature'],
+          ['pipeline', 'ticket pipeline'], ['frontdoor', 'front door · /bugfix /feature'],
           ['shared', 'shared audit'], ['infra', 'self-test / config'], ['owned', 'agent-owned']
         ];
         legendEl.innerHTML =
@@ -716,11 +724,16 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
              ${chips ? `<div class="role-chips">${chips}</div>` : ''}
              <div class="skill-detail"><p>${linkGloss(esc(s.detail))}</p></div>`;
         } else {
-          const def = (data.glossary || {})[label];
+          const gl = (data.glossary || {})[label];
+          const gdef = typeof gl === 'string' ? gl : (gl && gl.def) || '';
+          const gex = (gl && typeof gl === 'object' && gl.example) ? gl.example : '';
+          const gsrc = (gl && typeof gl === 'object' && gl.source) ? gl.source : '';
           body.innerHTML =
             `<h3>${esc(label)}</h3>
              ${rec && rec.kind ? `<div class="was">${esc(rec.kind)}</div>` : ''}
-             ${def ? `<div class="skill-detail"><p>${esc(def)}</p></div>` : ''}`;
+             ${gdef ? `<div class="skill-detail"><p>${esc(gdef)}</p></div>` : ''}
+             ${gex ? `<pre class="gloss-ex" style="margin:0.6rem 0 0;">${esc(gex)}</pre>` : ''}
+             ${gsrc ? `<div class="gloss-src">${esc(gsrc)}</div>` : ''}`;
         }
         drawer.classList.add('open');
         overlay.classList.add('open');
@@ -733,11 +746,16 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
       function openGloss(btn) {
         closeGloss();
         const term = btn.dataset.term;
-        const def = (data.glossary || {})[term];
-        if (!def) return;
+        const g = (data.glossary || {})[term];
+        if (!g) return;
+        const def = typeof g === 'string' ? g : (g.def || '');
+        const ex = (typeof g === 'object' && g.example) ? g.example : '';
+        const src = (typeof g === 'object' && g.source) ? g.source : '';
         glossPop = document.createElement('div');
         glossPop.className = 'gloss-pop';
-        glossPop.innerHTML = `<h4>${esc(term)}</h4><p>${esc(def)}</p>`;
+        glossPop.innerHTML = `<h4>${esc(term)}</h4><p>${esc(def)}</p>` +
+          (ex ? `<pre class="gloss-ex">${esc(ex)}</pre>` : '') +
+          (src ? `<div class="gloss-src">${esc(src)}</div>` : '');
         document.body.appendChild(glossPop);
         const r = btn.getBoundingClientRect();
         const pw = glossPop.offsetWidth, ph = glossPop.offsetHeight;
@@ -779,8 +797,9 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
         if (drawer.classList.contains('open')) closeCrew();
       });
 
-      // Clickable glossary jargon in the static "One skill file" slide.
-      document.querySelectorAll('#skill-model .callout, #skill-model .pgist').forEach(el => {
+      // Clickable glossary jargon in all static slide prose (paragraphs,
+      // callouts, board cells) — drawer content is glossarized at render time.
+      document.querySelectorAll('#deck .slide-inner p, #deck .callout, #deck .pgist').forEach(el => {
         el.innerHTML = linkGloss(el.innerHTML);
       });
     })();
