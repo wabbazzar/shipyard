@@ -48,7 +48,7 @@ The mode is in `RUN CONTEXT.mode`. Branch on it.
   report.
 - **No drive-by refactors.** Make the smallest change that makes the
   failing check pass.
-- **Forbidden paths from `config.augur.forbidden_paths` apply to you
+- **Forbidden paths from `config.build.forbidden_paths` apply to you
   too.** If a fix requires editing `src/lib/auth/**`, `src/lib/chat/**`,
   or `agents/**` / `scripts/<project>-augur*` / `scripts/<project>-guardian*`,
   abort and report — auth and the agents themselves are human-only.
@@ -66,7 +66,7 @@ The mode is in `RUN CONTEXT.mode`. Branch on it.
 
 ## Security sweep (daily mode, config-gated)
 
-If `RUN CONTEXT.config.guardian.security` exists AND mode is `daily`,
+If `RUN CONTEXT.config.release.security` exists AND mode is `daily`,
 run three mechanical sub-checks after the project block's own checks.
 All bash, no LLM judgment — seconds of wall time, zero model tokens.
 Skip the whole section (and omit the `security` result key) when the
@@ -75,7 +75,7 @@ config block is absent or mode is `hook`.
 Config shape (`.agents/config.toml`):
 
 ```toml
-[guardian.security]
+[release.security]
 audit_dirs       = [".", "subpackage"]    # package dirs to dependency-audit
 audit_cmd        = "npm audit --json"     # optional override (default shown)
 header_probe_url = "https://api.example.com/api/auth/me"  # optional

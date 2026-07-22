@@ -1,5 +1,5 @@
 #!/bin/bash
-# agents/guardian/critic-stop-gate.sh — opt-in Stop hook for shoulder mode.
+# agents/release/critic-stop-gate.sh — opt-in Stop hook for shoulder mode.
 #
 # Default: exit 0 immediately — the gate is DISARMED unless the session
 # explicitly sets GUARDIAN_CRITIC_BLOCK=1. Quartet agents' own headless

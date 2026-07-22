@@ -1,5 +1,6 @@
-# Fixture: `augur.allow_no_ci` present and true — a repo with zero CI
+# Fixture: `build.allow_no_ci` present and true — a repo with zero CI
 # checks may pass the CI gate, but the waiver must be emitted loudly.
+# Canonical sections, no [names] block.
 
 project_name  = "__PROJECT_NAME__"
 project_owner = "fixture-owner"
@@ -9,15 +10,15 @@ branch        = "main"
 result_dir   = "tmp"
 worktree_dir = ".worktrees"
 
-[guardian]
+[release]
 test_cmd     = "true"
 typecheck    = "true"
 
-[augur]
+[build]
 budget         = 0.10
 wall_clock_sec = 60
 allow_no_ci    = true
 
 [medic]
 daily_escalation_cap = 5
-augur_can_merge      = true
+can_merge            = true

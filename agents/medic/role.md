@@ -57,7 +57,7 @@ will not invoke you. You do not need to handle the no-op case.
 For each incident, choose exactly one class. Order matters — first match wins.
 
 1. **forbidden** — failure originates inside a path listed in
-   `config.augur.forbidden_paths` (auth, chat rendering, agents/ itself).
+   `config.build.forbidden_paths` (auth, chat rendering, agents/ itself).
    Never escalate. Notify hard.
 2. **infra** — disk full, DB corrupt, container OOM, or the same external
    service has errored ≥3 times in the cooldown window (check

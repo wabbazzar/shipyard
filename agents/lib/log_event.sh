@@ -82,6 +82,12 @@ if [ -n "$ACTOR_DEFAULT" ] && [ -z "$EXPLICIT_ACTOR" ]; then
     JQ_ARGS+=(--arg v_actor "$ACTOR_DEFAULT")
     JQ_FILTER="$JQ_FILTER + {\"actor\": \$v_actor}"
 fi
+# Canonical role of the emitting agent (design/build/release/medic/scribe),
+# set by the runner. The display name lives in `svc`; `role` is the stable id.
+if [ -n "${QUARTET_ROLE:-}" ]; then
+    JQ_ARGS+=(--arg v_role "$QUARTET_ROLE")
+    JQ_FILTER="$JQ_FILTER + {\"role\": \$v_role}"
+fi
 
 for kv in "${FILTERED_ARGS[@]}"; do
     key="${kv%%=*}"

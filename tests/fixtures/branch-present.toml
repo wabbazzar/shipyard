@@ -1,4 +1,5 @@
 # Fixture: `branch` present — config must win over any auto-detection.
+# Canonical sections, no [names] block.
 
 project_name  = "__PROJECT_NAME__"
 project_owner = "fixture-owner"
@@ -8,11 +9,11 @@ branch        = "main"
 result_dir   = "tmp"
 worktree_dir = ".worktrees"
 
-[guardian]
+[release]
 test_cmd     = "true"
 typecheck    = "true"
 
-[augur]
+[build]
 budget         = 0.10
 wall_clock_sec = 60
 

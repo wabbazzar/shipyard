@@ -1,10 +1,14 @@
-# Fixture: the "key absent" variant for all three gate keys.
+# Fixture: the "key absent" variant for all three gate keys, in canonical
+# section form ([build]/[release]) with NO [names] block.
 #
-#   branch            — absent (trunk must be detected, not defaulted)
-#   medic.augur_can_merge — absent (self-merge default under test)
-#   augur.allow_no_ci — absent (a repo with zero CI checks must not pass)
+#   branch          — absent (trunk must be detected, not defaulted)
+#   medic.can_merge — absent (self-merge default under test)
+#   build.allow_no_ci — absent (a repo with zero CI checks must not pass)
 #
-# guardian.test_cmd / typecheck are no-ops so the deterministic post-merge
+# No [names] block → display names fall back to the legacy map (build→augur,
+# release→guardian), so the svc/units stay as they are today.
+#
+# release.test_cmd / typecheck are no-ops so the deterministic post-merge
 # path can run in a test without a toolchain.
 
 project_name  = "__PROJECT_NAME__"
@@ -14,13 +18,13 @@ project_owner = "fixture-owner"
 result_dir   = "tmp"
 worktree_dir = ".worktrees"
 
-[guardian]
+[release]
 test_cmd     = "true"
 typecheck    = "true"
 budget_hook  = 0.10
 budget_daily = 0.10
 
-[augur]
+[build]
 budget         = 0.10
 wall_clock_sec = 60
 

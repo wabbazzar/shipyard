@@ -1,5 +1,5 @@
 #!/bin/bash
-# agents/guardian/critic-watch.sh — debounced spawner for the shoulder-mode
+# agents/release/critic-watch.sh — debounced spawner for the shoulder-mode
 # critic. Watches the per-session queue that critic-queue.sh (PostToolUse
 # hook) appends to, and when a session goes quiet — or piles up enough
 # edits — runs ONE cold-context critique over the whole batch.
@@ -15,10 +15,10 @@
 # Env knobs (test overrides): CRITIC_IDLE_SEC (300), CRITIC_BATCH_FILES (8),
 # CRITIC_POLL_SEC (30), GUARDIAN_CRITIC_MODEL (claude default model if unset).
 #
-# Budget: sums today's guardian.critique `tokens` from the events dir
+# Budget: sums today's release.critique `tokens` from the events dir
 # (QUARTET_EVENTS_DIR or <project>/data/events) against
-# [guardian] budget_tokens_daily (default 1000000). At/over cap the
-# critique is skipped with a guardian.critique.skipped reason=budget event.
+# [release] budget_tokens_daily (default 1000000). At/over cap the
+# critique is skipped with a release.critique.skipped reason=budget event.
 #
 # Delivery: findings go to the dev session via $CLAUDE_NOTE_CMD
 # (a claude-note-style command taking <session> <message>; the hub's
@@ -69,8 +69,16 @@ if [ -f "$PROJECT_DIR/.agents/config.toml" ]; then
 fi
 PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON")"
 [ -n "$PROJECT_NAME" ] || PROJECT_NAME="$(basename "$PROJECT_DIR")"
-BUDGET_TOKENS="$(jq -r '.guardian.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
-SVC="$PROJECT_NAME-guardian"
+BUDGET_TOKENS="$(jq -r '.release.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
+
+# The shoulder-mode critic IS the release role's out-of-band voice. Resolve
+# its display through the same map — legacy configs (no [names]) keep the
+# svc string "<project>-guardian" and the critique event carries role:release.
+ROLE="release"
+export QUARTET_ROLE="$ROLE"
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/naming.sh"
+SVC="$PROJECT_NAME-$(role_display "$ROLE" "$CFG_JSON")"
 
 EVENTS_DIR="${QUARTET_EVENTS_DIR:-$PROJECT_DIR/data/events}"
 
@@ -95,7 +103,7 @@ tokens_used_today() {
   f="$EVENTS_DIR/$(date -u +%Y-%m-%d).jsonl"
   [ -f "$f" ] || { echo 0; return; }
   jq -R 'fromjson?' <"$f" 2>/dev/null | \
-    jq -s '[.[] | select(.event=="guardian.critique") | (.tokens // 0)] | add // 0' \
+    jq -s '[.[] | select(.event=="release.critique") | (.tokens // 0)] | add // 0' \
     2>/dev/null || echo 0
 }
 
@@ -111,7 +119,7 @@ critique_queue() {
   [[ "$BUDGET_TOKENS" =~ ^[0-9]+$ ]] || BUDGET_TOKENS=1000000
   if [ "$used" -ge "$BUDGET_TOKENS" ]; then
     log "skip: daily token budget reached ($used >= $BUDGET_TOKENS)"
-    emit_event guardian.critique.skipped source=shoulder reason=budget \
+    emit_event release.critique.skipped source=shoulder reason=budget \
       tokens_used="$used" budget="$BUDGET_TOKENS"
     rm -f "$queue"
     return 0
@@ -190,7 +198,7 @@ $diff"
 
   printf '%s\n' "$findings" >"$findings_file"
 
-  emit_event guardian.critique source=shoulder files="$n_files" \
+  emit_event release.critique source=shoulder files="$n_files" \
     block="$n_block" warn="$n_warn" note="$n_note" tokens="$tokens"
   log "critique: $n_block block, $n_warn warn, $n_note note across $n_files files (tokens=$tokens)"
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# agents/guardian/critic-queue.sh — PostToolUse hook: queue an edited file
+# agents/release/critic-queue.sh — PostToolUse hook: queue an edited file
 # for the shoulder-mode critic (agents/guardian/critic-watch.sh).
 #
 # Reads the Claude Code PostToolUse hook JSON from stdin, appends

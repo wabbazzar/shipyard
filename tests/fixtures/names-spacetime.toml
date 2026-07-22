@@ -1,0 +1,30 @@
+# Fixture: canonical sections + a [names] block baked by `--theme spacetime`.
+# The svc/unit display names become the spacetime cast; the canonical role
+# ids (build/release/medic/scribe) still drive dirs, sections, event roles.
+
+project_name  = "__PROJECT_NAME__"
+project_owner = "fixture-owner"
+branch        = "main"
+
+[paths]
+result_dir   = "tmp"
+worktree_dir = ".worktrees"
+
+[release]
+test_cmd     = "true"
+typecheck    = "true"
+
+[build]
+budget         = 0.10
+wall_clock_sec = 60
+
+[medic]
+daily_escalation_cap = 5
+can_merge            = true
+
+[names]
+design  = "mentat"
+build   = "helldiver"
+release = "proctor"
+medic   = "suk"
+scribe  = "chronicler"
