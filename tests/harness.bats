@@ -90,7 +90,7 @@ esac'
 @test "make_fixture_project builds a complete .agents install with a git repo" {
   proj="$(make_fixture_project demo)"
   [ -f "$proj/.agents/config.toml" ]
-  for a in guardian augur medic scribe; do
+  for a in release build medic scribe design; do
     [ -f "$proj/.agents/$a.md" ]
   done
   [ -d "$proj/tmp" ]
@@ -283,7 +283,7 @@ esac'
   [ -f "$(events_file)" ]
   line="$(events_json | jq -c 'select(.event=="job.end")')"
   [ -n "$line" ]
-  [ "$(jq -r '.svc' <<<"$line")" = "ev-guardian" ]
+  [ "$(jq -r '.svc' <<<"$line")" = "ev-release" ]
   [ "$(jq -r '.status' <<<"$line")" = "ok" ]
   [ "$(jq -r '.mode' <<<"$line")" = "post-merge" ]
   [ "$(jq -r '.merge_sha' <<<"$line")" = "$head_sha" ]

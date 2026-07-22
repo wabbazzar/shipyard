@@ -35,20 +35,13 @@ role_display() {
     printf '%s\n' "$name"
     return 0
   fi
-  case "$role" in
-    design)  printf 'design\n' ;;
-    build)   printf 'augur\n' ;;
-    release) printf 'guardian\n' ;;
-    medic)   printf 'medic\n' ;;
-    scribe)  printf 'scribe\n' ;;
-    *)       printf '%s\n' "$role" ;;
-  esac
+  # No [names] block -> the role id IS the display. (The legacy
+  # augur/guardian display map is retired; every install is post-rename.)
+  printf '%s\n' "$role"
 }
 
-# dir_for_role <role> — the agent directory for a role. Identity map onto the
-# role id (medic/scribe never renamed; build/release are the renamed dirs).
-# Back-compat symlinks agents/augur→build and agents/guardian→release keep
-# pre-rebake units' ExecStart resolving.
+# dir_for_role <role> — the agent directory for a role: an identity map
+# (the legacy augur/guardian dir aliases are retired).
 dir_for_role() {
   case "$1" in
     design)  printf 'design\n' ;;

@@ -34,31 +34,10 @@ PY
 )" || return 1
   [ -n "$raw" ] || return 1
 
-  # Legacy → canonical normalization. Older configs use [augur]/[guardian]
-  # sections and medic.augur_can_merge; the canonical shape is [build]/
-  # [release] and medic.can_merge. Back-fill the canonical keys from the
-  # legacy ones so every runner can read one shape (.build/.release/
-  # .medic.can_merge) regardless of the config's vintage. A present
-  # canonical form always wins — we never clobber it.
-  local deprecated=()
-  jq -e 'has("augur") and (has("build")|not)' <<<"$raw" >/dev/null 2>&1 \
-    && deprecated+=("[augur]")
-  jq -e 'has("guardian") and (has("release")|not)' <<<"$raw" >/dev/null 2>&1 \
-    && deprecated+=("[guardian]")
-  jq -e '((.medic.augur_can_merge) != null) and ((.medic.can_merge) == null)' \
-    <<<"$raw" >/dev/null 2>&1 && deprecated+=("augur_can_merge")
-  if [ "${#deprecated[@]}" -gt 0 ]; then
-    local joined; joined="$(IFS=/; echo "${deprecated[*]}")"
-    # stderr, NOT stdout — the caller consumes stdout as JSON.
-    echo "load-config: $joined are deprecated; migrate to [build]/[release]/can_merge" >&2
-  fi
-
-  jq -c '
-      (if (has("augur") and (has("build")|not)) then .build = .augur else . end)
-    | (if (has("guardian") and (has("release")|not)) then .release = .guardian else . end)
-    | (if ((.medic.augur_can_merge) != null and ((.medic.can_merge) == null))
-         then .medic.can_merge = .medic.augur_can_merge else . end)
-  ' <<<"$raw"
+  # Canonical shape only: [build]/[release] sections and medic.can_merge.
+  # (The legacy [augur]/[guardian]/augur_can_merge normalization is retired;
+  # configs were migrated fleet-wide 2026-07-22.)
+  printf '%s\n' "$raw"
 }
 
 # quartet_notify <title> <body> — owner notification, transport-agnostic.

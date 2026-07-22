@@ -33,7 +33,7 @@ install_agents() {
   mkdir -p "$dir/.agents" "$dir/tmp"
   sed "s/__PROJECT_NAME__/$name/g" "$FIXTURES_DIR/$cfg" >"$dir/.agents/config.toml"
   local a
-  for a in guardian augur medic scribe; do
+  for a in release build medic scribe design; do
     printf '# %s — %s\nFixture prompt.\n' "$name" "$a" >"$dir/.agents/$a.md"
   done
   grep -q '^tmp/$' "$dir/.gitignore" 2>/dev/null || printf 'tmp/\n' >>"$dir/.gitignore"
@@ -484,33 +484,32 @@ EOF
 # the event `role:` field and event-name prefixes move to canonical ids.
 # ---------------------------------------------------------------------------
 
-@test "phase9: legacy config (no [names]) — release svc stays -guardian, event role=release, deprecation warned" {
-  proj="$(make_fixture_project glegacy legacy-augur-can-merge-true.toml)"
+@test "phase9: no [names] config — release svc is the role id, role=release, no deprecation" {
+  proj="$(make_fixture_project glegacy can-merge-true.toml)"
   head_sha="$(git -C "$proj" rev-parse HEAD)"
 
   run --separate-stderr run_runner release "$proj" --mode post-merge --merge-sha "$head_sha"
   [ "$status" -eq 0 ]
-  # deprecation warning went to stderr (NOT stdout — it must not corrupt JSON)
-  [[ "$stderr" == *"deprecated"* ]]
+  # the legacy normalization is retired — nothing to deprecation-warn about
+  [[ "$stderr" != *"deprecated"* ]]
 
   line="$(events_json | jq -c 'select(.event=="job.end")')"
   [ -n "$line" ]
-  [ "$(jq -r '.svc'  <<<"$line")" = "glegacy-guardian" ]   # legacy display preserved
-  [ "$(jq -r '.role' <<<"$line")" = "release" ]            # canonical role id
+  [ "$(jq -r '.svc'  <<<"$line")" = "glegacy-release" ]    # role id IS the display
+  [ "$(jq -r '.role' <<<"$line")" = "release" ]
   [ "$(jq -r '.status' <<<"$line")" = "ok" ]
 }
 
-@test "phase9: legacy config — build check-config role=build display=augur, keys normalized" {
-  proj="$(make_fixture_project blegacy legacy-augur-can-merge-true.toml)"
+@test "phase9: no [names] config — build check-config role=build display=build, canonical keys" {
+  proj="$(make_fixture_project blegacy can-merge-true.toml)"
 
   run --separate-stderr run_runner build "$proj" --check-config
   [ "$status" -eq 0 ]
   jq -e . <<<"$output" >/dev/null                          # clean JSON on stdout
   [ "$(jq -r '.role'    <<<"$output")" = "build" ]
-  [ "$(jq -r '.display' <<<"$output")" = "augur" ]         # svc safety: legacy name
-  [ "$(jq -r '.can_merge'   <<<"$output")" = "true" ]      # augur_can_merge normalized
-  [ "$(jq -r '.allow_no_ci' <<<"$output")" = "true" ]      # [augur] allow_no_ci normalized
-  [[ "$stderr" == *"deprecated"* ]]
+  [ "$(jq -r '.display' <<<"$output")" = "build" ]         # role id IS the display
+  [ "$(jq -r '.can_merge'   <<<"$output")" = "true" ]      # [medic] can_merge, canonical
+  [[ "$stderr" != *"deprecated"* ]]
 }
 
 @test "phase9: spacetime [names] — check-config shows role:release display:proctor, build:helldiver" {
@@ -539,14 +538,15 @@ EOF
   [ "$(jq -r '.role' <<<"$line")" = "release" ]            # role is still canonical
 }
 
-@test "phase9: config normalization — legacy augur_can_merge=true → can_merge; [augur] allow_no_ci → [build]" {
+@test "phase9: legacy [augur]/[guardian] sections are NOT normalized (retired 2026-07-22)" {
   cfg="$(load_fixture_config legacy-augur-can-merge-true.toml)"
-  [ "$(jq -r '.medic.can_merge'   <<<"$cfg")" = "true" ]
-  [ "$(jq -r '.build.allow_no_ci' <<<"$cfg")" = "true" ]
-  [ "$(jq -r '.release.test_cmd'  <<<"$cfg")" = "true" ]
-  # canonical keys are back-filled; the legacy originals stay intact
-  [ "$(jq -r '.medic.augur_can_merge' <<<"$cfg")" = "true" ]
+  # the loader passes raw TOML through; legacy sections no longer back-fill
+  [ "$(jq -r '.medic.can_merge'   <<<"$cfg")" = "null" ]
+  [ "$(jq -r '.build.allow_no_ci' <<<"$cfg")" = "null" ]
+  [ "$(jq -r '.release.test_cmd'  <<<"$cfg")" = "null" ]
+  # the raw legacy keys are still present in the JSON — just unused
   [ "$(jq -r '.augur.allow_no_ci'     <<<"$cfg")" = "true" ]
+  [ "$(jq -r '.medic.augur_can_merge' <<<"$cfg")" = "true" ]
 }
 
 @test "phase9/D-L15: medic reroute on legacy config — proposal event AS design, no build.incident.* escalation" {
@@ -639,13 +639,13 @@ EOF
   make_stub claude-note 3
   P="$(make_fixture_project critcache can-merge-true.toml)"
   mkdir -p "$P/tmp"
-  printf 'src/a.ts %s\n' "$(date +%s)" >"$P/tmp/guardian-critic-queue-s9"
-  touch -d "2 minutes ago" "$P/tmp/guardian-critic-queue-s9"
+  printf 'src/a.ts %s\n' "$(date +%s)" >"$P/tmp/critic-queue-s9"
+  touch -d "2 minutes ago" "$P/tmp/critic-queue-s9"
   export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
 
   QUARTET_EVENTS_DIR="$EVENTS_DIR" \
     bash "$QUARTET_ROOT/agents/release/critic-watch.sh" --project "$P" --session s9 --once
-  [ -s "$P/tmp/guardian-critic-queue-s9" ]          # exit 3 kept the queue
+  [ -s "$P/tmp/critic-queue-s9" ]          # exit 3 kept the queue
   C1="$(stub_calls claude)"                         # prompt is multi-line; compare counts
   [ "$C1" -ge 1 ]
 

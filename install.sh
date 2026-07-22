@@ -7,8 +7,7 @@
 #   --project   Path to the target project (must contain .agents/config.toml).
 #   --dry-run   Print every change without writing anything.
 #   --agents    Comma list of roles to install. Default: build,release,medic,scribe
-#               (design is opt-in). Legacy names accepted and mapped:
-#               guardian→release, augur→build.
+#               (design is opt-in).
 #   --theme     Display-name theme baked into the project's [names] block:
 #                 plain      role IDs verbatim (default): build/release/medic/scribe
 #                 spacetime  mentat/helldiver/proctor/suk/chronicler
@@ -21,8 +20,8 @@
 #
 #   1. Writes ~/.config/systemd/user/<project_name>-<agent>.{service,timer}
 #      for each agent. Schedules come from config.toml's [install.timers]
-#      table, falling back to baked-in defaults (guardian 06:00, medic
-#      every 10 min, augur 03:30, scribe 01:00).
+#      table, falling back to baked-in defaults (release 06:00, medic
+#      every 10 min, build 03:30, scribe 01:00).
 #
 #   2. `systemctl --user daemon-reload` + `enable --now` each timer.
 #
@@ -51,7 +50,7 @@
 # Why removal, not shimming: shims preserve a working call path but also
 # preserve the surface area people forget to update. After install, the
 # canonical entry point is `agents/<name>/runner.sh --project <dir> --mode X`
-# — the same path systemd, the post-push hook, and medic→augur all use.
+# — the same path systemd, the post-push hook, and medic→build all use.
 
 set -uo pipefail
 
@@ -90,18 +89,7 @@ while [ $# -gt 0 ]; do
 done
 [ -z "$PROJECT_DIR" ] && { echo "--project required" >&2; usage; }
 
-# Normalize the --agents list to canonical role IDs (accept legacy names).
-map_agent_token() {
-  case "$1" in
-    guardian) echo release ;;
-    augur)    echo build ;;
-    *)        echo "$1" ;;
-  esac
-}
-ROLES_LIST=""
-for tok in ${AGENTS//,/ }; do
-  ROLES_LIST+="$(map_agent_token "$tok") "
-done
+ROLES_LIST="${AGENTS//,/ }" 
 PROJECT_DIR="$(cd "$PROJECT_DIR" 2>/dev/null && pwd)" || \
   { echo "project_dir not found: $PROJECT_DIR" >&2; exit 2; }
 
@@ -232,9 +220,8 @@ echo "==> systemd units (project=$PROJECT_NAME dir=$PROJECT_DIR)"
 for role in $ROLES_LIST; do
   # Timer schedule: config's [install.timers] wins (accept role id OR the
   # legacy display key), else the baked-in default.
-  legacy_key="$(role_display "$role" '{}')"
-  schedule="$(jq -r --arg r "$role" --arg l "$legacy_key" \
-    '.install.timers[$r] // .install.timers[$l] // empty' <<<"$CFG_JSON")"
+  schedule="$(jq -r --arg r "$role" \
+    '.install.timers[$r] // empty' <<<"$CFG_JSON")"
   [ -z "$schedule" ] && schedule="$(default_schedule "$role")"
   [ -z "$schedule" ] && { echo "  skip $role: no schedule"; continue; }
   mode="$(default_mode "$role")"

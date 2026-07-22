@@ -102,11 +102,9 @@ now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # ---------- live / dry-run: native handling ---------------------------------
 if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
   ROLE_FILE="$SCRIPT_DIR/role.md"
-  # Role-id filename first; .agents/augur.md is the legacy name (pre-rename).
   PROJECT_PROMPT="$PROJECT_DIR/.agents/build.md"
-  [ -f "$PROJECT_PROMPT" ] || PROJECT_PROMPT="$PROJECT_DIR/.agents/augur.md"
   [ -f "$ROLE_FILE" ]      || { echo "role.md missing: $ROLE_FILE" >&2; exit 2; }
-  [ -f "$PROJECT_PROMPT" ] || { echo "project build.md (or legacy augur.md) missing: $PROJECT_DIR/.agents/" >&2; exit 2; }
+  [ -f "$PROJECT_PROMPT" ] || { echo "project build.md missing: $PROJECT_DIR/.agents/" >&2; exit 2; }
 
   WALL_CLOCK="$(jq -r '.build.wall_clock_sec // 3600' <<<"$CFG_JSON")"
   BUDGET="$(jq -r '.build.budget // 2.00' <<<"$CFG_JSON")"

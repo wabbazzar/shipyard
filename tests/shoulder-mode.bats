@@ -32,7 +32,7 @@ queue_files() {
   local project="$1" session="$2" n="$3" i
   for i in $(seq 1 "$n"); do
     printf 'src/f%02d.ts %s\n' "$i" "$(date +%s)" \
-      >> "$project/tmp/guardian-critic-queue-$session"
+      >> "$project/tmp/critic-queue-$session"
   done
 }
 
@@ -49,7 +49,7 @@ critique_events() {
   run bash -c "printf '%s' '{\"session_id\":\"s1\",\"tool_input\":{\"file_path\":\"src/a.ts\"}}' \
     | CLAUDE_PROJECT_DIR='$P' bash '$QUARTET_ROOT/$QUEUE_HOOK'"
   [ "$status" -eq 0 ]
-  Q="$P/tmp/guardian-critic-queue-s1"
+  Q="$P/tmp/critic-queue-s1"
   [ -f "$Q" ]
   run grep -cE '^src/a\.ts [0-9]+$' "$Q"
   [ "$output" = "1" ]
@@ -59,7 +59,7 @@ critique_events() {
   P="$(make_fixture_project critq-garbage)"
   run bash -c "printf 'not json {{{[' | CLAUDE_PROJECT_DIR='$P' bash '$QUARTET_ROOT/$QUEUE_HOOK'"
   [ "$status" -eq 0 ]
-  run bash -c "ls '$P/tmp'/guardian-critic-queue-* 2>/dev/null"
+  run bash -c "ls '$P/tmp'/critic-queue-* 2>/dev/null"
   [ -z "$output" ]
 }
 
@@ -68,7 +68,7 @@ critique_events() {
   run bash -c "printf '%s' '{\"session_id\":\"s1\",\"tool_input\":{\"command\":\"ls\"}}' \
     | CLAUDE_PROJECT_DIR='$P' bash '$QUARTET_ROOT/$QUEUE_HOOK'"
   [ "$status" -eq 0 ]
-  run bash -c "ls '$P/tmp'/guardian-critic-queue-* 2>/dev/null"
+  run bash -c "ls '$P/tmp'/critic-queue-* 2>/dev/null"
   [ -z "$output" ]
 }
 
@@ -103,7 +103,7 @@ critique_events() {
   P="$(make_fixture_project critc)"
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
   queue_files "$P" s1 2
-  touch -d "2 minutes ago" "$P/tmp/guardian-critic-queue-s1"
+  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
   export CRITIC_BATCH_FILES=100 CRITIC_IDLE_SEC=1
 
   run run_watch "$P" --session s1 --once
@@ -120,7 +120,7 @@ critique_events() {
   run run_watch "$P" --session s1 --once
   [ "$status" -eq 0 ]
   [ "$(critique_events | wc -l)" -eq 0 ]
-  [ -s "$P/tmp/guardian-critic-queue-s1" ]
+  [ -s "$P/tmp/critic-queue-s1" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ critique_events() {
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
   make_stub claude-note 0
   queue_files "$P" s1 2
-  touch -d "2 minutes ago" "$P/tmp/guardian-critic-queue-s1"
+  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
   export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
 
   run run_watch "$P" --session s1 --once
@@ -145,19 +145,19 @@ critique_events() {
   [ "$(jq -r '.note'   <<<"$EV")" = "1" ]
   [ "$(jq -r '.tokens' <<<"$EV")" = "1545" ]
   [ "$(jq -r '.files'  <<<"$EV")" = "2" ]
-  [ "$(jq -r '.svc'    <<<"$EV")" = "critd-guardian" ]
+  [ "$(jq -r '.svc'    <<<"$EV")" = "critd-release" ]
   [ "$(jq -r '.source' <<<"$EV")" = "shoulder" ]
 
   # delivery invoked: target session first, findings summary after
-  run grep -c '^s1 guardian critic: 1 block, 2 warn, 1 note' "$SHIM_LOG/claude-note.argv"
+  run grep -c '^s1 release critic: 1 block, 2 warn, 1 note' "$SHIM_LOG/claude-note.argv"
   [ "$output" = "1" ]
 
   # findings file written beside the queue for the stop gate
-  run grep -c '^block|src/auth.ts|' "$P/tmp/guardian-critic-findings-s1"
+  run grep -c '^block|src/auth.ts|' "$P/tmp/critic-findings-s1"
   [ "$output" = "1" ]
 
   # successful delivery clears the queue
-  [ ! -e "$P/tmp/guardian-critic-queue-s1" ]
+  [ ! -e "$P/tmp/critic-queue-s1" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -172,7 +172,7 @@ critique_events() {
     '{"ts":"2026-01-01T00:00:00Z","svc":"crite-guardian","event":"release.critique","tokens":999999999}' \
     >> "$(events_file)"
   queue_files "$P" s1 2
-  touch -d "2 minutes ago" "$P/tmp/guardian-critic-queue-s1"
+  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
   export CRITIC_IDLE_SEC=1
 
   run run_watch "$P" --session s1 --once
@@ -195,18 +195,18 @@ critique_events() {
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
   make_stub claude-note 3
   queue_files "$P" s1 2
-  touch -d "2 minutes ago" "$P/tmp/guardian-critic-queue-s1"
+  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
   export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
 
   run run_watch "$P" --session s1 --once
   [ "$status" -eq 0 ]
-  [ -s "$P/tmp/guardian-critic-queue-s1" ]   # intact for retry
+  [ -s "$P/tmp/critic-queue-s1" ]   # intact for retry
 
   make_stub claude-note 0                     # session freed up
-  touch -d "2 minutes ago" "$P/tmp/guardian-critic-queue-s1"
+  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
   run run_watch "$P" --session s1 --once
   [ "$status" -eq 0 ]
-  [ ! -e "$P/tmp/guardian-critic-queue-s1" ]  # cleared after delivery
+  [ ! -e "$P/tmp/critic-queue-s1" ]  # cleared after delivery
 }
 
 @test "claude-note exit 2 (ambiguous target) also keeps the queue" {
@@ -214,26 +214,26 @@ critique_events() {
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
   make_stub claude-note 2
   queue_files "$P" s1 2
-  touch -d "2 minutes ago" "$P/tmp/guardian-critic-queue-s1"
+  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
   export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
 
   run run_watch "$P" --session s1 --once
   [ "$status" -eq 0 ]
-  [ -s "$P/tmp/guardian-critic-queue-s1" ]
+  [ -s "$P/tmp/critic-queue-s1" ]
 }
 
 @test "no CLAUDE_NOTE_CMD: delivery skipped with a log line, queue cleared" {
   P="$(make_fixture_project critf3)"
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
   queue_files "$P" s1 2
-  touch -d "2 minutes ago" "$P/tmp/guardian-critic-queue-s1"
+  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
   export CRITIC_IDLE_SEC=1
   unset CLAUDE_NOTE_CMD
 
   run run_watch "$P" --session s1 --once
   [ "$status" -eq 0 ]
   [[ "$output" == *"CLAUDE_NOTE_CMD unset"* ]]
-  [ ! -e "$P/tmp/guardian-critic-queue-s1" ]
+  [ ! -e "$P/tmp/critic-queue-s1" ]
   [ "$(critique_events | wc -l)" -eq 1 ]
 }
 
@@ -244,7 +244,7 @@ critique_events() {
 @test "stop-gate: disarmed (no env) exits 0 even with block findings" {
   P="$(make_fixture_project critg-off)"
   printf 'block|src/auth.ts|removes session check\n' \
-    >"$P/tmp/guardian-critic-findings-s1"
+    >"$P/tmp/critic-findings-s1"
   run bash -c "printf '%s' '{\"session_id\":\"s1\"}' \
     | CLAUDE_PROJECT_DIR='$P' bash '$QUARTET_ROOT/$STOP_GATE'"
   [ "$status" -eq 0 ]
@@ -253,9 +253,9 @@ critique_events() {
 @test "stop-gate: armed + block findings exits 2 and names the finding" {
   P="$(make_fixture_project critg-block)"
   printf 'block|src/auth.ts|removes session check\nwarn|src/api.ts|no test\n' \
-    >"$P/tmp/guardian-critic-findings-s1"
+    >"$P/tmp/critic-findings-s1"
   run bash -c "printf '%s' '{\"session_id\":\"s1\"}' \
-    | GUARDIAN_CRITIC_BLOCK=1 CLAUDE_PROJECT_DIR='$P' bash '$QUARTET_ROOT/$STOP_GATE'"
+    | CRITIC_BLOCK=1 CLAUDE_PROJECT_DIR='$P' bash '$QUARTET_ROOT/$STOP_GATE'"
   [ "$status" -eq 2 ]
   [[ "$output" == *"removes session check"* ]]
   [[ "$output" != *"src/api.ts"* ]]   # warn findings don't gate
@@ -264,8 +264,8 @@ critique_events() {
 @test "stop-gate: armed + only warn/note findings exits 0" {
   P="$(make_fixture_project critg-warn)"
   printf 'warn|src/api.ts|no test\nnote|README.md|doc gap\n' \
-    >"$P/tmp/guardian-critic-findings-s1"
+    >"$P/tmp/critic-findings-s1"
   run bash -c "printf '%s' '{\"session_id\":\"s1\"}' \
-    | GUARDIAN_CRITIC_BLOCK=1 CLAUDE_PROJECT_DIR='$P' bash '$QUARTET_ROOT/$STOP_GATE'"
+    | CRITIC_BLOCK=1 CLAUDE_PROJECT_DIR='$P' bash '$QUARTET_ROOT/$STOP_GATE'"
   [ "$status" -eq 0 ]
 }
