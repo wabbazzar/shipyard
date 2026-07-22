@@ -107,10 +107,59 @@ tokens_used_today() {
     2>/dev/null || echo 0
 }
 
+# ---------- delivery (separate so retries can reuse a cached critique) ------
+deliver_findings() {
+  local queue="$1" session="$2" findings_file="$3" n_files="$4"
+  local findings n_block n_warn n_note
+  findings="$(cat "$findings_file" 2>/dev/null || true)"
+  n_block="$(grep -c '^block|' <<<"$findings" || true)"
+  n_warn="$(grep -c '^warn|' <<<"$findings" || true)"
+  n_note="$(grep -c '^note|' <<<"$findings" || true)"
+
+  if [ -z "${CLAUDE_NOTE_CMD:-}" ]; then
+    log "CLAUDE_NOTE_CMD unset; skipping delivery"
+    rm -f "$queue"
+    return 0
+  fi
+
+  local summary
+  summary="guardian critic: $n_block block, $n_warn warn, $n_note note across $n_files files"
+  if [ -n "$findings" ]; then
+    summary="$summary
+$(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
+  fi
+
+  local note_rc
+  # shellcheck disable=SC2086 — word-splitting CLAUDE_NOTE_CMD is intentional
+  $CLAUDE_NOTE_CMD "$session" "$summary"
+  note_rc=$?
+  case "$note_rc" in
+    2|3)
+      # 2 = ambiguous target, 3 = session at an interactive prompt — the
+      # note was NOT delivered. Keep the queue so a later pass retries.
+      log "claude-note exit $note_rc; queue kept for retry" ;;
+    *)
+      rm -f "$queue" ;;
+  esac
+  return 0
+}
+
 # ---------- one critique over a queue file ----------------------------------
 critique_queue() {
   local queue="$1" session="$2"
   local findings_file="$QUEUE_DIR/guardian-critic-findings-$session"
+
+  # Delivery-retry guard: when a critique already ran for this exact queue
+  # state (findings newer than the last queue write), reuse it instead of
+  # re-spending the model — claude-note exit 2/3 keeps the queue, and
+  # without this every poll pass would re-run the whole critique.
+  if [ -s "$findings_file" ] && [ "$findings_file" -nt "$queue" ]; then
+    local cached_n
+    cached_n="$(awk '{print $1}' "$queue" 2>/dev/null | sort -u | grep -c . || true)"
+    log "reusing cached critique for session $session (delivery retry)"
+    deliver_findings "$queue" "$session" "$findings_file" "$cached_n"
+    return 0
+  fi
 
   # Budget gate — before any model spend.
   local used
@@ -203,31 +252,7 @@ $diff"
   log "critique: $n_block block, $n_warn warn, $n_note note across $n_files files (tokens=$tokens)"
 
   # ---- deliver to the dev session -------------------------------------------
-  if [ -z "${CLAUDE_NOTE_CMD:-}" ]; then
-    log "CLAUDE_NOTE_CMD unset; skipping delivery"
-    rm -f "$queue"
-    return 0
-  fi
-
-  local summary
-  summary="guardian critic: $n_block block, $n_warn warn, $n_note note across $n_files files"
-  if [ -n "$findings" ]; then
-    summary="$summary
-$(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
-  fi
-
-  local note_rc
-  # shellcheck disable=SC2086 — word-splitting CLAUDE_NOTE_CMD is intentional
-  $CLAUDE_NOTE_CMD "$session" "$summary"
-  note_rc=$?
-  case "$note_rc" in
-    2|3)
-      # 2 = ambiguous target, 3 = session at an interactive prompt — the
-      # note was NOT delivered. Keep the queue so a later pass retries.
-      log "claude-note exit $note_rc; queue kept for retry" ;;
-    *)
-      rm -f "$queue" ;;
-  esac
+  deliver_findings "$queue" "$session" "$findings_file" "$n_files"
   return 0
 }
 

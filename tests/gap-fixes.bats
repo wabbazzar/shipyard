@@ -576,3 +576,83 @@ EOF
   [ -z "$(events_json | jq -c 'select(.event=="release.post_merge.run")')" ]
   [ "$(stub_calls augur-runner)" = "0" ]
 }
+
+# ---------------------------------------------------------------------------
+# Theme re-bake dedupe: a rename/theme change must never leave two unit sets
+# ---------------------------------------------------------------------------
+
+@test "re-install with a new theme sweeps the old-name unit set for the same role" {
+  make_stub systemctl 0
+  make_stub crontab 0 ""
+  make_stub gh 0
+  make_stub claude 0
+  P="$(make_fixture_project themedup can-merge-true.toml)"
+  UNITS="$HOME/.config/systemd/user"
+
+  # First install: default display names are the role ids — themedup-release.
+  QUARTET_DIR="$QUARTET_ROOT" bash "$QUARTET_ROOT/install.sh" \
+    --project "$P" --agents release >/dev/null
+  [ -f "$UNITS/themedup-release.service" ]
+  [ -f "$UNITS/themedup-release.timer" ]
+  # Plus a hand-planted LEGACY-name unit for the same role (old guardian dir
+  # alias) — the sweep must catch it too.
+  sed 's#agents/release/runner.sh#agents/guardian/runner.sh#; ' \
+    "$UNITS/themedup-release.service" >"$UNITS/themedup-guardian.service"
+  cp "$UNITS/themedup-release.timer" "$UNITS/themedup-guardian.timer"
+
+  # Re-install with a theme: new name written, old-name set for the SAME
+  # role removed — this is the duplicate-initiation bug.
+  run env QUARTET_DIR="$QUARTET_ROOT" bash "$QUARTET_ROOT/install.sh" \
+    --project "$P" --agents release --theme spacetime
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"removed stale duplicate: themedup-release"* ]]
+  [[ "$output" == *"removed stale duplicate: themedup-guardian"* ]]
+  [ -f "$UNITS/themedup-proctor.service" ]
+  [ -f "$UNITS/themedup-proctor.timer" ]
+  [ ! -e "$UNITS/themedup-release.service" ]
+  [ ! -e "$UNITS/themedup-release.timer" ]
+  [ ! -e "$UNITS/themedup-guardian.service" ]
+  [ ! -e "$UNITS/themedup-guardian.timer" ]
+}
+
+@test "dry-run announces the stale-duplicate sweep without touching files" {
+  make_stub systemctl 0
+  make_stub crontab 0 ""
+  make_stub gh 0
+  make_stub claude 0
+  P="$(make_fixture_project themedry can-merge-true.toml)"
+  UNITS="$HOME/.config/systemd/user"
+
+  QUARTET_DIR="$QUARTET_ROOT" bash "$QUARTET_ROOT/install.sh" \
+    --project "$P" --agents release >/dev/null
+  [ -f "$UNITS/themedry-release.service" ]
+
+  run env QUARTET_DIR="$QUARTET_ROOT" bash "$QUARTET_ROOT/install.sh" \
+    --project "$P" --agents release --theme spacetime --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"would remove stale duplicate: themedry-release"* ]]
+  [ -f "$UNITS/themedry-release.service" ]   # untouched on dry-run
+}
+
+@test "delivery retry reuses the cached critique instead of re-running claude" {
+  make_stub claude 0 '{"type":"result","result":"warn|src/a.ts|no test","usage":{"input_tokens":10,"output_tokens":5}}'
+  make_stub claude-note 3
+  P="$(make_fixture_project critcache can-merge-true.toml)"
+  mkdir -p "$P/tmp"
+  printf 'src/a.ts %s\n' "$(date +%s)" >"$P/tmp/guardian-critic-queue-s9"
+  touch -d "2 minutes ago" "$P/tmp/guardian-critic-queue-s9"
+  export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
+
+  QUARTET_EVENTS_DIR="$EVENTS_DIR" \
+    bash "$QUARTET_ROOT/agents/release/critic-watch.sh" --project "$P" --session s9 --once
+  [ -s "$P/tmp/guardian-critic-queue-s9" ]          # exit 3 kept the queue
+  C1="$(stub_calls claude)"                         # prompt is multi-line; compare counts
+  [ "$C1" -ge 1 ]
+
+  run env QUARTET_EVENTS_DIR="$EVENTS_DIR" CRITIC_IDLE_SEC=1 \
+    CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note" \
+    bash "$QUARTET_ROOT/agents/release/critic-watch.sh" --project "$P" --session s9 --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"reusing cached critique"* ]]
+  [ "$(stub_calls claude)" = "$C1" ]                # NOT re-run
+}

@@ -246,6 +246,32 @@ for role in $ROLES_LIST; do
   service_path="$SYSTEMD_DIR/${PROJECT_NAME}-${display}.service"
   timer_path="$SYSTEMD_DIR/${PROJECT_NAME}-${display}.timer"
 
+  # A theme change or rename must never leave two live unit sets for one
+  # project+role: sweep any OTHER unit of this project whose ExecStart runs
+  # this role's runner (including the legacy augur/guardian dir aliases).
+  # Plain-name leftovers have fired alongside a spacetime set before.
+  role_dirs="$dir"
+  [ "$role" = "build" ]   && role_dirs="$role_dirs augur"
+  [ "$role" = "release" ] && role_dirs="$role_dirs guardian"
+  for old_svc in "$SYSTEMD_DIR/${PROJECT_NAME}-"*.service; do
+    [ -e "$old_svc" ] || continue
+    [ "$old_svc" = "$service_path" ] && continue
+    grep -q -- "--project $PROJECT_DIR " "$old_svc" 2>/dev/null || continue
+    stale=0
+    for rd in $role_dirs; do
+      grep -q "agents/$rd/runner.sh" "$old_svc" 2>/dev/null && stale=1
+    done
+    [ "$stale" = "1" ] || continue
+    old_base="$(basename "${old_svc%.service}")"
+    if [ "$DRY_RUN" = "1" ]; then
+      echo "  would remove stale duplicate: $old_base.{service,timer} (role $role under an old name)"
+    else
+      systemctl --user disable --now "$old_base.timer" >/dev/null 2>&1 || true
+      rm -f "$old_svc" "$SYSTEMD_DIR/$old_base.timer"
+      echo "  removed stale duplicate: $old_base.{service,timer} (role $role under an old name)"
+    fi
+  done
+
   # Propagate quartet runtime knobs set at install time into the unit —
   # systemd user services get a near-empty environment otherwise, which
   # silently mutes notifications and disables medic's ops scan.
