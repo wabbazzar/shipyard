@@ -1,3 +1,3 @@
-name = "guardian-quartet"
-description = "Autonomous repo-maintenance agents: guardian (tests+audits), augur (feedback→PRs), medic (failure triage), scribe (docs)"
+name = "shipyard"
+description = "Autonomous repo-maintenance crews: design, build, release, on-call, docs — systemd-timed, PR-gated, event-logged"
 fragment = "CLAUDE.fragment.md"
