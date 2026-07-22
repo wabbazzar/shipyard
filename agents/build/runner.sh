@@ -2,13 +2,15 @@
 # agents/build/runner.sh — generic build (augur) wrapper.
 #
 # Live and dry-run modes run natively here (nightly feedback triage →
-# autonomous PRs). Incident mode is the medic handoff path — single
-# incident, sync invocation, with self-merge gate.
+# autonomous PRs). Incident mode is RETIRED (D-L15): incident repair now
+# routes through the design loop (medic writes a proposal → mentat →
+# helldiver). `--mode ticket` drives execute-ticket on a ratified ticket,
+# gated behind [build] ticket_mode (default false → no-op).
 #
 # Usage:
 #   runner.sh --project DIR --mode live
 #   runner.sh --project DIR --mode dry-run
-#   runner.sh --project DIR --mode incident --incident-file PATH
+#   runner.sh --project DIR --mode ticket --ticket-file PATH   # gated: [build].ticket_mode
 #   runner.sh --project DIR --check-config   # print effective gates, read-only
 #
 # Result file (written to $PROJECT_DIR/$paths.result_dir/$project-augur-result.json):
@@ -26,12 +28,14 @@ export QUARTET_SOURCE="${QUARTET_SOURCE:-system}"
 PROJECT_DIR=""
 MODE=""
 INCIDENT_FILE=""
+TICKET_FILE=""
 CHECK_CONFIG=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --project)        PROJECT_DIR="$2"; shift 2 ;;
     --mode)           MODE="$2"; shift 2 ;;
     --incident-file)  INCIDENT_FILE="$2"; shift 2 ;;
+    --ticket-file|--ticket) TICKET_FILE="$2"; shift 2 ;;
     --check-config)   CHECK_CONFIG=1; shift ;;
     -h|--help)        sed -n '2,16p' "$0"; exit 0 ;;
     *)                echo "unknown arg: $1" >&2; exit 2 ;;
@@ -243,298 +247,62 @@ $RUN_CONTEXT"
   exit "$EXIT"
 fi
 
-if [ "$MODE" != "incident" ]; then
-  echo "unknown mode: $MODE" >&2; exit 2
-fi
+# ---------- ticket mode (Phase 11 wiring; DEFAULT OFF) ----------------------
+# Opt-in hook: drive the execute-ticket skill on a ratified ticket. Gated
+# behind [build] ticket_mode — an unset/false flag is EXACTLY today's
+# behavior (no timer uses this mode), so the live fleet is unaffected.
+if [ "$MODE" = "ticket" ]; then
+  TICKET_MODE="$(jq -r '.build.ticket_mode // false' <<<"$CFG_JSON")"
+  if [ "$TICKET_MODE" != "true" ]; then
+    echo "ticket_mode disabled ([build].ticket_mode is not true) — --mode ticket is a no-op" >&2
+    exit 2
+  fi
+  [ -z "$TICKET_FILE" ] && { echo "--ticket-file required for ticket mode" >&2; exit 2; }
+  [ -f "$TICKET_FILE" ] || { echo "ticket file not found: $TICKET_FILE" >&2; exit 2; }
 
-[ -z "$INCIDENT_FILE" ] && { echo "--incident-file required for incident mode" >&2; exit 2; }
-[ -f "$INCIDENT_FILE" ] || { echo "incident file not found: $INCIDENT_FILE" >&2; exit 2; }
+  WALL_CLOCK="$(jq -r '.build.wall_clock_sec // 3600' <<<"$CFG_JSON")"
+  BUDGET="$(jq -r '.build.budget // 2.00' <<<"$CFG_JSON")"
+  LOG_FILE="$RESULT_DIR/$SVC-ticket-last-run.log"
+  JOB_START="$(date +%s)"
+  echo "[$SVC] $(now_iso) start mode=ticket ticket=$TICKET_FILE" > "$LOG_FILE"
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.start \
+    mode="ticket" project="$PROJECT_NAME" || true
 
-# ---------- incident-mode setup ---------------------------------------------
-INCIDENT_ID="$(jq -r '.incident_id' "$INCIDENT_FILE")"
-INCIDENT_SUMMARY="$(jq -r '.summary // "(no summary)"' "$INCIDENT_FILE")"
-ID_PREFIX="${INCIDENT_ID:0:12}"
-BRANCH="medic-incident-$ID_PREFIX"
-WORKTREE_PATH="$WORKTREE_DIR/medic-incident-$ID_PREFIX"
-RESULT_FILE="$RESULT_DIR/$SVC-result.json"
-LOG_FILE="$RESULT_DIR/$SVC-incident-$ID_PREFIX.log"
+  # Headless: the execute-ticket skill is symlinked into
+  # <project>/.claude/skills at install, so a cwd-at-project `claude -p`
+  # auto-discovers it. Same wall-clock/budget contract as live mode.
+  MODEL="${BUILD_MODEL:-sonnet}"
+  PROMPT="Use the execute-ticket skill to build the ticket at $TICKET_FILE to completion. It is a ratified ticket; build it phase-by-phase and verify each phase on the real system per the project's gate file (.agents/gates.md)."
 
-INCIDENT_BUDGET="$(jq -r '.build.budget_incident // 1.50' <<<"$CFG_JSON")"
-WALL_CLOCK="$(jq -r '.build.wall_clock_sec // 3600' <<<"$CFG_JSON")"
-AUGUR_CAN_MERGE="$(jq -r '.medic.can_merge // false' <<<"$CFG_JSON")"
-ALLOW_NO_CI="$(jq -r '.build.allow_no_ci // false' <<<"$CFG_JSON")"
-IN_SCOPE_PATHS="$(jq -c '.build.in_scope_paths // []' <<<"$CFG_JSON")"
-FORBIDDEN_PATHS="$(jq -c '.build.forbidden_paths // []' <<<"$CFG_JSON")"
+  cd "$PROJECT_DIR"
+  set +e
+  timeout "$WALL_CLOCK" claude -p \
+    --model "$MODEL" \
+    --dangerously-skip-permissions \
+    --max-budget-usd "$BUDGET" \
+    --output-format text \
+    "$PROMPT" \
+    >> "$LOG_FILE" 2>&1
+  EXIT=$?
+  set -e
+  echo "[$SVC] execute-ticket exit=$EXIT" >> "$LOG_FILE"
 
-JOB_START="$(date +%s)"
-echo "[augur-incident] $(now_iso) start id=$INCIDENT_ID branch=$BRANCH" > "$LOG_FILE"
-[ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.start \
-  mode="incident" incident_id="$INCIDENT_ID" project="$PROJECT_NAME" || true
-
-write_failure() {
-  # write_failure <reason>
-  jq -n \
-    --arg ts "$(now_iso)" \
-    --arg iid "$INCIDENT_ID" \
-    --arg br "$BRANCH" \
-    --arg reason "$1" \
-    '{pass:false, incident_id:$iid, branch:$br, pr_url:"", merge_sha:"",
-      files_changed:[], errors:[$reason], timestamp:$ts}' > "$RESULT_FILE"
   JOB_DUR=$(( $(date +%s) - JOB_START ))
+  JOB_STATUS=$([ "$EXIT" = "0" ] && echo "ok" || echo "fail")
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
-    mode="incident" status="fail" reason="$1" duration_s="$JOB_DUR" \
-    incident_id="$INCIDENT_ID" || true
-}
-
-# Pre-flight: clean trunk checkout, on the trunk branch, push if ahead.
-cd "$PROJECT_DIR"
-if [ -n "$(git status --porcelain)" ]; then
-  echo "[augur-incident] ABORT: trunk checkout dirty" >> "$LOG_FILE"
-  git status --short >> "$LOG_FILE"
-  write_failure "trunk_checkout_dirty"
-  exit 1
-fi
-CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-if [ "$CURRENT_BRANCH" != "$TRUNK_BRANCH" ]; then
-  echo "[augur-incident] ABORT: not on $TRUNK_BRANCH ($CURRENT_BRANCH)" >> "$LOG_FILE"
-  write_failure "not_on_trunk"
-  exit 1
-fi
-git fetch origin "$TRUNK_BRANCH" --quiet 2>>"$LOG_FILE" || true
-if [ -n "$(git rev-list "origin/$TRUNK_BRANCH..$TRUNK_BRANCH" 2>/dev/null)" ]; then
-  git push origin "$TRUNK_BRANCH" >> "$LOG_FILE" 2>&1 || {
-    write_failure "push_trunk_failed"; exit 1
-  }
+    mode="ticket" status="$JOB_STATUS" duration_s="$JOB_DUR" exit_code="$EXIT" \
+    project="$PROJECT_NAME" || true
+  exit "$EXIT"
 fi
 
-# Create the worktree on a fresh branch from origin/$TRUNK_BRANCH.
-if [ -e "$WORKTREE_PATH" ]; then
-  git worktree remove --force "$WORKTREE_PATH" >> "$LOG_FILE" 2>&1 || true
-fi
-git worktree add -B "$BRANCH" "$WORKTREE_PATH" "origin/$TRUNK_BRANCH" >> "$LOG_FILE" 2>&1 || {
-  write_failure "worktree_add_failed"; exit 1
-}
-
-# ---------- assemble prompt -------------------------------------------------
-ROLE_FILE="$SCRIPT_DIR/incident-role.md"
-
-INCIDENT_JSON="$(cat "$INCIDENT_FILE")"
-RUN_CONTEXT="$(jq -n \
-  --argjson cfg "$CFG_JSON" \
-  --argjson inc "$INCIDENT_JSON" \
-  --arg wt "$WORKTREE_PATH" \
-  --arg br "$BRANCH" \
-  --arg rf "$RESULT_FILE" \
-  '{config:$cfg, incident:$inc, worktree:$wt, branch:$br, result_file:$rf}')"
-
-# Project-specific augur prompt extension (optional).
-PROJECT_AUGUR_MD="$PROJECT_DIR/.agents/augur.md"
-PROJECT_BLOCK=""
-[ -f "$PROJECT_AUGUR_MD" ] && PROJECT_BLOCK="$(cat "$PROJECT_AUGUR_MD")
-
----
-"
-
-PROMPT="$(cat "$ROLE_FILE")
-
----
-
-$PROJECT_BLOCK
-RUN CONTEXT (work entirely inside $WORKTREE_PATH; write your result to $RESULT_FILE — JSON only, no prose):
-
-$RUN_CONTEXT"
-
-MODEL="${AUGUR_MODEL:-sonnet}"
-
-# ---------- invoke claude ---------------------------------------------------
-: > "$RESULT_FILE"
-
-set +e
-cd "$WORKTREE_PATH"
-timeout "$WALL_CLOCK" claude -p \
-  --model "$MODEL" \
-  --dangerously-skip-permissions \
-  --max-budget-usd "$INCIDENT_BUDGET" \
-  --output-format text \
-  "$PROMPT" \
-  >> "$LOG_FILE" 2>&1
-CLAUDE_EXIT=$?
-set -e
-cd "$PROJECT_DIR"
-echo "[augur-incident] claude exit=$CLAUDE_EXIT" >> "$LOG_FILE"
-
-# ---------- evaluate result + self-merge gate -------------------------------
-cleanup_worktree() {
-  git worktree remove --force "$WORKTREE_PATH" >> "$LOG_FILE" 2>&1 || true
-}
-
-if [ ! -s "$RESULT_FILE" ]; then
-  cleanup_worktree
-  write_failure "claude_wrote_no_result"
-  exit 1
+# ---------- incident mode: RETIRED (D-L15) ----------------------------------
+# The medic→build incident side-door is gone. Incident repair now routes
+# through the design loop: medic writes an incident-repair proposal that the
+# owner stamps in the dispatch, then mentat→helldiver build it. This path
+# emits NOTHING and exits non-zero so any stale caller fails loudly.
+if [ "$MODE" = "incident" ]; then
+  echo "build --mode incident is retired (D-L15); incident repair now routes through the design loop (mentat→helldiver)" >&2
+  exit 3
 fi
 
-PASS="$(jq -r '.pass // false' "$RESULT_FILE")"
-PR_URL="$(jq -r '.pr_url // ""' "$RESULT_FILE")"
-
-if [ "$PASS" != "true" ] || [ -z "$PR_URL" ]; then
-  cleanup_worktree
-  # Augur reported failure inline — preserve its result, just confirm
-  # status=fail in the event stream.
-  JOB_DUR=$(( $(date +%s) - JOB_START ))
-  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
-    mode="incident" status="fail" duration_s="$JOB_DUR" \
-    incident_id="$INCIDENT_ID" || true
-  exit 1
-fi
-
-# Pull the PR number from the URL (last URL segment).
-PR_NUM="$(echo "$PR_URL" | awk -F/ '{print $NF}')"
-echo "[augur-incident] PR opened: $PR_URL (#$PR_NUM)" >> "$LOG_FILE"
-
-# ---------- self-merge gate -------------------------------------------------
-gate_fail() {
-  echo "[augur-incident] gate FAIL: $1" >> "$LOG_FILE"
-  cleanup_worktree
-  jq --arg reason "$1" '. + {merge_sha:"", errors: ((.errors // []) + [$reason])}' \
-    "$RESULT_FILE" > "$RESULT_FILE.tmp" && mv "$RESULT_FILE.tmp" "$RESULT_FILE"
-  # Dedicated lifecycle event so the dashboard can join a "merge_blocked"
-  # state without falling back to job.end. Carries the PR URL so
-  # /incidents can link to the PR even when no merge happened.
-  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" build.incident.merge_blocked \
-    incident_id="$INCIDENT_ID" project="$PROJECT_NAME" \
-    pr_url="$PR_URL" reason="$1" || true
-  quartet_notify "Augur incident PR opened ($PROJECT_NAME)" \
-    "PR: $PR_URL"$'\n'"Merge gate failed: $1. Human review needed."
-  JOB_DUR=$(( $(date +%s) - JOB_START ))
-  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
-    mode="incident" status="merge_blocked" reason="$1" duration_s="$JOB_DUR" \
-    incident_id="$INCIDENT_ID" pr_url="$PR_URL" || true
-  exit 0  # not an augur failure — PR is open, just wasn't merged
-}
-
-# Gate 1 — kill switch.
-if [ "$AUGUR_CAN_MERGE" != "true" ]; then
-  gate_fail "merge_disabled_by_config"
-fi
-
-# Gate 2 — branch name matches medic-incident-*.
-if ! [[ "$BRANCH" == medic-incident-* ]]; then
-  gate_fail "branch_name_mismatch"
-fi
-
-# Gate 3 — diff against trunk touches only in_scope_paths, no forbidden_paths.
-# Use python with fnmatch for glob-style path matching against the config arrays.
-DIFF_FILES="$(git diff --name-only "origin/$TRUNK_BRANCH...origin/$BRANCH" 2>/dev/null)"
-if [ -z "$DIFF_FILES" ]; then
-  gate_fail "no_diff_against_trunk"
-fi
-echo "[augur-incident] diff files:" >> "$LOG_FILE"
-echo "$DIFF_FILES" >> "$LOG_FILE"
-
-GATE_CHECK="$(python3 - <<PY
-import fnmatch, json, sys
-in_scope  = json.loads('''$IN_SCOPE_PATHS''')
-forbidden = json.loads('''$FORBIDDEN_PATHS''')
-files = """$DIFF_FILES""".strip().splitlines()
-def match_any(path, patterns):
-    return any(fnmatch.fnmatch(path, p) for p in patterns)
-out_of_scope, hits_forbidden = [], []
-for f in files:
-    if match_any(f, forbidden):
-        hits_forbidden.append(f)
-    if not match_any(f, in_scope):
-        out_of_scope.append(f)
-if hits_forbidden:
-    print("forbidden_path:" + hits_forbidden[0]); sys.exit(0)
-if out_of_scope:
-    print("out_of_scope:" + out_of_scope[0]); sys.exit(0)
-print("ok")
-PY
-)"
-if [ "$GATE_CHECK" != "ok" ]; then
-  gate_fail "$GATE_CHECK"
-fi
-
-# Gate 4 — CI green. Wait up to 15 min.
-echo "[augur-incident] waiting for CI on PR #$PR_NUM" >> "$LOG_FILE"
-CI_WAIT_DEADLINE=$(( $(date +%s) + 900 ))
-CI_STATE="pending"
-while [ "$(date +%s)" -lt "$CI_WAIT_DEADLINE" ]; do
-  CI_RAW="$(gh pr checks "$PR_NUM" --json state 2>/dev/null || echo '[]')"
-  if [ -z "$CI_RAW" ] || [ "$CI_RAW" = "[]" ]; then
-    CI_STATE="no_checks"; break
-  fi
-  if jq -e 'all(.state == "SUCCESS" or .state == "NEUTRAL" or .state == "SKIPPED")' \
-       <<<"$CI_RAW" >/dev/null; then
-    CI_STATE="green"; break
-  fi
-  if jq -e 'any(.state == "FAILURE" or .state == "CANCELLED" or .state == "TIMED_OUT")' \
-       <<<"$CI_RAW" >/dev/null; then
-    CI_STATE="failed"; break
-  fi
-  sleep 30
-done
-
-case "$CI_STATE" in
-  green)  echo "[augur-incident] CI ok (green)" >> "$LOG_FILE" ;;
-  no_checks)
-    # Zero CI checks is NOT green — it only passes when the project has
-    # explicitly opted in, and even then the waiver is emitted loudly so
-    # the dashboard/owner can see merges that skipped CI.
-    if [ "$ALLOW_NO_CI" = "true" ]; then
-      echo "[augur-incident] CI has no checks — waived (augur.allow_no_ci=true)" >> "$LOG_FILE"
-      [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" build.incident.ci_waived \
-        incident_id="$INCIDENT_ID" project="$PROJECT_NAME" pr_url="$PR_URL" || true
-    else
-      gate_fail "ci_no_checks"
-    fi ;;
-  failed)           gate_fail "ci_failed" ;;
-  pending)          gate_fail "ci_timeout" ;;
-  *)                gate_fail "ci_unknown_state:$CI_STATE" ;;
-esac
-
-# All gates green — merge.
-# Clean up the worktree FIRST so the local branch ref is freed before
-# `gh pr merge --delete-branch` tries to delete it. Otherwise the
-# remote merge succeeds but gh exits non-zero ("cannot delete branch
-# used by worktree at ..."), and we'd misclassify a real merge as
-# merge_command_failed. Empirically observed on PR #14 — merge
-# happened, but augur aborted before running post-merge guardian.
-echo "[augur-incident] cleanup worktree pre-merge" >> "$LOG_FILE"
-cleanup_worktree
-
-echo "[augur-incident] merging PR #$PR_NUM" >> "$LOG_FILE"
-gh pr merge "$PR_NUM" --squash --delete-branch >> "$LOG_FILE" 2>&1
-GH_MERGE_RC=$?
-
-# Defense in depth: even with the cleanup-first fix, network blips or
-# gh-side glitches can produce non-zero exits when the merge actually
-# happened on GitHub. Confirm with the API before declaring failure.
-if [ "$GH_MERGE_RC" != "0" ]; then
-  PR_STATE="$(gh pr view "$PR_NUM" --json state -q .state 2>/dev/null || echo UNKNOWN)"
-  if [ "$PR_STATE" = "MERGED" ]; then
-    echo "[augur-incident] gh exited $GH_MERGE_RC but PR is MERGED — proceeding" >> "$LOG_FILE"
-  else
-    gate_fail "merge_command_failed"
-  fi
-fi
-
-# Pull trunk to capture the new HEAD.
-git fetch origin "$TRUNK_BRANCH" --quiet 2>>"$LOG_FILE"
-git checkout "$TRUNK_BRANCH" >> "$LOG_FILE" 2>&1
-git reset --hard "origin/$TRUNK_BRANCH" >> "$LOG_FILE" 2>&1
-MERGE_SHA="$(git rev-parse HEAD)"
-echo "[augur-incident] merged at $MERGE_SHA" >> "$LOG_FILE"
-
-# Update result.json with merge_sha.
-jq --arg sha "$MERGE_SHA" '. + {merge_sha:$sha}' "$RESULT_FILE" > "$RESULT_FILE.tmp" \
-  && mv "$RESULT_FILE.tmp" "$RESULT_FILE"
-
-JOB_DUR=$(( $(date +%s) - JOB_START ))
-[ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
-  mode="incident" status="ok" duration_s="$JOB_DUR" \
-  incident_id="$INCIDENT_ID" pr_url="$PR_URL" merge_sha="$MERGE_SHA" || true
-
-echo "[augur-incident] done — incident=$INCIDENT_ID merged at $MERGE_SHA" >> "$LOG_FILE"
-exit 0
+echo "unknown mode: $MODE" >&2; exit 2

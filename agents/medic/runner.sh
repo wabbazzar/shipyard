@@ -55,6 +55,10 @@ done
 # shellcheck disable=SC1090,SC1091
 source "${MEDIC_REVERT_LIB:-$QUARTET_DIR/agents/lib/revert-merge.sh}"
 
+# Shared design-loop proposal writer (D-L15 incident-repair reroute).
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/mentat-proposal.sh"
+
 # ---------- --self-test: merge → post-merge-fail → revert, both shapes ------
 medic_self_test() {
   # Builds a throwaway origin+clone per commit shape, lands a regression
@@ -169,14 +173,11 @@ TRUNK_BRANCH="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")" || exit 2
 DEV_PORT="$(echo "$CFG_JSON" | jq -r '.dev_port // empty')"
 DAILY_CAP="$(echo "$CFG_JSON" | jq -r '.medic.daily_escalation_cap // 5')"
 POLL_INTERVAL="$(echo "$CFG_JSON" | jq -r '.medic.poll_interval_sec // 600')"
-SYNC_TO_AUGUR="$(echo "$CFG_JSON" | jq -r '.medic.sync_to_augur // true')"
 RESTART_SYSTEMD="$(echo "$CFG_JSON" | jq -r '.medic.restart_systemd // true')"
 # Optional project-defined restart command for restart-class incidents that
 # have no local user-unit to bounce (e.g. an HTTP probe outage on a service
 # managed outside `systemctl --user`). Unset = current behavior (no-op).
 RESTART_CMD="$(echo "$CFG_JSON" | jq -r '.medic.restart_cmd // empty')"
-AUGUR_CAN_MERGE="$(echo "$CFG_JSON" | jq -r '.medic.can_merge // false')"
-AUGUR_WALL_CLOCK="$(echo "$CFG_JSON" | jq -r '.build.wall_clock_sec // 3600')"
 RESULT_DIR_REL="$(echo "$CFG_JSON" | jq -r '.paths.result_dir // "tmp"')"
 
 [ -z "$PROJECT_NAME" ] && { echo "config missing project_name" >&2; exit 2; }
@@ -210,7 +211,6 @@ STATE_FILE="$RESULT_DIR/medic-state.json"
 RESULT_FILE="$RESULT_DIR/medic-result.json"
 LOG_FILE="$RESULT_DIR/medic-last-run.log"
 INCIDENTS_FILE="$RESULT_DIR/medic-incidents-current.json"
-AUGUR_LOCK="$RESULT_DIR/augur.lock"
 
 # ---------- state file (init / read) ----------------------------------------
 init_state() {
@@ -978,167 +978,66 @@ while [ "$i" -lt "$N_CLASS" ]; do
       ;;
 
     regression)
+      # D-L15 — incident repair no longer escalates to build/augur (that
+      # side-door is retired). Medic writes an IMMEDIATE incident-repair
+      # proposal into the design loop's result file (mentat → helldiver via
+      # the dispatch), pages once, and lets the owner stamp it. This is a
+      # deterministic write: no augur.lock, no model spend, no merge. The
+      # restart/revert MITIGATION classes above are untouched — suk still
+      # restarts/reverts immediately; only the CODE FIX is rerouted.
       if [ "$DAILY_USED" -ge "$DAILY_CAP" ]; then
         CAP_HIT=true
         quartet_notify "Medic $PROJECT_NAME (cap_hit)" \
-          "Daily augur escalation cap ($DAILY_CAP) reached. Notify-only: $summary"
-        push_action "$(jq -n --arg iid "$iid" '{incident_id:$iid, action:"escalate_augur", outcome:"cap_hit"}')"
-        i=$((i+1)); continue
-      fi
-      if [ "$SYNC_TO_AUGUR" != "true" ]; then
-        push_action "$(jq -n --arg iid "$iid" '{incident_id:$iid, action:"escalate_augur", outcome:"disabled_by_config"}')"
+          "Daily incident-repair cap ($DAILY_CAP) reached. Notify-only: $summary"
+        push_action "$(jq -n --arg iid "$iid" \
+          '{incident_id:$iid, action:"propose_repair", outcome:"cap_hit"}')"
         i=$((i+1)); continue
       fi
 
-      # Write incident file for augur.
-      INC_FILE="$RESULT_DIR/medic-incident-$iid.json"
-      jq --argjson inc "$inc" --arg ts "$(now_iso)" \
-         --arg src "$INCIDENT_SOURCE" \
-         --argjson all "$CANDIDATES" \
-         '.[0] as $cfg | {
-            incident_id: $inc.incident_id,
-            detected_at: $ts,
-            source: $inc.source,
-            surface: $inc.surface,
-            summary: $inc.incident_summary,
-            hypothesis: $inc.hypothesis,
-            evidence: ($all[] | select(.incident_id==$inc.incident_id) | .evidence)
-          }' <<< "[$CFG_JSON]" > "$INC_FILE"
+      # Resolve the design display + the mentat result file it merges into.
+      # Legacy configs (no [names]) resolve design→"design"; a spacetime
+      # theme resolves design→"mentat".
+      DESIGN_DISPLAY="$(role_display design "$CFG_JSON")"
+      DESIGN_SVC="$PROJECT_NAME-$DESIGN_DISPLAY"
+      MENTAT_RESULT="$RESULT_DIR/$DESIGN_SVC-result.json"
 
-      # Acquire augur.lock with non-blocking flock; on contention, notify.
-      AUGUR_RUNNER="$QUARTET_DIR/agents/build/runner.sh"
-      if [ ! -x "$AUGUR_RUNNER" ]; then
-        echo "[medic] augur runner not present yet at $AUGUR_RUNNER" >> "$LOG_FILE"
-        quartet_notify "Medic $PROJECT_NAME (regression)" \
-          "Detected: $summary"$'\n'"Augur runner missing; notify-only."
-        push_action "$(jq -n --arg iid "$iid" '{incident_id:$iid, action:"escalate_augur", outcome:"runner_missing"}')"
+      # Assemble the incident-repair proposal from the classified incident.
+      HYPO="$(jq -r '.hypothesis // ""' <<<"$inc")"
+      REPAIR_PROPOSAL="$(jq -cn \
+        --arg title "$summary" \
+        --arg rationale "${HYPO:-$summary}" \
+        --argjson inc "$inc" \
+        --arg scope "$surface" \
+        '{type:"incident-repair", title:$title, rationale:$rationale,
+          evidence:($inc|tostring), suggested_scope:$scope, severity:"high"}')"
+
+      # Deterministic merge (dedup by title). Empty id ⇒ an identical
+      # incident-repair is already open ⇒ no re-page, no double count.
+      PROPOSAL_ID="$(mentat_merge_proposal "$MENTAT_RESULT" "$PROJECT_NAME" \
+        "$(now_iso)" "$REPAIR_PROPOSAL")"
+      if [ -z "$PROPOSAL_ID" ]; then
+        echo "[medic] incident-repair already open for '$summary' — dedup" >> "$LOG_FILE"
+        push_action "$(jq -n --arg iid "$iid" \
+          '{incident_id:$iid, action:"propose_repair", outcome:"duplicate"}')"
         i=$((i+1)); continue
       fi
 
-      # Acquire the lock first; only count an invocation once we own it.
-      # Variable assignments inside the ( ... ) subshell don't propagate
-      # back to the parent — keep counters and event emissions outside.
-      exec 9>"$AUGUR_LOCK"
-      if flock -n 9; then
-        AUGUR_INVOCATIONS=$((AUGUR_INVOCATIONS + 1))
-        emit build.incident.attempted "$iid" mode="incident"
-        timeout "$AUGUR_WALL_CLOCK" "$AUGUR_RUNNER" \
-          --project "$PROJECT_DIR" \
-          --mode incident \
-          --incident-file "$INC_FILE" >> "$LOG_FILE" 2>&1
-        AUGUR_RC=$?
-        echo "[medic] augur exit=$AUGUR_RC" >> "$LOG_FILE"
-        flock -u 9
-      else
-        AUGUR_RC=99
-      fi
-      exec 9>&-
+      # Emit the proposal-opened event AS design (role + svc = design),
+      # tokens:0 — this is a deterministic write, not a model spend.
+      [ -x "$LOG_EVENT" ] && QUARTET_ROLE=design "$LOG_EVENT" "$DESIGN_SVC" \
+        design.proposal.opened project="$PROJECT_NAME" proposal_id="$PROPOSAL_ID" \
+        type="incident-repair" severity="high" tokens=0 || true
 
-      if [ "$AUGUR_RC" = "99" ]; then
-        AUGUR_LOCK_CONTENTION=$((AUGUR_LOCK_CONTENTION + 1))
-        quartet_notify "Medic $PROJECT_NAME (regression)" \
-          "Detected: $summary"$'\n'"Augur busy (lock held). Will retry next tick."
-        push_action "$(jq -n --arg iid "$iid" '{incident_id:$iid, action:"escalate_augur", outcome:"lock_contention"}')"
-        i=$((i+1)); continue
-      fi
+      # One page — the dispatch is where a human stamps it.
+      quartet_notify "Medic $PROJECT_NAME (incident-repair)" \
+        "incident-repair proposed: $summary — awaiting stamp in the dispatch"
 
-      # Parse augur result + run retrigger phase.
-      AUGUR_RESULT="$RESULT_DIR/$PROJECT_NAME-$BUILD_DISPLAY-result.json"
-      [ ! -f "$AUGUR_RESULT" ] && AUGUR_RESULT="$RESULT_DIR/augur-result.json"
-      if [ -f "$AUGUR_RESULT" ]; then
-        AUGUR_PASS="$(jq -r '.pass // false' "$AUGUR_RESULT")"
-        PR_URL="$(jq -r '.pr_url // empty' "$AUGUR_RESULT")"
-        MERGE_SHA="$(jq -r '.merge_sha // empty' "$AUGUR_RESULT")"
-      else
-        AUGUR_PASS="false"; PR_URL=""; MERGE_SHA=""
-      fi
-
-      # Bump daily counter on any successful escalation attempt
       DAILY_USED=$((DAILY_USED + 1))
       state_set ".daily_escalations[\"$DAY\"] = $DAILY_USED"
 
-      if [ "$AUGUR_PASS" = "true" ] && [ -n "$MERGE_SHA" ]; then
-        emit build.incident.merged "$iid" pr_url="$PR_URL" merge_sha="$MERGE_SHA"
-
-        # Run guardian post-merge against the merge sha. `|| GRC=$?` keeps
-        # a failing child from killing us — set -e is active here, and a
-        # bare `GRC=$?` after a failing command never executes.
-        GUARDIAN_RUNNER="$QUARTET_DIR/agents/release/runner.sh"
-        GUARDIAN_OUTCOME="skipped"
-        if [ -x "$GUARDIAN_RUNNER" ]; then
-          GRC=0
-          "$GUARDIAN_RUNNER" --project "$PROJECT_DIR" --mode post-merge \
-            --merge-sha "$MERGE_SHA" >> "$LOG_FILE" 2>&1 || GRC=$?
-          GUARDIAN_OUTCOME=$([ "$GRC" = "0" ] && echo "ok" || echo "fail")
-          emit release.post_merge.run "$iid" merge_sha="$MERGE_SHA" outcome="$GUARDIAN_OUTCOME"
-        fi
-
-        if [ "$GUARDIAN_OUTCOME" = "fail" ]; then
-          # Revert the merge to keep the trunk branch green. Shape-aware
-          # (squash vs true merge) and honest: the revert's real exit
-          # status decides what we log and claim.
-          if medic_revert_merge "$PROJECT_DIR" "$MERGE_SHA" "$TRUNK_BRANCH" "$LOG_FILE"; then
-            REVERT_OUTCOME="reverted"
-          else
-            REVERT_OUTCOME="revert_failed"
-          fi
-          emit medic.action.revert "$iid" merge_sha="$MERGE_SHA" outcome="$REVERT_OUTCOME"
-          if [ "$REVERT_OUTCOME" = "reverted" ]; then
-            quartet_notify "Medic $PROJECT_NAME (regression)" \
-              "Augur merged $PR_URL but post-merge guardian failed; reverted. Frozen 24h."
-          else
-            quartet_notify "Medic $PROJECT_NAME (regression)" \
-              "Augur merged $PR_URL but post-merge guardian failed AND the revert_failed — trunk may still carry the bad merge. Manual fix needed. Frozen 24h."
-          fi
-          until_ts="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
-          state_set ".cooldowns[\"$iid\"] = {\"frozen_until\":\"$until_ts\",\"reason\":\"post_merge_guardian_fail\"}"
-          emit medic.incident.frozen "$iid" frozen_until="$until_ts" reason="post_merge_guardian_fail"
-          push_action "$(jq -n --arg iid "$iid" --arg pr "$PR_URL" --arg rev "$REVERT_OUTCOME" \
-            '{incident_id:$iid, action:"escalate_augur", outcome:"post_merge_guardian_fail", revert:$rev, pr_url:$pr}')"
-        else
-          # Retrigger the failed unit (runners surface only in v1).
-          RETRIGGER_OUTCOME="skipped"
-          if [ "$surface" = "runners" ]; then
-            unit="$(jq -r --arg iid "$iid" '.[] | select(.incident_id==$iid) | .evidence.unit.name // empty' "$INCIDENTS_FILE")"
-            if [ -n "$unit" ]; then
-              if systemctl --user list-units --all | grep -q "$unit"; then
-                systemctl --user restart "$unit" >> "$LOG_FILE" 2>&1 \
-                  && RETRIGGER_OUTCOME="ok" || RETRIGGER_OUTCOME="fail"
-              fi
-            fi
-          else
-            RETRIGGER_OUTCOME="skipped_chat"
-          fi
-          emit medic.retrigger.attempted "$iid" surface="$surface" outcome="$RETRIGGER_OUTCOME"
-
-          # Final Signal.
-          quartet_notify "Medic $PROJECT_NAME (resolved)" \
-            "Incident: $summary"$'\n'"PR merged: $PR_URL"$'\n'"Guardian post-merge: $GUARDIAN_OUTCOME"$'\n'"Retrigger: $RETRIGGER_OUTCOME"
-          emit medic.incident.resolved "$iid" via="augur-pr"
-          push_action "$(jq -n --arg iid "$iid" --arg pr "$PR_URL" --arg rt "$RETRIGGER_OUTCOME" \
-            '{incident_id:$iid, action:"escalate_augur", outcome:"resolved", pr_url:$pr, retrigger:$rt}')"
-        fi
-      else
-        # Augur ran but didn't produce a merge. Two cases:
-        #   * augur succeeded (pass=true) but the self-merge gate blocked
-        #     → outcome=merge_blocked, PR is open for human review
-        #   * augur reported failure (pass=false) → outcome=augur_failed
-        REASON="$(jq -r '.errors[0] // "no_merge"' "$AUGUR_RESULT" 2>/dev/null || echo "no_result")"
-        if [ "$AUGUR_PASS" = "true" ] && [ -n "$PR_URL" ]; then
-          OUTCOME="merge_blocked"; FROZEN_REASON="merge_blocked"
-        else
-          OUTCOME="augur_failed"; FROZEN_REASON="augur_failed"
-        fi
-        PR_LINE=""
-        [ -n "$PR_URL" ] && PR_LINE="PR open: $PR_URL"$'\n'
-        quartet_notify "Medic $PROJECT_NAME (regression)" \
-          "Augur attempted $summary"$'\n'"Outcome: $OUTCOME ($REASON)"$'\n'"${PR_LINE}Frozen 24h."
-        until_ts="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
-        state_set ".cooldowns[\"$iid\"] = {\"frozen_until\":\"$until_ts\",\"reason\":\"$FROZEN_REASON\"}"
-        emit medic.incident.frozen "$iid" frozen_until="$until_ts" reason="$FROZEN_REASON"
-        push_action "$(jq -n --arg iid "$iid" --arg r "$REASON" --arg o "$OUTCOME" --arg pr "$PR_URL" \
-          '{incident_id:$iid, action:"escalate_augur", outcome:$o, reason:$r, pr_url:$pr}')"
-      fi
+      emit medic.incident.repair_proposed "$iid" proposal_id="$PROPOSAL_ID" severity="high"
+      push_action "$(jq -n --arg iid "$iid" --arg pid "$PROPOSAL_ID" \
+        '{incident_id:$iid, action:"propose_repair", outcome:"proposed", proposal_id:$pid}')"
       ;;
 
     *)

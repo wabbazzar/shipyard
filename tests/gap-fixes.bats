@@ -87,14 +87,30 @@ medic_incident_iid() {
   printf '%s' "systemd-failed $1 $(date -u +%Y-%m-%d)" | sha256sum | awk '{print $1}'
 }
 
-# prep_medic_loop <project-dir> <name> <merge-sha> — shared setup for the
-# full medic scan → classify → augur → guardian post-merge loop, all stubs.
-# Sets: UNIT, IID, OPS_JSON.
+# write_build_recording_stub — a build/runner.sh in FAKE_QD that RECORDS its
+# argv and exits non-zero. Post-D-L15 medic must NEVER invoke it for a
+# regression; a recorded call is a reroute regression the test catches.
+write_build_recording_stub() {
+  cat >"$FAKE_QD/agents/build/runner.sh" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$SHIM_LOG/augur-runner.argv"
+exit 1
+STUB
+  chmod +x "$FAKE_QD/agents/build/runner.sh"
+}
+
+# prep_medic_loop <project-dir> <name> [merge-sha] — shared setup for the
+# medic scan → classify → (D-L15 reroute) proposal loop, all stubs.
+# Sets: UNIT, IID, OPS_JSON, MENTAT_RESULT. The classifier stub returns a
+# regression-class incident; a recording build stub proves medic does NOT
+# escalate to build anymore.
 prep_medic_loop() {
-  local p="$1" name="$2" sha="$3"
+  local p="$1" name="$2"
   UNIT="$name-web"
   IID="$(medic_incident_iid "$UNIT")"
   OPS_JSON="$BATS_TEST_TMPDIR/ops.json"
+  # Legacy configs (no [names]) resolve design→"design".
+  MENTAT_RESULT="$p/tmp/$name-design-result.json"
   jq -n --arg u "$UNIT" \
     '{cron:[], systemd:[{name:$u, state:"failed", description:"fixture web", timerSchedule:""}]}' \
     >"$OPS_JSON"
@@ -102,7 +118,7 @@ prep_medic_loop() {
   # claude stub: writes medic's classification result (class=regression).
   jq -n --arg iid "$IID" \
     '{pass:true, errors:[], incidents_classified:[
-       {incident_id:$iid, class:"regression", action:"escalate_augur",
+       {incident_id:$iid, class:"regression", action:"propose_repair",
         surface:"runners", source:"systemd",
         incident_summary:"fixture web unit failed",
         hypothesis:"recent commit broke web"}]}' \
@@ -110,15 +126,10 @@ prep_medic_loop() {
   make_stub_script claude \
     "cp '$BATS_TEST_TMPDIR/medic-classification.json' '$p/tmp/medic-result.json'; exit 0"
 
-  # augur stub result: pass=true with the landed merge sha.
-  jq -n --arg iid "$IID" --arg sha "$sha" \
-    '{pass:true, incident_id:$iid, branch:("medic-incident-" + $iid[0:12]),
-      pr_url:"https://github.com/example/proj/pull/9", merge_sha:$sha,
-      files_changed:["web.txt"], errors:[]}' \
-    >"$BATS_TEST_TMPDIR/augur-stub-result.json"
-  write_augur_stub "$p/tmp/$name-augur-result.json" "$BATS_TEST_TMPDIR/augur-stub-result.json"
+  # A recording build stub — proves the code-fix escalation is retired.
+  write_build_recording_stub
 
-  # systemctl stub for the retrigger path.
+  # systemctl stub (harmless; the reroute never retriggers a unit).
   make_stub_script systemctl '
 case "$*" in
   *list-units*) echo "'"$UNIT"' loaded failed"; exit 0 ;;
@@ -137,113 +148,100 @@ run_medic_scan() {
 }
 
 # ---------------------------------------------------------------------------
-# 1a — medic passes --project to guardian post-merge
+# 1a / 1b — D-L15 incident-repair reroute (was: escalate-to-augur + revert)
+#
+# A regression-class incident no longer escalates to build/augur. Medic
+# writes an immediate incident-repair PROPOSAL into the design loop's result
+# file, emits design.proposal.opened AS design, pages once, and never touches
+# git. These tests pin that new contract.
 # ---------------------------------------------------------------------------
 
-@test "1a: medic invokes guardian post-merge WITH --project" {
+@test "1a: regression writes an incident-repair proposal (correct schema), not a build escalation" {
   make_fake_quartet
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" branch-present.toml m1a
   topo_commit_all "$p"
-  sha="$(topo_true_merge "$p" feat-fix web.txt "fixed web")"
-  git -C "$p" push -q origin main
 
-  prep_medic_loop "$p" m1a "$sha"
-  write_guardian_stub 0   # post-merge validation passes
+  prep_medic_loop "$p" m1a
 
   run_medic_scan "$p"
   [ "$status" -eq 0 ]
 
-  [ -f "$SHIM_LOG/guardian-runner.argv" ]
-  argv="$(cat "$SHIM_LOG/guardian-runner.argv")"
-  [[ "$argv" == *"--mode post-merge"* ]]
-  [[ "$argv" == *"--merge-sha $sha"* ]]
-  [[ "$argv" == *"--project $p"* ]]
+  # A proposal landed in the mentat result file with the right schema.
+  [ -f "$MENTAT_RESULT" ]
+  [ "$(jq -r '.proposals | length' "$MENTAT_RESULT")" = "1" ]
+  prop="$(jq -c '.proposals[0]' "$MENTAT_RESULT")"
+  [ "$(jq -r '.type'     <<<"$prop")" = "incident-repair" ]
+  [ "$(jq -r '.severity' <<<"$prop")" = "high" ]
+  [ "$(jq -r '.status'   <<<"$prop")" = "open" ]
+  [ "$(jq -r '.suggested_scope' <<<"$prop")" = "runners" ]
+  [[ "$(jq -r '.id' <<<"$prop")" == mentat:m1a:* ]]
+
+  # The build runner was NEVER invoked (the code-fix side-door is retired).
+  [ "$(stub_calls augur-runner)" = "0" ]
+  [ ! -f "$SHIM_LOG/guardian-runner.argv" ]
 }
 
-# ---------------------------------------------------------------------------
-# 1b — shape-aware honest revert
-# ---------------------------------------------------------------------------
-
-@test "1b: squash merge reverted — trunk clean, event outcome=reverted" {
+@test "1b: reroute does NOT invoke the build runner in incident mode (zero calls)" {
   make_fake_quartet
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" branch-present.toml m1bs
   topo_commit_all "$p"
-  sha="$(topo_squash_merge "$p" feat-bad bad.txt "regression")"
-  git -C "$p" push -q origin main
-  [ "$(commit_parent_count "$p" "$sha")" = "1" ]
 
-  prep_medic_loop "$p" m1bs "$sha"
-  write_guardian_stub 1   # post-merge validation FAILS → medic must revert
+  prep_medic_loop "$p" m1bs
 
   run_medic_scan "$p"
   [ "$status" -eq 0 ]
 
-  # The merged change is actually gone from trunk (local and origin).
-  [ ! -f "$p/bad.txt" ]
-  run git -C "$p" show "origin/main:bad.txt"
-  [ "$status" -ne 0 ]
-
-  ev="$(events_json | jq -c 'select(.event=="medic.action.revert")')"
-  [ -n "$ev" ]
-  [ "$(jq -r '.outcome' <<<"$ev")" = "reverted" ]
-  [ "$(jq -r '.merge_sha' <<<"$ev")" = "$sha" ]
-
-  run notify_log
-  [[ "$output" == *"reverted"* ]]
-  [[ "$output" != *"revert_failed"* ]]
+  # No incident-mode escalation happened, and no revert action was recorded
+  # (medic never merged anything to revert).
+  [ "$(stub_calls augur-runner)" = "0" ]
+  [ -z "$(events_json | jq -c 'select(.event=="medic.action.revert")')" ]
+  [ -z "$(events_json | jq -c 'select(.event=="build.incident.attempted")')" ]
+  # The action ledger records propose_repair, not escalate_augur.
+  act="$(jq -c '.actions_taken[] | select(.action=="propose_repair")' "$p/tmp/medic-result.json")"
+  [ -n "$act" ]
+  [ "$(jq -r '.outcome' <<<"$act")" = "proposed" ]
+  [ -z "$(jq -c '.actions_taken[] | select(.action=="escalate_augur")' "$p/tmp/medic-result.json")" ]
 }
 
-@test "1b: true merge reverted — trunk clean, event outcome=reverted" {
+@test "1b: reroute emits design.proposal.opened AS design (role + svc + type + severity)" {
   make_fake_quartet
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" branch-present.toml m1bt
   topo_commit_all "$p"
-  sha="$(topo_true_merge "$p" feat-bad bad.txt "regression")"
-  git -C "$p" push -q origin main
-  [ "$(commit_parent_count "$p" "$sha")" = "2" ]
 
-  prep_medic_loop "$p" m1bt "$sha"
-  write_guardian_stub 1
+  prep_medic_loop "$p" m1bt
 
   run_medic_scan "$p"
   [ "$status" -eq 0 ]
 
-  [ ! -f "$p/bad.txt" ]
-  ev="$(events_json | jq -c 'select(.event=="medic.action.revert")')"
+  ev="$(events_json | jq -c 'select(.event=="design.proposal.opened")')"
   [ -n "$ev" ]
-  [ "$(jq -r '.outcome' <<<"$ev")" = "reverted" ]
+  [ "$(jq -r '.role'     <<<"$ev")" = "design" ]
+  [ "$(jq -r '.svc'      <<<"$ev")" = "m1bt-design" ]
+  [ "$(jq -r '.type'     <<<"$ev")" = "incident-repair" ]
+  [ "$(jq -r '.severity' <<<"$ev")" = "high" ]
+  [ "$(jq -r '.tokens'   <<<"$ev")" = "0" ]
+  # The proposal_id on the event matches the one written to the result file.
+  [ "$(jq -r '.proposal_id' <<<"$ev")" = "$(jq -r '.proposals[0].id' "$MENTAT_RESULT")" ]
 }
 
-@test "1b: failed revert is reported honestly — outcome=revert_failed, no false claim" {
+@test "1b: reroute pages exactly once — 'incident-repair proposed … awaiting stamp'" {
   make_fake_quartet
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" branch-present.toml m1bf
   topo_commit_all "$p"
-  sha="$(topo_squash_merge "$p" feat-bad bad.txt "regression")"
-  git -C "$p" push -q origin main
 
-  # Force the revert to fail: dirty the file the revert must touch.
-  printf 'uncommitted local edit\n' >>"$p/bad.txt"
-
-  prep_medic_loop "$p" m1bf "$sha"
-  write_guardian_stub 1
+  prep_medic_loop "$p" m1bf
 
   run_medic_scan "$p"
   [ "$status" -eq 0 ]
 
-  # Nothing was reverted...
-  [ -f "$p/bad.txt" ]
-  # ...and medic says so.
-  ev="$(events_json | jq -c 'select(.event=="medic.action.revert")')"
-  [ -n "$ev" ]
-  [ "$(jq -r '.outcome' <<<"$ev")" = "revert_failed" ]
-
   run notify_log
-  [[ "$output" == *"revert_failed"* ]]
-  # No false "…; reverted." success claim.
-  [[ "$output" != *"; reverted"* ]]
+  [ "$(printf '%s\n' "$output" | grep -c .)" = "1" ]
+  [[ "$output" == *"incident-repair proposed"* ]]
+  [[ "$output" == *"awaiting stamp in the dispatch"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -272,9 +270,9 @@ run_medic_scan() {
 # 1d — zero CI checks must not pass silently
 # ---------------------------------------------------------------------------
 
-# prep_augur_incident <project-dir> <name> — stubs + incident file for a
-# full augur incident run in which claude "fixes" the issue and opens a PR,
-# and gh reports zero CI checks. Sets INC_FILE.
+# prep_augur_incident <project-dir> <name> — a valid incident file plus
+# claude/gh stubs that EXPLODE if invoked. Post-D-L15 the retired incident
+# path must exit before touching either. Sets INC_FILE.
 prep_augur_incident() {
   local p="$1" name="$2"
   local iid="cafe0123456789abcdef0123456789abcdef012345"
@@ -283,34 +281,12 @@ prep_augur_incident() {
     '{incident_id:$iid, detected_at:"2026-07-21T00:00:00Z", source:"systemd",
       surface:"runners", summary:"fixture web down", hypothesis:"x", evidence:{}}' \
     >"$INC_FILE"
-
-  # claude stub runs with cwd = the incident worktree: commit a fix, push
-  # the branch, drop a passing result with a PR URL.
-  jq -n --arg iid "$iid" \
-    '{pass:true, incident_id:$iid, branch:("medic-incident-" + $iid[0:12]),
-      pr_url:"https://github.com/example/proj/pull/7", merge_sha:"",
-      files_changed:["augur-fix.txt"], errors:[]}' \
-    >"$BATS_TEST_TMPDIR/augur-claude-result.json"
-  make_stub_script claude "
-printf 'fix\n' > augur-fix.txt
-git add augur-fix.txt
-git commit -q -m 'augur: fix web'
-git push -q origin HEAD
-cp '$BATS_TEST_TMPDIR/augur-claude-result.json' '$p/tmp/$name-augur-result.json'
-exit 0"
-
-  # gh: zero CI checks; merge/view succeed if reached.
-  make_stub_script gh '
-case "$1 $2" in
-  "pr checks") echo "[]"; exit 0 ;;
-  "pr merge")  exit 0 ;;
-  "pr view")   echo "MERGED"; exit 0 ;;
-  *) exit 0 ;;
-esac'
+  # If the retired path ever reached claude/gh, these blow the run up.
+  make_stub claude 97
+  make_stub gh 97
 }
 
-@test "1d: no CI checks + allow_no_ci absent -> gate_fail ci_no_checks, no merge" {
-  # can_merge=true so the run reaches the CI gate; allow_no_ci absent.
+@test "1d: build --mode incident is RETIRED — exits 3, prints the message, emits no events" {
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" can-merge-true.toml a1d
   sed -i '/^wall_clock_sec/a in_scope_paths = ["*"]' "$p/.agents/config.toml"
@@ -318,21 +294,18 @@ esac'
   prep_augur_incident "$p" a1d
 
   run run_runner build "$p" --mode incident --incident-file "$INC_FILE"
-  [ "$status" -eq 0 ]   # gate_fail exits 0 — PR stays open for review
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"retired"* ]]
+  [[ "$output" == *"design loop"* ]]
 
-  # The gate refused: merge_blocked event with reason ci_no_checks...
-  ev="$(events_json | jq -c 'select(.event=="build.incident.merge_blocked")')"
-  [ -n "$ev" ]
-  [ "$(jq -r '.reason' <<<"$ev")" = "ci_no_checks" ]
-  # ...result records the refusal...
-  [ "$(jq -r '.errors | index("ci_no_checks") != null' "$p/tmp/a1d-augur-result.json")" = "true" ]
-  [ "$(jq -r '.merge_sha' "$p/tmp/a1d-augur-result.json")" = "" ]
-  # ...and gh pr merge was never run.
-  run stub_argv gh
-  [[ "$output" != *"pr merge"* ]]
+  # No events, no result file, no claude/gh calls — a clean, loud no-op.
+  [ ! -f "$(events_file)" ] || [ -z "$(events_json)" ]
+  [ ! -f "$p/tmp/a1d-augur-result.json" ]
+  [ "$(stub_calls claude)" = "0" ]
+  [ "$(stub_calls gh)" = "0" ]
 }
 
-@test "1d: no CI checks + allow_no_ci=true -> passes AND emits ci_waived" {
+@test "1d: incident retirement holds regardless of allow_no_ci/can_merge config" {
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" allow-no-ci-true.toml a1dw
   sed -i '/^wall_clock_sec/a in_scope_paths = ["*"]' "$p/.agents/config.toml"
@@ -340,17 +313,11 @@ esac'
   prep_augur_incident "$p" a1dw
 
   run run_runner build "$p" --mode incident --incident-file "$INC_FILE"
-  [ "$status" -eq 0 ]
-
-  # The waiver is loud:
-  ev="$(events_json | jq -c 'select(.event=="build.incident.ci_waived")')"
-  [ -n "$ev" ]
-  [ "$(jq -r '.project' <<<"$ev")" = "a1dw" ]
-  # And the merge went ahead (gh pr merge invoked, job ended ok).
-  run stub_argv gh
-  [[ "$output" == *"pr merge"* ]]
-  end_ev="$(events_json | jq -c 'select(.event=="job.end")')"
-  [ "$(jq -r '.status' <<<"$end_ev")" = "ok" ]
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"retired"* ]]
+  # No build.incident.* events of any kind.
+  [ ! -f "$(events_file)" ] || [ -z "$(events_json | jq -c 'select(.event|startswith("build.incident"))')" ]
+  [ "$(stub_calls gh)" = "0" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -472,52 +439,41 @@ EOF
   [[ "$output" == *"FAIL"* ]]
 }
 
-@test "1b: revert that cannot be pushed is reported as revert_failed" {
+@test "1b: a re-detected incident dedups by title — no second proposal, no second page" {
   make_fake_quartet
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" branch-present.toml m1bp
   topo_commit_all "$p"
-  sha="$(topo_squash_merge "$p" feat-bad bad.txt "regression")"
-  git -C "$p" push -q origin main
 
-  # Local revert will succeed; the push to origin must not.
-  git -C "$p" remote set-url --push origin "$BATS_TEST_TMPDIR/no-such-origin.git"
+  prep_medic_loop "$p" m1bp
 
-  prep_medic_loop "$p" m1bp "$sha"
-  write_guardian_stub 1
-
+  # First tick: proposal opened, one page.
   run_medic_scan "$p"
   [ "$status" -eq 0 ]
+  [ "$(jq -r '.proposals | length' "$MENTAT_RESULT")" = "1" ]
 
-  # Origin still carries the bad change — that is what the fleet sees...
-  run git -C "$p" show "origin/main:bad.txt"
+  # Second tick (same day, same incident → same title): must dedup.
+  run_medic_scan "$p"
   [ "$status" -eq 0 ]
-  # ...so medic must NOT claim success.
-  ev="$(events_json | jq -c 'select(.event=="medic.action.revert")')"
-  [ -n "$ev" ]
-  [ "$(jq -r '.outcome' <<<"$ev")" = "revert_failed" ]
+  [ "$(jq -r '.proposals | length' "$MENTAT_RESULT")" = "1" ]   # still ONE
 
+  # Exactly one design.proposal.opened across both ticks, and one page.
+  [ "$(events_json | jq -c 'select(.event=="design.proposal.opened")' | grep -c .)" = "1" ]
   run notify_log
-  [[ "$output" == *"revert_failed"* ]]
+  [ "$(printf '%s\n' "$output" | grep -c 'incident-repair proposed')" = "1" ]
 }
 
-@test "phase3: synthetic incident with augur_can_merge absent — PR stays open, no merge" {
+@test "phase11: build --mode ticket with ticket_mode absent -> disabled (exit 2, no-op)" {
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" absent-keys.toml p3neg
-  sed -i '/^\[build\]/a in_scope_paths = ["*"]' "$p/.agents/config.toml"
   topo_commit_all "$p"
-  prep_augur_incident "$p" p3neg
+  make_stub claude 97   # dispatch must NOT happen when disabled
+  printf '# ticket\n' >"$BATS_TEST_TMPDIR/ticket.md"
 
-  run run_runner build "$p" --mode incident --incident-file "$INC_FILE"
-  [ "$status" -eq 0 ]
-
-  # gh pr merge was never invoked — the PR is left open for human review.
-  run stub_argv gh
-  [[ "$output" != *"pr merge"* ]]
-  # And the refusal is on the record.
-  ev="$(events_json | jq -c 'select(.event=="build.incident.merge_blocked")')"
-  [ -n "$ev" ]
-  [ "$(jq -r '.reason' <<<"$ev")" = "merge_disabled_by_config" ]
+  run run_runner build "$p" --mode ticket --ticket-file "$BATS_TEST_TMPDIR/ticket.md"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"ticket_mode disabled"* ]]
+  [ "$(stub_calls claude)" = "0" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -593,30 +549,30 @@ EOF
   [ "$(jq -r '.augur.allow_no_ci'     <<<"$cfg")" = "true" ]
 }
 
-@test "phase9: medic loop on legacy config uses NEW event prefixes build.incident.* + release.post_merge.*" {
+@test "phase9/D-L15: medic reroute on legacy config — proposal event AS design, no build.incident.* escalation" {
   make_fake_quartet
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" legacy-augur-can-merge-true.toml m9
   topo_commit_all "$p"
-  sha="$(topo_true_merge "$p" feat-fix web.txt "fixed web")"
-  git -C "$p" push -q origin main
 
-  prep_medic_loop "$p" m9 "$sha"
-  write_guardian_stub 0   # post-merge validation passes
+  prep_medic_loop "$p" m9
 
   run_medic_scan "$p"
   [ "$status" -eq 0 ]
 
-  # NEW canonical event-name prefixes are emitted...
-  [ -n "$(events_json | jq -c 'select(.event=="build.incident.attempted")')" ]
-  [ -n "$(events_json | jq -c 'select(.event=="build.incident.merged")')" ]
-  pmr="$(events_json | jq -c 'select(.event=="release.post_merge.run")')"
-  [ -n "$pmr" ]
-  # medic keeps its legacy svc display, events carry role=medic
-  [ "$(jq -r '.svc'  <<<"$pmr")" = "m9-medic" ]
-  [ "$(jq -r '.role' <<<"$pmr")" = "medic" ]
+  # The proposal event carries the DESIGN svc/role (legacy display=design)...
+  pev="$(events_json | jq -c 'select(.event=="design.proposal.opened")')"
+  [ -n "$pev" ]
+  [ "$(jq -r '.svc'  <<<"$pev")" = "m9-design" ]
+  [ "$(jq -r '.role' <<<"$pev")" = "design" ]
+  # ...while medic's OWN lifecycle events keep the legacy medic svc + role.
+  jline="$(events_json | jq -c 'select(.event=="job.end" and .svc=="m9-medic")')"
+  [ -n "$jline" ]
+  [ "$(jq -r '.role' <<<"$jline")" = "medic" ]
 
-  # ...and the OLD prefixes are gone.
-  [ -z "$(events_json | jq -c 'select(.event=="augur.incident.attempted")')" ]
-  [ -z "$(events_json | jq -c 'select(.event=="guardian.post_merge.run")')" ]
+  # The retired escalation path emits NONE of its old events.
+  [ -z "$(events_json | jq -c 'select(.event=="build.incident.attempted")')" ]
+  [ -z "$(events_json | jq -c 'select(.event=="build.incident.merged")')" ]
+  [ -z "$(events_json | jq -c 'select(.event=="release.post_merge.run")')" ]
+  [ "$(stub_calls augur-runner)" = "0" ]
 }
