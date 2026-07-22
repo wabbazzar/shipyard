@@ -231,8 +231,9 @@
     {
       "id": 7,
       "title": "dispatch surfacing",
-      "status": "pending",
-      "gist": "Critique events into the dashboard (timeline detail, guardians panel — svc list currently hardcodes 3 of 4 projects) and the Daily Dispatch, verified at mobile viewport."
+      "status": "done",
+      "gist": "Critique events into the dashboard (timeline detail, guardians panel — svc list currently hardcodes 3 of 4 projects) and the Daily Dispatch, verified at mobile viewport.",
+      "completed": "2026-07-21"
     },
     {
       "id": 8,
