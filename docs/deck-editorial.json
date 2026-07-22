@@ -706,5 +706,52 @@
       "example": "1. **Goodhart check** — does the change do what the task claims,\n   beyond the specific eval/test the author optimized? A fix that\n   special-cases the failing input is a `block`.",
       "source": "agents/release/critic-role.md:62 — Rubric v1, line 1"
     }
+  },
+  "guarantees": {
+    "intro": "The build is done. These are the properties it locked in — each enforced by a gate, not a promise. Two measurement windows are still running below.",
+    "items": [
+      {
+        "claim": "Recovery is rehearsed, not assumed",
+        "proof": "The on-call runner proves merge → post-merge-fail → revert on a throwaway repo before it is ever needed — both commit shapes, every install (--self-test)."
+      },
+      {
+        "claim": "Nothing merges vacuously",
+        "proof": "Merge is opt-in per repo, and a repo with zero CI checks fails the gate instead of sailing through it."
+      },
+      {
+        "claim": "Every fix ships behind a test first shown failing",
+        "proof": "A test that can't fail on the real defect is a finding, not a test — the failing run is recorded before the fix lands."
+      },
+      {
+        "claim": "Review can't inherit the author's goal",
+        "proof": "The release critique is cold-context critique: it grades the diff and the rubric, never the session that wrote the code."
+      },
+      {
+        "claim": "One road into build",
+        "proof": "Even an incident repair enters as a stamped proposal — the auto-merge side-door is retired. Mitigation (restart, revert) stays immediate and ungated."
+      },
+      {
+        "claim": "Agents and humans run the same playbook",
+        "proof": "skills-parity: one skill file per workflow, symlinked everywhere — no agent-only fork to drift."
+      },
+      {
+        "claim": "This deck can't quietly lie",
+        "proof": "Its structure is generated from the skill files themselves; CI fails on a stale deck."
+      },
+      {
+        "claim": "A rename can't break a running fleet",
+        "proof": "Legacy names keep resolving until each repo is deliberately re-baked — merging a rename is a no-op for running timers."
+      }
+    ],
+    "open": [
+      {
+        "title": "7-day soak",
+        "what": "Fleet failure rate vs the pre-hardening baseline, accruing daily through Jul 28."
+      },
+      {
+        "title": "5-day trial",
+        "what": "Four floors: a real bug caught and fixed, usage assessed across repos, a feature shipped end-to-end through the loop, one consequential decision surfaced. Through Jul 27; the operator signs the result."
+      }
+    ]
   }
 }
