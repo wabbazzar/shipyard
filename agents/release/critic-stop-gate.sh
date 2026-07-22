@@ -2,7 +2,7 @@
 # agents/release/critic-stop-gate.sh — opt-in Stop hook for shoulder mode.
 #
 # Default: exit 0 immediately — the gate is DISARMED unless the session
-# explicitly sets GUARDIAN_CRITIC_BLOCK=1. Quartet agents' own headless
+# explicitly sets CRITIC_BLOCK=1. Quartet agents' own headless
 # runs never set it, so they are unaffected.
 #
 # Armed: reads the latest critique findings for the session (the file
@@ -17,7 +17,7 @@
 
 set -u
 
-[ "${GUARDIAN_CRITIC_BLOCK:-0}" = "1" ] || exit 0
+[ "${CRITIC_BLOCK:-0}" = "1" ] || exit 0
 
 INPUT="$(cat 2>/dev/null || true)"
 SESSION_ID="$(jq -r '.session_id // empty' <<<"$INPUT" 2>/dev/null || true)"
@@ -27,10 +27,10 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 if [ -d "$PROJECT_DIR/tmp" ]; then
   QUEUE_DIR="$PROJECT_DIR/tmp"
 else
-  QUEUE_DIR="/tmp/guardian-critic-$(id -u)/$(basename "$PROJECT_DIR")"
+  QUEUE_DIR="/tmp/shipyard-critic-$(id -u)/$(basename "$PROJECT_DIR")"
 fi
 
-FINDINGS_FILE="$QUEUE_DIR/guardian-critic-findings-$SESSION_ID"
+FINDINGS_FILE="$QUEUE_DIR/critic-findings-$SESSION_ID"
 [ -f "$FINDINGS_FILE" ] || exit 0
 
 BLOCKS="$(grep '^block|' "$FINDINGS_FILE" 2>/dev/null || true)"

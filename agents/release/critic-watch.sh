@@ -13,7 +13,7 @@
 # Trigger: (queue idle >= CRITIC_IDLE_SEC AND non-empty)
 #          OR (>= CRITIC_BATCH_FILES distinct files queued).
 # Env knobs (test overrides): CRITIC_IDLE_SEC (300), CRITIC_BATCH_FILES (8),
-# CRITIC_POLL_SEC (30), GUARDIAN_CRITIC_MODEL (claude default model if unset).
+# CRITIC_POLL_SEC (30), CRITIC_MODEL (claude default model if unset).
 #
 # Budget: sums today's release.critique `tokens` from the events dir
 # (QUARTET_EVENTS_DIR or <project>/data/events) against
@@ -71,9 +71,9 @@ PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON")"
 [ -n "$PROJECT_NAME" ] || PROJECT_NAME="$(basename "$PROJECT_DIR")"
 BUDGET_TOKENS="$(jq -r '.release.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
 
-# The shoulder-mode critic IS the release role's out-of-band voice. Resolve
-# its display through the same map — legacy configs (no [names]) keep the
-# svc string "<project>-guardian" and the critique event carries role:release.
+# The shoulder-mode critic IS the release role's out-of-band voice: svc is
+# "<project>-<display>" (role id when no [names]) and the critique event
+# carries role:release.
 ROLE="release"
 export QUARTET_ROLE="$ROLE"
 # shellcheck disable=SC1091
@@ -94,7 +94,7 @@ emit_event() {
 if [ -d "$PROJECT_DIR/tmp" ]; then
   QUEUE_DIR="$PROJECT_DIR/tmp"
 else
-  QUEUE_DIR="/tmp/guardian-critic-$(id -u)/$(basename "$PROJECT_DIR")"
+  QUEUE_DIR="/tmp/shipyard-critic-$(id -u)/$(basename "$PROJECT_DIR")"
 fi
 
 # ---------- budget ----------------------------------------------------------
@@ -147,7 +147,7 @@ $(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
 # ---------- one critique over a queue file ----------------------------------
 critique_queue() {
   local queue="$1" session="$2"
-  local findings_file="$QUEUE_DIR/guardian-critic-findings-$session"
+  local findings_file="$QUEUE_DIR/critic-findings-$session"
 
   # Delivery-retry guard: when a critique already ran for this exact queue
   # state (findings newer than the last queue write), reuse it instead of
@@ -195,7 +195,6 @@ critique_queue() {
 
   # ---- project extension (conventions layer) --------------------------------
   local project_ext="" ext_file="$PROJECT_DIR/.agents/release.md"
-  [ -f "$ext_file" ] || ext_file="$PROJECT_DIR/.agents/guardian.md"   # legacy name
   [ -f "$ext_file" ] && project_ext="$(cat "$ext_file")"
 
   local prompt
@@ -221,7 +220,7 @@ $diff"
 
   # ---- spawn the critic -----------------------------------------------------
   local model_args=()
-  [ -n "${GUARDIAN_CRITIC_MODEL:-}" ] && model_args=(--model "$GUARDIAN_CRITIC_MODEL")
+  [ -n "${CRITIC_MODEL:-}" ] && model_args=(--model "$CRITIC_MODEL")
   local claude_out claude_rc
   claude_out="$(claude -p --output-format json "${model_args[@]}" "$prompt" 2>/dev/null)"
   claude_rc=$?
@@ -260,17 +259,17 @@ $diff"
 eval_pass() {
   local queues=()
   if [ -n "$SESSION" ]; then
-    queues=("$QUEUE_DIR/guardian-critic-queue-$SESSION")
+    queues=("$QUEUE_DIR/critic-queue-$SESSION")
   else
     local q
-    for q in "$QUEUE_DIR"/guardian-critic-queue-*; do
+    for q in "$QUEUE_DIR"/critic-queue-*; do
       [ -e "$q" ] && queues+=("$q")
     done
   fi
   local queue session now mtime idle distinct
   for queue in "${queues[@]}"; do
     [ -s "$queue" ] || continue
-    session="${queue##*/guardian-critic-queue-}"
+    session="${queue##*/critic-queue-}"
     now="$(date +%s)"
     mtime="$(stat -c %Y "$queue" 2>/dev/null || echo "$now")"
     idle=$(( now - mtime ))

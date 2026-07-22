@@ -17,9 +17,7 @@ The **role id** is the stable identity: the agent dir (`agents/<role>/`), the
 systemd unit names, notification voice — is chosen at install time with
 `--theme`: `plain` (role ids verbatim), `spacetime` (the column above), or
 `custom:d,b,r,m,s` (five names in role order `design,build,release,medic,scribe`).
-A config with no `[names]` block resolves to the legacy display map
-(build→`augur`, release→`guardian`) so pre-rename installs keep their exact
-unit names until re-baked — merging a rename never renames a running fleet.
+A config with no `[names]` block displays the role ids verbatim.
 
 ## The loops
 
@@ -111,7 +109,7 @@ configuration, and it is YOUR job:
 | control | key / mechanism | default |
 |---|---|---|
 | PR reviewer | `project_owner` in `.agents/config.toml` — build opens PRs, a human reviews | required |
-| self-merge | `[medic] can_merge` (legacy `augur_can_merge` is normalized, with a deprecation warning) | **false** |
+| self-merge | `[medic] can_merge` | **false** |
 | zero-CI merges | `[build] allow_no_ci` — a repo with no CI checks cannot pass the merge gate vacuously | **false** |
 | forbidden paths | `[build] forbidden_paths` — any edit inside one is refused (`forbidden_path:<path>`); medic never escalates failures there | `[]` |
 | spend / scope caps | `[build] budget` (USD, enforced via `--max-budget-usd`) + `wall_clock_sec`; `[design] budget_tokens_daily` + `max_open_proposals`; `[release] budget_hook` / `budget_daily` + critic `budget_tokens_daily`; `[medic] daily_escalation_cap` | sane, small |
@@ -151,9 +149,10 @@ can_merge = false
 ```
 
    plus per-role prompt extensions (`.agents/<role>.md`) — project-specific
-   instructions appended to each role's generic `role.md`. Legacy configs
-   using `[guardian]`/`[augur]` sections and `medic.augur_can_merge` still
-   load: the loader normalizes them and prints a one-time deprecation warning.
+   instructions appended to each role's generic `role.md`. Config sections and
+   prompt filenames use the role ids only (`[build]`/`[release]`,
+   `build.md`/`release.md`) — the legacy `[augur]`/`[guardian]` compat layer
+   is retired.
 
 2. Run the installer:
 
@@ -173,9 +172,9 @@ existing gate file), removes legacy cron launchers that would race the timers
 
 Re-runs are safe: without `--theme`, an existing `[names]` block is honored
 (only an explicit `--theme` renames a fleet), and the installer **sweeps any
-stale unit set for the same project+role left under an old display name** —
-including the legacy `augur`/`guardian` dir aliases — so a theme change or
-rename can never leave two sets of timers firing the same agent twice.
+stale unit set for the same project+role left under an old display name**, so
+a theme change or rename can never leave two sets of timers firing the same
+agent twice.
 
 **Uninstall** — the crew leaves nothing behind but the config you wrote:
 
@@ -267,7 +266,6 @@ agents/
 ├── release/    role.md + runner.sh + critic-* (shoulder)  [spacetime: proctor]
 ├── medic/      role.md + runner.sh + check-examples/      [spacetime: suk]
 ├── scribe/     role.md + runner.sh                        [spacetime: chronicler]
-├── guardian → release, augur → build   (back-compat symlinks for pre-rebake units)
 └── lib/        load-config.sh, naming.sh, post-run.sh, log_event.sh, revert-merge.sh
 skills/         the six shared skills + install + gates.md.template
 install.sh      per-project installer (idempotent; --theme names)

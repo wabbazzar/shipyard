@@ -7,7 +7,7 @@
 #   runner.sh --project DIR --check-config   # print effective gates, read-only
 #
 # Reads <project>/.agents/config.toml. Prompt = agents/release/role.md
-# + <project>/.agents/guardian.md + RUN CONTEXT block. Writes result to
+# + <project>/.agents/release.md + RUN CONTEXT block. Writes result to
 # <project>/tmp/<project>-guardian-result.json. Trailer via
 # agents/lib/post-run.sh emits job.end and (on fail) escalates to medic.
 #
@@ -47,13 +47,11 @@ fi
 
 CONFIG_FILE="$PROJECT_DIR/.agents/config.toml"
 ROLE_FILE="$SCRIPT_DIR/role.md"
-# Role-id filename first; .agents/guardian.md is the legacy name (pre-rename).
 PROJECT_PROMPT="$PROJECT_DIR/.agents/release.md"
-[ -f "$PROJECT_PROMPT" ] || PROJECT_PROMPT="$PROJECT_DIR/.agents/guardian.md"
 [ -f "$CONFIG_FILE" ]    || { echo "config not found: $CONFIG_FILE" >&2; exit 2; }
 if [ "$CHECK_CONFIG" -eq 0 ]; then
   [ -f "$ROLE_FILE" ]      || { echo "role.md not found: $ROLE_FILE" >&2; exit 2; }
-  [ -f "$PROJECT_PROMPT" ] || { echo "project release.md (or legacy guardian.md) not found: $PROJECT_DIR/.agents/" >&2; exit 2; }
+  [ -f "$PROJECT_PROMPT" ] || { echo "project release.md not found: $PROJECT_DIR/.agents/" >&2; exit 2; }
 fi
 
 # shellcheck disable=SC1091

@@ -157,7 +157,7 @@ CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
 PROJECT_NAME="$(echo "$CFG_JSON" | jq -r '.project_name // ""')"
 
 # Canonical role identity + resolved display names. Legacy configs (no
-# [names] block) resolve medic→"medic", build→"augur", release→"guardian",
+# [names] block) resolve every display to the role id itself,
 # so svc strings, sibling unit names, and the result file medic reads all
 # stay exactly as they are today.
 ROLE="medic"

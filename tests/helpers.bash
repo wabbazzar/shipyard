@@ -1,4 +1,4 @@
-# tests/helpers.bash — shared bats helpers for the guardian-quartet suite.
+# tests/helpers.bash — shared bats helpers for the shipyard suite.
 #
 # Load from a .bats file with:
 #
@@ -11,7 +11,7 @@
 #   * a PATH shim ($SHIM_BIN, prepended to PATH) where make_stub drops fake
 #     executables that record their argv — no network, no GitHub, no LLM;
 #   * make_fixture_project — a throwaway project with .agents/{config.toml,
-#     guardian,augur,medic,scribe}.md, a tmp/ result dir and a git repo;
+#     release,build,medic,scribe,design}.md, a tmp/ result dir and a git repo;
 #   * make_git_topology — a local bare "origin" plus a clone, with helpers
 #     to build BOTH trunk commit shapes (squash merge = one parent, true
 #     merge = two parents) so `git revert` semantics can be asserted for real;
@@ -165,7 +165,7 @@ make_fixture_project() {
   sed "s/__PROJECT_NAME__/$name/g" "$FIXTURES_DIR/$cfg" >"$dir/.agents/config.toml"
 
   local a
-  for a in guardian augur medic scribe; do
+  for a in release build medic scribe design; do
     printf '# %s — %s\n\nFixture prompt. No project-specific instructions.\n' \
       "$name" "$a" >"$dir/.agents/$a.md"
   done
