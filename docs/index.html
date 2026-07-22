@@ -164,6 +164,11 @@
     .loops-toggle button:hover:not(.active) { color: var(--text); }
     html.light .loops-toggle { background: var(--card); border-color: var(--rule); }
     html.light .loops-toggle button.active { color: #FFF8E7; }
+    /* FLIP proxies for the crew ⇄ skills morph (created/removed by setView) */
+    .sk-morph-proxy {
+      position: fixed; pointer-events: none; z-index: 60; box-sizing: border-box;
+      border: 2px solid var(--mp-color, var(--muted)); background: var(--code-bg);
+    }
     .loops-view[hidden] { display: none; }
 
     /* --- Skills graph (data-driven, self-contained SVG) --- */
@@ -683,7 +688,7 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
 
         const roleG = g.roles.map(r => {
           const p = rolePos[r.id], d = roleDim[r.id], col = roleColor[r.id] || 'var(--muted)';
-          return `<g class="sk-role"><rect x="${p.x - d.w / 2}" y="${p.y - d.h / 2}" width="${d.w}" height="${d.h}" rx="15" fill="${col}" fill-opacity="0.16" stroke="${col}" stroke-width="1.6"/><text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" fill="${col}">${esc(r.name || r.id)}</text></g>`;
+          return `<g class="sk-role" data-role="${esc(r.id)}"><rect x="${p.x - d.w / 2}" y="${p.y - d.h / 2}" width="${d.w}" height="${d.h}" rx="15" fill="${col}" fill-opacity="0.16" stroke="${col}" stroke-width="1.6"/><text x="${p.x}" y="${p.y}" text-anchor="middle" dominant-baseline="central" fill="${col}">${esc(r.name || r.id)}</text></g>`;
         }).join('');
 
         const nodeG = g.skills.map(s => {
@@ -725,12 +730,100 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
         const btnSkills = document.getElementById('loops-btn-skills');
         const crewView = document.getElementById('loops-crew-view');
         const skillsView = document.getElementById('loops-skills-view');
-        const setView = (skills) => {
+        const applyView = (skills) => {
           crewView.hidden = skills; skillsView.hidden = !skills;
           btnCrew.classList.toggle('active', !skills);
           btnSkills.classList.toggle('active', skills);
           btnCrew.setAttribute('aria-selected', String(!skills));
           btnSkills.setAttribute('aria-selected', String(skills));
+        };
+
+        // FLIP morph: the five crew boxes travel into their same-colored role
+        // chips (and back); everything without a counterpart cross-fades.
+        // Reduced motion, a mid-flight click, or any failure → plain swap.
+        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+        const CREW_IDS = ['design', 'build', 'release', 'medic', 'scribe'];
+        let morphing = false;
+        // Measure the arriving view's rects in the FINAL layout: the departing
+        // view must be hidden too, or every target sits a view-height too low.
+        const measureFinal = (showView, hideView, fn) => {
+          hideView.hidden = true;
+          showView.style.visibility = 'hidden'; showView.hidden = false;
+          const r = fn();
+          showView.hidden = true; showView.style.visibility = '';
+          hideView.hidden = false;
+          return r;
+        };
+        const boxRects = () => {
+          const o = {};
+          CREW_IDS.forEach(id => {
+            const el = crewView.querySelector(`.loop-node[data-crew="${id}"]`);
+            if (el) o[id] = el.getBoundingClientRect();
+          });
+          return o;
+        };
+        const chipRects = () => {
+          const o = {};
+          CREW_IDS.forEach(id => {
+            const el = skillsView.querySelector(`.sk-role[data-role="${id}"] rect`);
+            if (el) o[id] = el.getBoundingClientRect();
+          });
+          return o;
+        };
+        const setView = (skills) => {
+          if (morphing) return;
+          if (reducedMotion.matches || crewView.hidden === skills) { applyView(skills); return; }
+          const src = skills ? boxRects() : chipRects();
+          const dst = skills ? measureFinal(skillsView, crewView, chipRects)
+                             : measureFinal(crewView, skillsView, boxRects);
+          const ids = CREW_IDS.filter(id => src[id] && dst[id]);
+          if (!ids.length) { applyView(skills); return; }
+          morphing = true;
+          const DUR = window.matchMedia('(max-width: 640px)').matches ? 250 : 350;
+          const fromView = skills ? crewView : skillsView;
+          const toView = skills ? skillsView : crewView;
+          const overlay = document.createElement('div');
+          overlay.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:60;';
+          const anims = [];
+          ids.forEach(id => {
+            const a = src[id];
+            const b = dst[id];
+            const p = document.createElement('div');
+            p.className = 'sk-morph-proxy';
+            p.style.setProperty('--mp-color', `var(--loop-${id})`);
+            p.style.left = '0px'; p.style.top = '0px';
+            overlay.appendChild(p);
+            anims.push(p.animate([
+              { transform: `translate(${a.left}px,${a.top}px)`, width: `${a.width}px`,
+                height: `${a.height}px`, borderRadius: skills ? '8px' : '15px' },
+              { transform: `translate(${b.left}px,${b.top}px)`, width: `${b.width}px`,
+                height: `${b.height}px`, borderRadius: skills ? '15px' : '8px' }
+            ], { duration: DUR, easing: 'ease-in-out', fill: 'both' }));
+          });
+          document.body.appendChild(overlay);
+          // Departing view (gates, hint / nodes, edges, legend) fades with it.
+          anims.push(fromView.animate([{ opacity: 1 }, { opacity: 0 }],
+            { duration: Math.round(DUR * 0.6), easing: 'ease-out', fill: 'forwards' }));
+          // Arriving view rendered but invisible during flight.
+          toView.style.opacity = '0'; toView.hidden = false;
+          const settle = () => {
+            applyView(skills);
+            toView.style.opacity = ''; fromView.style.opacity = '';
+            anims.forEach(an => { try { an.cancel(); } catch (e) {} });
+            // Chips/boxes are already at their real positions; graph internals
+            // (or crew-side extras) fade in just after the proxies land.
+            const late = skills
+              ? toView.querySelectorAll('.sk-membership, .sk-edges, .sk-nodes, .sk-role[data-role="human"], .skill-legend, .skill-note')
+              : toView.querySelectorAll('.loop-gate, .drawer-hint');
+            late.forEach(el => el.animate([{ opacity: 0 }, { opacity: 1 }],
+              { duration: 220, delay: 100, easing: 'ease-in', fill: 'backwards' }));
+            overlay.remove();
+            morphing = false;
+          };
+          let done = false;
+          const finish = () => { if (!done) { done = true; settle(); } };
+          Promise.all(anims.map(an => an.finished.catch(() => {}))).then(finish);
+          setTimeout(finish, DUR + 800); // safety: never strand a proxy
         };
         btnCrew.addEventListener('click', () => setView(false));
         btnSkills.addEventListener('click', () => setView(true));
