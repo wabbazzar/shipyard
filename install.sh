@@ -134,6 +134,13 @@ for role in $QUARTET_ROLES; do
 done
 
 echo "==> theme '$THEME' → [names] block in $CFG"
+# Resolve the effective names into CFG_JSON in-memory NOW, so unit-name
+# resolution (role_display) sees the theme in BOTH dry-run and real runs —
+# a dry-run must show the same unit names the real run will write.
+names_json="$(for role in $QUARTET_ROLES; do
+    printf '%s\t%s\n' "$role" "${THEME_NAMES[$role]}"
+  done | jq -R 'split("\t") | {(.[0]): .[1]}' | jq -s 'add')"
+CFG_JSON="$(jq --argjson n "$names_json" '.names = $n' <<<"$CFG_JSON")"
 if [ "$DRY_RUN" = "1" ]; then
   echo "  would write:"; printf '%s' "$names_block" | sed 's/^/    /'
 else
@@ -148,8 +155,6 @@ else
   printf '\n%s' "$names_block" >> "$tmp_cfg"
   mv "$tmp_cfg" "$CFG"
   echo "  wrote [names] ($THEME)"
-  # Reload so unit generation sees the freshly baked names.
-  CFG_JSON="$(load_config_json "$CFG")" || { echo "failed to re-parse $CFG" >&2; exit 2; }
 fi
 
 # ---------- defaults (keyed by canonical role) ------------------------------
