@@ -77,12 +77,13 @@ PROJECT_DIR=""
 DRY_RUN=0
 AGENTS="build,release,medic,scribe"
 THEME="plain"
+THEME_EXPLICIT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --project) PROJECT_DIR="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --agents)  AGENTS="$2"; shift 2 ;;
-    --theme)   THEME="$2"; shift 2 ;;
+    --theme)   THEME="$2"; THEME_EXPLICIT=1; shift 2 ;;
     -h|--help) usage 0 ;;
     *) echo "unknown arg: $1" >&2; usage ;;
   esac
@@ -120,6 +121,16 @@ PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON")"
 # medic scribe), then bake a [names] block into the project's config.toml so
 # the runners + this installer resolve the same svc/unit names.
 declare -A THEME_NAMES
+# No explicit --theme on a re-run: an existing [names] block in the project's
+# config is the operator's prior choice — honor it. Defaulting to plain here
+# once wrote a DUPLICATE role-id unit set alongside a live themed fleet.
+if [ "$THEME_EXPLICIT" = "0" ]; then
+  cfg_design="$(jq -r '.names.design // empty' <<<"$CFG_JSON")"
+  if [ -n "$cfg_design" ]; then
+    THEME="custom:$(jq -r '[.names.design, .names.build, .names.release, .names.medic, .names.scribe] | map(. // "") | join(",")' <<<"$CFG_JSON")"
+    echo "==> no --theme given; honoring existing [names] block ($THEME)"
+  fi
+fi
 case "$THEME" in
   plain)
     THEME_NAMES=( [design]=design [build]=build [release]=release [medic]=medic [scribe]=scribe ) ;;
