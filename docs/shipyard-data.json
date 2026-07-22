@@ -238,8 +238,9 @@
     {
       "id": 8,
       "title": "end-to-end gate",
-      "status": "pending",
-      "gist": "Every gate re-run from clean state; 2-week findings measure opens — the human operator judges ≥⅓ actionable, noisy rubric lines pruned."
+      "status": "done",
+      "gist": "Every gate re-run from clean state; 2-week findings measure opens — the human operator judges ≥⅓ actionable, noisy rubric lines pruned.",
+      "completed": "2026-07-21"
     },
     {
       "id": 9,
