@@ -164,6 +164,8 @@ def main():
     out["crew"] = out_crew
 
     out["phases"] = ed["phases"]
+    if "guarantees" in ed:
+        out["guarantees"] = ed["guarantees"]
     out["install"] = ed["install"]
     out["adaptation"] = ed["adaptation"]
 

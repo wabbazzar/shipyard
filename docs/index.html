@@ -109,6 +109,20 @@
     .skill-body p { color: inherit; }
     .skill-summary { font-size: 0.78rem; font-weight: 400; color: var(--muted); display: block; }
 
+    /* Guarantees board (public build status) */
+    .check-board { margin: 1.2rem 0; border: 1px solid var(--dot-inactive); border-radius: 8px; overflow: hidden; }
+    .check-row {
+      display: grid; grid-template-columns: 1.6rem 15rem 1fr; gap: 0.6rem;
+      padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--dot-inactive);
+      font-size: 0.82rem; align-items: baseline;
+    }
+    .check-row:last-child { border-bottom: none; }
+    .check-mark { color: var(--loop-build, var(--accent)); font-weight: 700; }
+    .check-row.open .check-mark { color: var(--muted); }
+    .check-claim { color: var(--text); font-weight: 600; }
+    .open-windows-h { font-size: 0.95rem; color: var(--muted); margin: 1.4rem 0 0.2rem; text-transform: uppercase; letter-spacing: 0.06em; }
+    @media (max-width: 640px) { .check-row { grid-template-columns: 1.4rem 1fr; } .check-row .pgist { grid-column: 2; } }
+
     /* Phase board */
     .phase-board { margin: 1.6rem 0; border: 1px solid var(--dot-inactive); border-radius: 8px; overflow: hidden; }
     .phase-row { display: grid; grid-template-columns: 2.2rem 9.5rem 6.2rem 1fr; gap: 0.8rem; padding: 0.55rem 0.9rem; border-bottom: 1px solid var(--dot-inactive); font-size: 0.82rem; align-items: baseline; }
@@ -337,15 +351,14 @@
     <!-- ========== 3 · The build, live ========== -->
     <section id="plan">
       <div class="slide-inner">
-        <h2>Build status</h2>
+        <h2>What the build guaranteed</h2>
 
-        <p>Thirteen phases. 0&ndash;8 harden the existing agents under their
-        current names (the ticket&rsquo;s verified line numbers depend on it);
-        9&ndash;11 rename, unify skills, and add the design loop; 12 judges the
-        whole system. Status below is live data, updated by the builder as a
-        commit gate.</p>
+        <p id="guarantees-intro"></p>
 
-        <div class="phase-board" id="phase-board"></div>
+        <div class="check-board" id="guarantee-board"></div>
+
+        <h3 class="open-windows-h">Still being measured</h3>
+        <div class="check-board" id="open-windows"></div>
         <p class="board-meta" id="board-meta"></p>
       </div>
     </section>
@@ -516,14 +529,23 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
         node(byId.release);
       document.getElementById('crew-aside').innerHTML = node(byId.medic) + node(byId.scribe);
 
-      // Phase board
-      document.getElementById('phase-board').innerHTML = data.phases.map(p =>
-        `<div class="phase-row">
-           <span class="pnum">${p.id}</span>
-           <span class="ptitle">${esc(p.title)}</span>
-           <span class="status-chip" data-s="${esc(p.status)}">${esc(p.status)}</span>
-           <span class="pgist">${esc(p.gist)}</span>
-         </div>`).join('');
+      // Guarantees board (public-facing build status): what the build locked
+      // in, each enforced by a gate — plus the measurement windows still open.
+      if (data.guarantees) {
+        document.getElementById('guarantees-intro').textContent = data.guarantees.intro || '';
+        document.getElementById('guarantee-board').innerHTML = (data.guarantees.items || []).map(g =>
+          `<div class="check-row">
+             <span class="check-mark" aria-hidden="true">&#10003;</span>
+             <span class="check-claim">${esc(g.claim)}</span>
+             <span class="pgist">${esc(g.proof)}</span>
+           </div>`).join('');
+        document.getElementById('open-windows').innerHTML = (data.guarantees.open || []).map(w =>
+          `<div class="check-row open">
+             <span class="check-mark" aria-hidden="true">&#9203;</span>
+             <span class="check-claim">${esc(w.title)}</span>
+             <span class="pgist">${esc(w.what)}</span>
+           </div>`).join('');
+      }
       document.getElementById('board-meta').textContent =
         `data: shipyard-data.json · updated ${data.meta.updated}`;
 
