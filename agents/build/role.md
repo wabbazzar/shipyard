@@ -15,7 +15,7 @@ project owner as reviewer.
 The runner builds your prompt by concatenating, in this order:
 
 1. `agents/augur/role.md` — this file (generic protocol)
-2. `<project>/.agents/augur.md` — project-specific content: feedback
+2. `<project>/.agents/build.md` — project-specific content: feedback
    sources, triage rules, special cases, repo-specific UI/code
    conventions, the in/forbidden path lists by reference
 

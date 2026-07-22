@@ -145,16 +145,16 @@ critique_queue() {
   n_files="$(printf '%s\n' "$changed" | grep -c . || true)"
 
   # ---- project extension (conventions layer) --------------------------------
-  local project_ext=""
-  [ -f "$PROJECT_DIR/.agents/guardian.md" ] && \
-    project_ext="$(cat "$PROJECT_DIR/.agents/guardian.md")"
+  local project_ext="" ext_file="$PROJECT_DIR/.agents/release.md"
+  [ -f "$ext_file" ] || ext_file="$PROJECT_DIR/.agents/guardian.md"   # legacy name
+  [ -f "$ext_file" ] && project_ext="$(cat "$ext_file")"
 
   local prompt
   prompt="$(cat "$ROLE_FILE")
 
 ---
 
-PROJECT EXTENSION (.agents/guardian.md):
+PROJECT EXTENSION (.agents/release.md):
 
 $project_ext
 

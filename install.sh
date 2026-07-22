@@ -1,8 +1,8 @@
 #!/bin/bash
-# install-quartet.sh — idempotent installer for the quartet agents.
+# install.sh — idempotent installer for the shipyard crew.
 #
 # Usage:
-#   scripts/install-quartet.sh --project <project_dir> [--dry-run] [--agents LIST] [--theme T]
+#   install.sh --project <project_dir> [--dry-run] [--agents LIST] [--theme T]
 #
 #   --project   Path to the target project (must contain .agents/config.toml).
 #   --dry-run   Print every change without writing anything.
@@ -31,7 +31,7 @@
 #      — those are pre-quartet legacy launchers, kept around historically
 #      and notorious for racing the new timers. Backs the crontab up first.
 #
-#   4. Deletes (via `git rm`, or `rm` if not tracked) any pre-quartet
+#   4. Deletes (via `git rm`, or `rm` if not tracked) any legacy
 #      launcher script at <project_dir>/scripts/<project_name>-<agent>.sh
 #      and its companion <agent>-prompt.md / <agent>-checklist.md. Skips
 #      files that are already thin shims (those route to this repo's
@@ -439,9 +439,9 @@ fi
 
 echo ""
 if [ "$all_ok" = "1" ]; then
-  echo "install-quartet: OK"
+  echo "install: OK"
   exit 0
 else
-  echo "install-quartet: incomplete (see warnings above)"
+  echo "install: incomplete (see warnings above)"
   exit 1
 fi

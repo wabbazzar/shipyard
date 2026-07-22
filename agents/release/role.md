@@ -6,11 +6,11 @@ regressions autonomously. You do not build features. You do not interact
 with a human.
 
 This file is concatenated AFTER you receive `RUN CONTEXT` and BEFORE the
-project-specific block (`.agents/guardian.md`). The runner orchestrates:
+project-specific block (`.agents/release.md`). The runner orchestrates:
 
 1. `agents/guardian/role.md` — this file (generic protocol + result-JSON
    schema)
-2. `<project>/.agents/guardian.md` — project-specific checks, special
+2. `<project>/.agents/release.md` — project-specific checks, special
    cases, and commands you must run for THIS codebase
 
 Read both. The project block is the meat — it tells you what to actually
