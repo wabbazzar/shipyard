@@ -1,235 +1,256 @@
-# guardian-quartet
+# shipyard
 
-**Four autonomous agents that keep a repo healthy while you sleep**, each a
-[Claude Code](https://claude.com/claude-code) instance on a systemd timer:
+**A crew of five autonomous agents that design, build, release, and repair a
+repo while you sleep** — each a [Claude Code](https://claude.com/claude-code)
+instance on a systemd timer:
 
-| role id | display (default) | cadence | job |
+| role id | display (`--theme spacetime`) | cadence | job |
 |---|---|---|---|
-| **release** | guardian | daily | run the test/audit battery, fix what it safely can, report |
-| **build** | augur | nightly | triage user feedback (`data/fyi-requests.jsonl`) → autonomous PRs |
-| **medic** | medic | every 10 min | failure-triggered triage: classify incidents, drive build, merge, re-trigger |
-| **scribe** | scribe | daily | keep docs/content in sync with the code |
+| **design** | mentat | nightly | mine the project's telemetry into ≤3 evidence-backed proposals; a human stamps them |
+| **build** | helldiver | nightly | triage user feedback into PRs; build stamped tickets |
+| **release** | proctor | daily + on-edit | run the test/audit battery; critique diffs cold-context |
+| **medic** | suk | every 10 min | detect incidents, mitigate (restart / revert), route repairs into the design loop |
+| **scribe** | chronicler | daily | keep docs/content in sync with the code |
 
-The **role id** is the stable identity (agent dir, `[<role>]` config section,
-the event `role:` field, event-name prefix). The **display name** is what the
-systemd unit / notification voice is called; it's chosen at install time by a
-`--theme` (default `plain` = the role ids verbatim). The `guardian`/`augur`
-column above is the *legacy* display, still the default for any project
-installed before the rename (a config with no `[names]` block). See
-[Display themes](#display-themes).
+The **role id** is the stable identity: the agent dir (`agents/<role>/`), the
+`[<role>]` config section, the event `role:` field. The **display name** —
+systemd unit names, notification voice — is chosen at install time with
+`--theme`: `plain` (role ids verbatim), `spacetime` (the column above), or
+`custom:d,b,r,m,s` (five names in role order `design,build,release,medic,scribe`).
+A config with no `[names]` block resolves to the legacy display map
+(build→`augur`, release→`guardian`) so pre-rename installs keep their exact
+unit names until re-baked — merging a rename never renames a running fleet.
 
-They cooperate: a failed guardian run escalates to medic; medic classifies
-the incident and can task augur with a fix; augur opens a PR with the
-project owner as reviewer; medic merges green PRs and re-runs guardian
-post-merge. Every step is logged to an append-only JSONL event stream.
+## The loops
+
+**Design.** Nightly, mentat's collectors aggregate the telemetry the project
+already produces — the JSONL event stream, access-log path counts, user
+feedback in `data/fyi-requests.jsonl`, `data/usage/*.jsonl` beacons, open
+medic incidents — and mentat drafts **at most 3** proposals. Every proposal's
+`evidence` field must quote a real datum from that summary (an exact event
+count, a verbatim feedback line, a path + request count); a quiet night
+returns `[]`. Mentat drafts only — it never writes code or touches the repo.
+Proposals wait for a **human stamp** in a dispatch queue; decisions land in
+`<project>/data/decisions.jsonl`, and denied proposals are never re-drafted.
+
+**Build.** A stamped proposal flows down one road:
+`write-ticket → polish-ticket → execute-ticket → PR`, with `project_owner` as
+the reviewer. The same crew triages asynchronous user feedback
+(`data/fyi-requests.jsonl`) nightly into small PRs; substantial asks become
+design proposals instead of drive-by patches.
+
+**Release.** Two surfaces. A **shoulder-mode critic**
+(`agents/release/critic-watch.sh`) batches a dev session's edits and, when the
+session goes quiet, runs one cold-context critique over the whole diff — it
+never sees the author's transcript (goal contamination), never writes code,
+and delivers findings into the live session as notes, never hard stops. The
+**daily battery** runs the project's tests, typecheck, and every configured
+audit, fixes what it safely can, and reports.
+
+Two crews sit outside the loop:
+
+**On-call (medic).** Every 10 minutes: walk the service surface + the other
+agents' results, build candidate incidents, classify, act. Mitigation is
+ungated — restart a whitelisted unit, revert a merge that fails post-merge
+validation (`agents/lib/revert-merge.sh`; the revert path is proven by
+`runner.sh --self-test`). A `regression`-class incident does **not** get
+auto-fixed: medic writes an **incident-repair proposal** into the design
+loop's result file (`medic.incident.repair_proposed` + `design.proposal.opened`
+events, deduped, capped daily) and the repair waits for the same human stamp
+as any other work. The old medic→build auto-merge side-door is retired:
+`build --mode incident` emits nothing and exits 3.
+
+**Docs (scribe).** Daily: refresh the configured content paths, optionally
+auto-commit/push (`[scribe] auto_commit` / `auto_push`). Scribe failures
+notify only — they never escalate to medic.
+
+Humans enter the same loop through two front-door skills: **`/bugfix`**
+(reproduce-and-root-cause first — a failing test, reliable steps, or a
+captured signature; no ticket until the defect is pinned) and **`/feature`**
+(clarify first — verify assumptions, lock an Objective and a checklist
+Definition of Done). Both hand `write-ticket` a scope and stop at the human
+stamp unless the operator says "and build it."
+
+## Skills-parity
+
+The installer symlinks six skills — `write-ticket`, `bugfix`,
+`feature`, `polish-ticket`, `execute-ticket`, `coverage-audit` — from this
+repo's `skills/` into `<project>/.claude/skills/`. Headless agents and
+in-session humans load the **identical files**: one implementation, two
+callers, no agent-only fork. A core upgrade flows to every project at once.
+
+## North star
+
+Each project hands mentat a one-line compass: `[design] north_star` in
+`.agents/config.toml` if set, else the repo's GitHub description
+(`gh repo view --json description`). It is a **directional prior** — it ranks
+proposals toward what the repo is *for*; it never gates. Evidence still
+decides what gets drafted.
 
 ## ⚠️ Read this before installing
 
-These agents run `claude --dangerously-skip-permissions` **unattended, on
-a schedule, with commit/PR rights on your repos**. The safety model is
+These agents run `claude --dangerously-skip-permissions` **unattended, on a
+schedule, with commit/PR rights on your repos**. The safety model is
 configuration, and it is YOUR job:
 
-- **`project_owner` is the PR reviewer** — augur never merges its own
-  work without a human-named reviewer on the PR. Set it.
-- **Kill switches** — each agent honors a per-project kill switch in
-  `.agents/config.toml`; flip it and the next run exits immediately.
-- **Forbidden globs** — paths agents must never touch (secrets, auth,
-  prod configs). Enforced in the agent prompts and checked in review.
-- **Budgets** — per-run caps (turns, attempts, PRs) so a confused agent
-  rate-limits itself instead of thrashing.
-- **`--dry-run` first.** The installer prints every unit file and crontab
-  change before you commit to it.
-- Agents only get projects you explicitly install them on. Start with one
-  low-stakes repo.
+| control | key / mechanism | default |
+|---|---|---|
+| PR reviewer | `project_owner` in `.agents/config.toml` — build opens PRs, a human reviews | required |
+| self-merge | `[medic] can_merge` (legacy `augur_can_merge` is normalized, with a deprecation warning) | **false** |
+| zero-CI merges | `[build] allow_no_ci` — a repo with no CI checks cannot pass the merge gate vacuously | **false** |
+| forbidden paths | `[build] forbidden_paths` — any edit inside one is refused (`forbidden_path:<path>`); medic never escalates failures there | `[]` |
+| spend / scope caps | `[build] budget` (USD, enforced via `--max-budget-usd`) + `wall_clock_sec`; `[design] budget_tokens_daily` + `max_open_proposals`; `[release] budget_hook` / `budget_daily` + critic `budget_tokens_daily`; `[medic] daily_escalation_cap` | sane, small |
+| off switch | `systemctl --user disable --now <project>-<display>.timer` — per crew, instant | — |
+| inspect first | `install.sh --dry-run` prints every unit and crontab change before writing | — |
+
+Agents only get projects you explicitly install them on. Start with one
+low-stakes repo.
 
 ## Requirements
 
-Linux with systemd (user instance), Claude Code installed and
-authenticated, `jq`, `python3` (3.11+), `gh` (authenticated, for augur
-PRs), `git`.
+Linux with systemd (user instance), Claude Code installed and authenticated,
+`jq`, `python3` (3.11+), `gh` (authenticated, for PRs), `git`.
 
 ## Install on a project
 
-1. Create `<project>/.agents/` with a `config.toml`:
+The full model — six layers L0 (shared core) through L5 (symlinked skills) —
+is in [docs/INSTALL.md](docs/INSTALL.md); the `install` skill
+(`skills/install/SKILL.md`) drives the interview. The mechanics:
+
+1. Create `<project>/.agents/config.toml`:
 
 ```toml
 project_name  = "myproject"
-project_dir   = "/home/user/code/myproject"   # informational only — runners take --project  # leak-allow
-project_owner = "your-github-user"            # PR reviewer — required
-branch        = "main"   # optional — omitted: detected from origin/HEAD; runners FAIL (exit 2) if neither resolves, never assume a default
+project_owner = "your-github-user"   # PR reviewer — required
+branch        = "main"   # optional — else detected from origin/HEAD; runners fail (exit 2) if neither resolves
 
-[install.timers]   # optional — override the default schedules (role ids;
-release = "*-*-* 04:30:00"   # legacy keys guardian/augur are still accepted)
-build   = "*-*-* 03:30:00"
-medic   = "*-*-* 00,05..23:00/10:00"
-scribe  = "*-*-* 01:00:00"
-
-[release]           # test/audit gate config (legacy section name: [guardian])
+[release]
 test_cmd  = "npx vitest run"
 typecheck = "npx tsc --noEmit"
 
-[build]             # feedback/fix agent config (legacy section name: [augur])
+[build]
 allow_no_ci = false
 
 [medic]
-can_merge = false   # kill switch for build self-merge (legacy: augur_can_merge)
+can_merge = false
 ```
 
-   plus per-agent prompt blocks: `guardian.md`, `augur.md`, `medic.md`,
-   `scribe.md` (project-specific instructions appended to each role's generic
-   role.md — these keep the legacy filenames for install compatibility).
-
-   Legacy configs using `[guardian]`/`[augur]` sections and
-   `medic.augur_can_merge` still work: the loader normalizes them to
-   `[release]`/`[build]`/`medic.can_merge` and prints a one-time deprecation
-   warning to stderr.
+   plus per-role prompt extensions (`.agents/<role>.md`) — project-specific
+   instructions appended to each role's generic `role.md`. Legacy configs
+   using `[guardian]`/`[augur]` sections and `medic.augur_can_merge` still
+   load: the loader normalizes them and prints a one-time deprecation warning.
 
 2. Run the installer:
 
 ```bash
-./install.sh --project /path/to/myproject --dry-run   # inspect first
-./install.sh --project /path/to/myproject             # then for real
-./install.sh --project /path/to/myproject --agents build,medic  # subset
-./install.sh --project /path/to/myproject --theme spacetime  # themed names
+./install.sh --project /path/to/myproject --dry-run          # inspect first
+./install.sh --project /path/to/myproject --theme spacetime  # then for real
+./install.sh --project /path/to/myproject --agents design,build,release,medic,scribe
 ```
 
-It bakes a `[names]` block into the config (see [Display themes](#display-themes)),
-writes `~/.config/systemd/user/<project>-<display>.{service,timer}`, enables the
-timers, removes legacy cron entries that would race them (crontab is backed up
-first), and prints next-fire times. Default `--agents` is
-`build,release,medic,scribe`; legacy names (`guardian`→release, `augur`→build)
-are accepted.
+Default `--agents` is `build,release,medic,scribe` — design is opt-in. The
+installer bakes the `[names]` theme block into the config, writes
+`~/.config/systemd/user/<project>-<display>.{service,timer}` and enables the
+timers, symlinks the six shared skills into `<project>/.claude/skills/`,
+drops `skills/gates.md.template` into `.agents/gates.md` (never clobbering an
+existing gate file), removes legacy cron launchers that would race the timers
+(crontab backed up first), and prints next-fire times.
 
-## Display themes
+**Uninstall** — the crew leaves nothing behind but the config you wrote:
 
-The canonical role ids (`build`/`release`/`medic`/`scribe`) never change, but
-the unit and notification display names are chosen at install time with
-`--theme` and stored in a `[names]` block in the project's config:
-
-| `--theme` | build | release | medic | scribe |
-|---|---|---|---|---|
-| `plain` (default) | build | release | medic | scribe |
-| `spacetime` | helldiver | proctor | suk | chronicler |
-| `custom:d,b,r,m,s` | your five names in role order `design,build,release,medic,scribe` |
-
-A config with **no `[names]` block** resolves to the legacy display map
-(build→`augur`, release→`guardian`) — so an install that predates this rename
-keeps its exact unit names until it's re-baked with a `--theme`. This is the
-safety property: merging the rename is a no-op for the running fleet.
+```bash
+systemctl --user disable --now <project>-*.timer
+rm ~/.config/systemd/user/<project>-*.{service,timer}
+systemctl --user daemon-reload
+rm -rf <project>/.agents <project>/.claude/skills/{write-ticket,bugfix,feature,polish-ticket,execute-ticket,coverage-audit}
+```
 
 ## Liveness probes & drift checks (medic)
 
-Beyond watching the other agents, medic's 10-minute scan can watch your
-*deployment surface*. Two optional config mechanisms, both in
+Medic's 10-minute scan can also watch your deployment surface, via
 `.agents/config.toml`:
 
-**HTTP probes** — the runner curls each URL every tick and synthesizes
-an incident when the status differs from `expect_status`. Catches the
-"server cleanly exited, unit `inactive` not `failed`, nobody noticed"
-outage class:
-
 ```toml
-[[medic.probes]]
+[[medic.probes]]                 # HTTP probe: wrong status ⇒ incident
 name          = "myproject-api"
 url           = "https://api.example.com/api/auth/me"
-expect_status = 401          # up-but-unauthed is the healthy signal
+expect_status = 401              # up-but-unauthed is the healthy signal
 timeout_sec   = 10
-```
 
-**Drift checks** — arbitrary project scripts the runner executes every
-tick from the project dir; nonzero exit synthesizes an incident with
-the script's stdout as evidence (write the stdout as the human-facing
-drift message — medic quotes it verbatim in the notification):
-
-```toml
-[[medic.checks]]
+[[medic.checks]]                 # drift check: nonzero exit ⇒ incident
 name         = "frontend-deploy-drift"
 cmd          = "scripts/medic-checks/frontend-deploy-drift.sh"
 timeout_sec  = 30
 restart_unit = "myproject-frontend-deploy.timer"  # optional — lets medic bounce it
 ```
 
-Drift is usually operational (a missed restart, a wedged deployer), so
-medic classifies it `infra` (notify + freeze) or `restart` (when
-`restart_unit` is set and your `.agents/medic.md` says it's safe) —
-never `regression`. Copy-and-edit starters live in
-`agents/medic/check-examples/`: a server-restart drift check (service
-must restart after server-path commits) and a frontend-deploy drift
-check (deployed `version.json` commit stamp must match branch HEAD past
-a grace window).
+Drift is usually operational, so medic classifies it `infra` (notify + 24h
+freeze) or `restart` (when `restart_unit` is whitelisted) — never
+`regression`. Copy-and-edit starters live in `agents/medic/check-examples/`.
 
-## Security sweep (guardian)
+## Security sweep (release)
 
-Opt-in daily security pass — dependency audit (critical CVEs fail the
-run, highs are informational), security-header probe (HSTS, nosniff,
-CORS wildcard), and a secrets-in-commits grep over the last 24h
-(reported redacted: file + line + variable name, never the value).
-Enable by adding the block to `.agents/config.toml`:
+Opt-in daily pass — dependency audit (critical CVEs fail the run), security
+headers, secrets-in-commits grep over the last 24h (reported redacted).
+Enable with a `[release.security]` block (`audit_dirs`, optional
+`header_probe_url`); omit it and the sweep is skipped. Details in
+`agents/release/role.md`.
 
-```toml
-[release.security]   # legacy section name: [guardian.security]
-audit_dirs       = [".", "subpackage"]   # package dirs to dependency-audit
-header_probe_url = "https://api.example.com/api/auth/me"  # optional
-```
+## Notifications & environment knobs
 
-Omit the block and the release (guardian) run skips the sweep entirely.
-Details in `agents/release/role.md`.
-
-## Notifications
-
-Transport-agnostic. Set `QUARTET_NOTIFY_CMD` to any command that takes
-`(title, body)` as two arguments — a Signal wrapper, `ntfy`, Pushover,
-email. Unset = silent (events are still logged).
-
-```bash
-QUARTET_NOTIFY_CMD="/home/user/bin/notify" ./install.sh --project …  # leak-allow (placeholder)
-```
-
-## Environment knobs
+Transport-agnostic. Knobs are **baked into the generated units at install
+time** (user services don't inherit your shell env), so set them when running
+`install.sh`:
 
 | var | effect |
 |---|---|
-| `QUARTET_NOTIFY_CMD` | notification command `(title, body)`; unset = silent |
+| `QUARTET_NOTIFY_CMD` | notification command taking `(title, body)` — Signal wrapper, `ntfy`, email; unset = silent (events still log) |
 | `QUARTET_EVENTS_DIR` | where the JSONL event stream lands (default `data/events/` in this repo) |
-| `QUARTET_OPS_JSON` | optional systemd/cron state snapshot for medic's runner scan |
+| `QUARTET_OPS_JSON` | optional systemd/cron state snapshot for medic's scan |
 | `QUARTET_SCRIBE_PRE_HOOK` | optional executable run before each scribe pass |
-
-Set them when running `install.sh` — they're baked into the generated
-systemd units (user services don't inherit your shell env).
 
 ## Event stream
 
-Every run appends JSONL to `data/events/YYYY-MM-DD.jsonl` (override with
-`QUARTET_EVENTS_DIR`): `job.start` / `job.end` with status + duration,
-`medic.*` incident lifecycle, `build.*` PR lifecycle, `release.post_merge.*`
-+ `release.critique.*`. Every event also carries a canonical `role:` field
-(`build`/`release`/`medic`/`scribe`) alongside the display-named `svc`. Build
-dashboards on it, or just `jq` it.
+Every run appends JSONL to `data/events/YYYY-MM-DD.jsonl`: `job.start` /
+`job.end` with status + duration, `design.proposal.opened` /
+`design.proposal.skipped`, `medic.incident.*` lifecycle (detected, classified,
+frozen, `repair_proposed`, resolved), `release.critique` +
+`release.critique.skipped`. Every event carries the canonical `role:` field
+(`design`/`build`/`release`/`medic`/`scribe`) alongside the display-named
+`svc`. Build dashboards on it, or just `jq` it.
+
+## Docs
+
+- [docs/INSTALL.md](docs/INSTALL.md) — the six-layer install model (L0 core → L5 skills), the flow, uninstall
+- [docs/ADAPTING.md](docs/ADAPTING.md) — how the crew adapts: five feedback channels, the routing rule
+- [The deck](https://wabbazzar.com/shipyard/) — the system, narrated, with live status
 
 ## Using as a BopBop pack
 
-If you run [BopBop](https://github.com/wabbazzar/bopbop), install this
-repo as a context pack so your assistant can check agent health, relay
-feedback to augur, and trigger runs from your phone:
+If you run [BopBop](https://github.com/wabbazzar/bopbop), install this repo
+as a context pack so your assistant can check crew health, relay feedback,
+and trigger runs from your phone:
 
 ```bash
-bopbop pack install https://github.com/wabbazzar/guardian-quartet
+bopbop pack install https://github.com/wabbazzar/shipyard
 ```
 
-The pack fragment teaches the assistant the read/feedback/trigger
-commands; per-project installs remain explicit (`install.sh --project …`).
+Per-project installs remain explicit (`install.sh --project …`).
 
 ## Repo layout
 
 ```
 agents/
-├── release/    role.md + runner.sh + critic-* (shoulder mode)   [display: guardian]
-├── build/      role.md + runner.sh                              [display: augur]
-├── medic/      role.md + runner.sh + check-examples/
-├── scribe/     role.md + runner.sh
+├── design/     role.md + runner.sh + collectors.sh        [spacetime: mentat]
+├── build/      role.md + runner.sh                        [spacetime: helldiver]
+├── release/    role.md + runner.sh + critic-* (shoulder)  [spacetime: proctor]
+├── medic/      role.md + runner.sh + check-examples/      [spacetime: suk]
+├── scribe/     role.md + runner.sh                        [spacetime: chronicler]
 ├── guardian → release, augur → build   (back-compat symlinks for pre-rebake units)
-└── lib/        load-config.sh, naming.sh, post-run.sh, log_event.sh
+└── lib/        load-config.sh, naming.sh, post-run.sh, log_event.sh, revert-merge.sh
+skills/         the six shared skills + install + gates.md.template
 install.sh      per-project installer (idempotent; --theme names)
+docs/           INSTALL.md, ADAPTING.md, deck data
 pack.toml       BopBop pack manifest
 ```
 
