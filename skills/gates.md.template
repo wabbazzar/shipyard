@@ -1,0 +1,78 @@
+# Verification gates — <PROJECT_NAME>
+
+> The single source of truth for **how to prove a change works on this
+> project**. `polish-ticket` reads this file to assemble the per-phase
+> verification surface; `execute-ticket` reads it to know which gates to run
+> before every commit. There is no one test command that covers everything —
+> a phase declares which of the classes below apply, and this file supplies
+> the exact commands.
+>
+> The installer drops this template into `<project>/.agents/gates.md` and
+> never clobbers an existing copy. Fill in the placeholders, delete the gate
+> classes that don't apply, and grow the **Traps** appendix over time.
+
+## Commands (fill these in)
+
+| What | Command |
+|---|---|
+| Test suite | `<e.g. npm run test / .venv/bin/python -m pytest -q>` |
+| Typecheck / lint | `<e.g. npx tsc --noEmit / ruff check / py_compile core modules>` |
+| Build | `<e.g. npm run build / cargo build / n-a>` |
+| Notify (owner alert) | `$QUARTET_NOTIFY_CMD` (baked into units at install; a wrapper that pages the owner — the ONLY notification path) |
+| Event stream dir | `$QUARTET_EVENTS_DIR` (append-only JSONL, one `job.*` / incident object per line) |
+
+## Gate classes — mark which apply, keep the exact commands
+
+Delete any class this project doesn't have. For each phase, the ticket names
+which of these apply; "the code looks right" is never proof.
+
+### Shell scripts  — APPLIES: yes / no
+`bash -n` every touched script, then **run it for real** and read the output
+(exit codes + printed values, not vibes). Scripts with a `--check` / `--dry-run`
+flag: run that too.
+
+### systemd (user) units  — APPLIES: yes / no
+`systemctl --user daemon-reload`, then `list-timers` shows the expected next
+fire, then start the service once (`systemctl --user start <unit>`) and confirm
+the observable outcome — a `job.end` line in `$QUARTET_EVENTS_DIR/$(date +%F).jsonl`,
+`journalctl --user -u <unit>`, or the project's stated probe. Never wait for
+`OnCalendar`.
+
+### Served app at a port  — APPLIES: yes / no
+- Dev port: `<PORT>`  ·  Build command: `<BUILD_CMD>`  ·  Restart: `<RESTART_CMD>`
+- **Stale-bundle trap:** the service serves the *built* bundle, not a live dev
+  server — rebuild + restart after every source edit, then
+  `curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:<PORT>/<route>`
+  must return 200 before "done".
+- If this is a phone/PWA surface, render the changed view at **mobile viewport**
+  with a headless browser and actually look at it — desktop-width "looks fine"
+  is not evidence. **Kill the headless browser afterward and verify with `ps`
+  it's gone** (a forgotten headless browser can poll an endpoint for days).
+
+### Event stream / notifications  — APPLIES: yes / no
+If the phase emits events, read the actual JSONL line in
+`$QUARTET_EVENTS_DIR/$(date +%F).jsonl`. If it notifies, either confirm one real
+`$QUARTET_NOTIFY_CMD` send or deliberately stub it (say which in the Ledger) —
+don't spam the owner from a loop.
+
+### Sibling / cross-repo work  — APPLIES: yes / no
+List each sibling repo this project's tickets touch, its own gate, and its
+deploy hazard:
+
+| Repo | Gate command | Hazard |
+|---|---|---|
+| `<sibling-repo>` | `<its leak-check / test cmd>` | `<e.g. merge-is-live: units run runners from this clone, so a merge to trunk is fleet-live at the next timer fire — work on a branch until tested>` |
+
+### Live-system changes (firewall / cron / containers / packages)  — APPLIES: yes / no
+For each such change, write BOTH the verify command and the rollback command in
+the ticket **before** making the change (e.g. `nft list table …` + the delete
+command; `docker ps` + the stop command; probe the port + revert).
+
+## Traps that have bitten this project  (append-only; starts empty)
+
+The accreted incident history for this project. Every burned session becomes a
+line here so no future caller — agent or human — repeats it. This is the
+project's **learning surface**: operator corrections and post-mortems land here
+as reviewable, revertable edits.
+
+- _(none yet)_

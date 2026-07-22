@@ -37,6 +37,14 @@
 #      files that are already thin shims (those route to this repo's
 #      generic runner so they're harmless and we keep them).
 #
+#   4.5 Symlinks the shared skills (polish-ticket, execute-ticket,
+#      coverage-audit) from this repo's skills/ into
+#      <project_dir>/.claude/skills/ — so headless agents and in-session
+#      humans load the identical files — and drops skills/gates.md.template
+#      into <project_dir>/.agents/gates.md if that gate file does not already
+#      exist (an existing gate file is NEVER clobbered). It does NOT symlink
+#      into any hub's own .claude/skills — the hub owns that itself.
+#
 #   5. Verifies each requested timer is enabled and reports the next
 #      scheduled fire time.
 #
@@ -60,7 +68,7 @@ SYSTEMD_DIR="$HOME/.config/systemd/user"
 source "$QUARTET_DIR/agents/lib/naming.sh"
 
 usage() {
-  sed -n '2,46p' "$0"
+  sed -n '2,54p' "$0"
   exit "${1:-2}"
 }
 
@@ -340,6 +348,60 @@ for role in $ROLES_LIST; do
     done
   fi
 done
+
+# ---------- step 4.5: symlink shared skills + drop the gate file ------------
+# The generic skills live in $QUARTET_DIR/skills and are symlinked into the
+# project's .claude/skills/ so agents (headless) and humans (in-session) load
+# the identical files. A core upgrade to a skill flows to every project at
+# once. We NEVER touch a hub's .claude/skills here — the orchestrator owns the
+# hub's own symlinking.
+echo ""
+echo "==> shared skills → $PROJECT_DIR/.claude/skills/"
+GENERIC_SKILLS="polish-ticket execute-ticket coverage-audit"
+SKILLS_DEST="$PROJECT_DIR/.claude/skills"
+[ "$DRY_RUN" = "1" ] || mkdir -p "$SKILLS_DEST"
+for skill in $GENERIC_SKILLS; do
+  src="$QUARTET_DIR/skills/$skill"
+  dest="$SKILLS_DEST/$skill"
+  if [ ! -d "$src" ]; then
+    echo "  skip $skill: source missing ($src)"
+    continue
+  fi
+  if [ -L "$dest" ]; then
+    # Existing symlink: refresh it (cheap, idempotent).
+    cur="$(readlink -f "$dest" 2>/dev/null || true)"
+    if [ "$cur" = "$(readlink -f "$src")" ]; then
+      echo "  unchanged: $dest -> $src"
+    elif [ "$DRY_RUN" = "1" ]; then
+      echo "  would relink: $dest -> $src"
+    else
+      ln -sfn "$src" "$dest"; echo "  relinked:  $dest -> $src"
+    fi
+  elif [ -e "$dest" ]; then
+    # A real dir/file is there — do NOT clobber; the operator put it there.
+    echo "  SKIP (exists, not a symlink — not clobbering): $dest"
+  elif [ "$DRY_RUN" = "1" ]; then
+    echo "  would symlink: $dest -> $src"
+  else
+    ln -s "$src" "$dest"; echo "  symlinked: $dest -> $src"
+  fi
+done
+
+# Drop the gate file template into .agents/gates.md — but NEVER clobber an
+# existing gate file (it accumulates this project's filled-in commands + the
+# Traps appendix).
+GATES_SRC="$QUARTET_DIR/skills/gates.md.template"
+GATES_DEST="$PROJECT_DIR/.agents/gates.md"
+if [ ! -f "$GATES_SRC" ]; then
+  echo "  skip gates.md: template missing ($GATES_SRC)"
+elif [ -f "$GATES_DEST" ]; then
+  echo "  gates.md: exists — leaving as-is (never clobbered)"
+elif [ "$DRY_RUN" = "1" ]; then
+  echo "  would drop: $GATES_DEST (from gates.md.template)"
+else
+  sed "s/<PROJECT_NAME>/$PROJECT_NAME/g" "$GATES_SRC" > "$GATES_DEST"
+  echo "  wrote:     $GATES_DEST (fill in the commands + gate classes)"
+fi
 
 # ---------- step 5: verification --------------------------------------------
 echo ""
