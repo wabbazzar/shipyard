@@ -245,8 +245,9 @@
     {
       "id": 9,
       "title": "rename + themes",
-      "status": "pending",
-      "gist": "guardian-quartet → shipyard locally (GitHub already renamed); canonical role IDs in code + events; --theme spacetime|plain|custom; fleet re-baked; legacy keys warn for one release."
+      "status": "done",
+      "gist": "guardian-quartet → shipyard locally (GitHub already renamed); canonical role IDs in code + events; --theme spacetime|plain|custom; fleet re-baked; legacy keys warn for one release.",
+      "completed": "2026-07-21"
     },
     {
       "id": 10,
