@@ -126,22 +126,24 @@ if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
   # Pre-flight: live only. dry-run does no git ops, so skip.
   if [ "$MODE" = "live" ]; then
     if [ -n "$(git status --porcelain)" ]; then
-      echo "[$SVC] ABORT: main checkout dirty" >> "$LOG_FILE"
+      echo "[$SVC] SKIP: main checkout dirty (benign — not a failure)" >> "$LOG_FILE"
       git status --short >> "$LOG_FILE"
-      quartet_notify "$PROJECT_NAME ${DISPLAY^} aborted ($MODE)" \
-        "Main checkout has uncommitted changes." || true
+      # Benign precondition: uncommitted changes mean "skip this cycle", not a
+      # failure. Record the skip for observability but exit 0 so the systemd
+      # unit does not enter `failed` — which the medic reads as self_failure
+      # and freezes 24h (ticket 041). A routine skip does not page the owner.
       [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
         mode="$MODE" status="abort" reason="dirty" || true
-      exit 1
+      exit 0
     fi
     CB="$(git rev-parse --abbrev-ref HEAD)"
     if [ "$CB" != "$TRUNK_BRANCH" ]; then
-      echo "[$SVC] ABORT: not on $TRUNK_BRANCH ($CB)" >> "$LOG_FILE"
-      quartet_notify "$PROJECT_NAME ${DISPLAY^} aborted ($MODE)" \
-        "Current branch is $CB, not $TRUNK_BRANCH." || true
+      echo "[$SVC] SKIP: not on $TRUNK_BRANCH ($CB) — benign, not a failure" >> "$LOG_FILE"
+      # Same benign class as a dirty tree: skip cleanly (exit 0), do not fail
+      # the unit or page the owner (ticket 041).
       [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
         mode="$MODE" status="abort" reason="not_trunk" || true
-      exit 1
+      exit 0
     fi
     git fetch origin "$TRUNK_BRANCH" --quiet 2>>"$LOG_FILE" || true
     if [ -n "$(git rev-list "origin/$TRUNK_BRANCH..$TRUNK_BRANCH" 2>/dev/null)" ]; then
