@@ -224,7 +224,7 @@ commands; per-project installs remain explicit (`install.sh --project …`).
 ```
 agents/
 ├── release/    role.md + runner.sh + critic-* (shoulder mode)   [display: guardian]
-├── build/      role.md + incident-role.md + runner.sh           [display: augur]
+├── build/      role.md + runner.sh                              [display: augur]
 ├── medic/      role.md + runner.sh + check-examples/
 ├── scribe/     role.md + runner.sh
 ├── guardian → release, augur → build   (back-compat symlinks for pre-rebake units)
