@@ -334,6 +334,23 @@
           sibling repos? — so the verification surface it hardens fits this repo
           with nothing hardcoded.</span>
         </div>
+        <div class="phase-row" style="grid-template-columns: 11rem 1fr;">
+          <span class="ptitle"><code>/execute-ticket</code></span>
+          <span class="pgist">The build stage itself. Walks the ticket in thin
+          vertical slices, proving each one against the per-phase gate assembly
+          polish locked in before it commits; a phase that can't go green
+          honestly triggers the honest-blocker protocol — evidence, not a
+          faked pass. The build crew runs this file overnight; a human session
+          runs the identical one.</span>
+        </div>
+        <div class="phase-row" style="grid-template-columns: 11rem 1fr;">
+          <span class="ptitle"><code>coverage-audit</code></span>
+          <span class="pgist">The one no human needs to type. The design and
+          release crews both invoke it — mining session transcripts for the
+          bugs the owner caught that the tests didn&rsquo;t — and because it&rsquo;s the
+          same markdown, a human <em>can</em> run it interactively any time.
+          One implementation, N callers, zero forks.</span>
+        </div>
         <div class="callout"><strong>Never baked.</strong> A skill file carries
         zero repo-specific values: no repo names, paths, ticket directories,
         type lists, or commands. Everything a repo needs is a parameter it reads,
