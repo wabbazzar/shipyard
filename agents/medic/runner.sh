@@ -370,7 +370,7 @@ detect_scan_runners() {
       [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" medic.incident.frozen \
         incident_id="$id" project="$PROJECT_NAME" frozen_until="$until_ts" \
         reason="self_failure" unit="$name" || true
-      quartet_notify "Medic $PROJECT_NAME (self_failure)" \
+      quartet_notify "${DISPLAY^} $PROJECT_NAME (self_failure)" \
         "$name systemd unit failed. Cannot self-escalate (forbidden_paths recursion). Frozen 24h — needs human inspection." || true
       i=$((i+1)); continue
     fi
@@ -847,7 +847,7 @@ if [ ! -s "$RESULT_FILE" ]; then
     augur_invocations: 0, augur_lock_contention: 0,
     daily_cap_hit: false, errors: [$err]
   }' > "$RESULT_FILE"
-  quartet_notify "Medic ($PROJECT_NAME) FAILED" \
+  quartet_notify "${DISPLAY^} ($PROJECT_NAME) FAILED" \
     "Medic detected $INCIDENTS_DETECTED incident(s) but claude did not classify. See $LOG_FILE."
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
     mode="$MODE" status="fail" exit_code="$CLAUDE_EXIT" || true
@@ -933,7 +933,7 @@ while [ "$i" -lt "$N_CLASS" ]; do
 
     forbidden|infra|cap_hit)
       [ "$cls" = "cap_hit" ] && CAP_HIT=true
-      quartet_notify "Medic $PROJECT_NAME ($cls)" \
+      quartet_notify "${DISPLAY^} $PROJECT_NAME ($cls)" \
         "Incident: $summary"$'\n'"Action: notify-only ($cls)."
       # Freeze for 24h (cooldown).
       until_ts="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
@@ -956,7 +956,7 @@ while [ "$i" -lt "$N_CLASS" ]; do
         push_action "$(jq -n --arg iid "$iid" '{incident_id:$iid, action:"retry", outcome:"resolved"}')"
       else
         # Promote to notify; don't loop again.
-        quartet_notify "Medic $PROJECT_NAME (transient→stuck)" \
+        quartet_notify "${DISPLAY^} $PROJECT_NAME (transient→stuck)" \
           "Retry didn't clear: $summary"
         push_action "$(jq -n --arg iid "$iid" '{incident_id:$iid, action:"retry", outcome:"still_failing"}')"
       fi
@@ -989,7 +989,7 @@ while [ "$i" -lt "$N_CLASS" ]; do
           rc=$?
           outcome=$([ "$rc" = "0" ] && echo "ok" || echo "fail")
           emit medic.action.restart "$iid" via="restart_cmd" outcome="$outcome"
-          quartet_notify "Medic $PROJECT_NAME (restart)" \
+          quartet_notify "${DISPLAY^} $PROJECT_NAME (restart)" \
             "Incident: $summary"$'\n'"Ran restart_cmd → $outcome. Re-fire suppressed until tomorrow (UTC)."
           until_ts="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
           state_set ".cooldowns[\"$iid\"] = {\"frozen_until\":\"$until_ts\",\"reason\":\"restart_cmd\"}"
@@ -1014,7 +1014,7 @@ while [ "$i" -lt "$N_CLASS" ]; do
       # restarts/reverts immediately; only the CODE FIX is rerouted.
       if [ "$DAILY_USED" -ge "$DAILY_CAP" ]; then
         CAP_HIT=true
-        quartet_notify "Medic $PROJECT_NAME (cap_hit)" \
+        quartet_notify "${DISPLAY^} $PROJECT_NAME (cap_hit)" \
           "Daily incident-repair cap ($DAILY_CAP) reached. Notify-only: $summary"
         push_action "$(jq -n --arg iid "$iid" \
           '{incident_id:$iid, action:"propose_repair", outcome:"cap_hit"}')"
@@ -1057,7 +1057,7 @@ while [ "$i" -lt "$N_CLASS" ]; do
         type="incident-repair" severity="high" tokens=0 || true
 
       # One page — the dispatch is where a human stamps it.
-      quartet_notify "Medic $PROJECT_NAME (incident-repair)" \
+      quartet_notify "${DISPLAY^} $PROJECT_NAME (incident-repair)" \
         "incident-repair proposed: $summary — awaiting stamp in the dispatch"
 
       DAILY_USED=$((DAILY_USED + 1))

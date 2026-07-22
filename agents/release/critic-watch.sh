@@ -123,7 +123,7 @@ deliver_findings() {
   fi
 
   local summary
-  summary="guardian critic: $n_block block, $n_warn warn, $n_note note across $n_files files"
+  summary="$(role_display "$ROLE" "$CFG_JSON") critic: $n_block block, $n_warn warn, $n_note note across $n_files files"
   if [ -n "$findings" ]; then
     summary="$summary
 $(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
