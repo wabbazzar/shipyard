@@ -252,8 +252,9 @@
     {
       "id": 10,
       "title": "skills-parity",
-      "status": "pending",
-      "gist": "polish-ticket, execute-ticket, coverage-audit adapted into shipyard/skills/; install-quartet replaced; symlinked per-project so agents and humans load identical files."
+      "status": "done",
+      "gist": "polish-ticket, execute-ticket, coverage-audit adapted into shipyard/skills/; install-quartet replaced; symlinked per-project so agents and humans load identical files.",
+      "completed": "2026-07-21"
     },
     {
       "id": 11,
