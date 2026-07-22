@@ -60,10 +60,21 @@ grades against. Asked for at install time; never inferred.
 
 ### L5 — skills
 **Where:** `<project>/.claude/skills/` (symlinks into `<harness>/skills/`).
-**What:** `polish-ticket`, `execute-ticket`, `coverage-audit` — **the same
-files agents load headless and humans invoke in-session.** One implementation,
-two callers, no agent-only fork. The installer symlinks the harness skills so a
-core upgrade (L0) flows to every project's skills at once.
+**What:** `write-ticket`, `bug`, `feature`, `polish-ticket`, `execute-ticket`,
+`coverage-audit` — **the same files agents load headless and humans invoke
+in-session.** One implementation, two callers, no agent-only fork. The installer
+symlinks the harness skills so a core upgrade (L0) flows to every project's
+skills at once.
+
+The first three are the **front doors** into the design loop. `bug`
+(reproduce-and-root-cause first) and `feature` (clarify and set a Definition of
+Done first) do the intent-specific intake, then hand `write-ticket` a scope;
+`write-ticket` is the requirements-gathering precursor that emits the ticket
+`polish-ticket` hardens. The chain is one road — a **human** ask enters through
+`bug`/`feature`, a **machine** ask enters as a stamped mentat proposal, and both
+converge on `write-ticket → polish-ticket → execute-ticket`. Because the design
+crew loads the identical symlinked `write-ticket` file a human does, a stamped
+proposal drafts into a ticket the same way, no agent-only fork.
 
 ## The flow
 
@@ -86,7 +97,7 @@ recon  →  interview  →  write L2–L5  →  bake units  →  verify
    units with L1 env baked in, symlinks the L5 skills, enables the timers,
    removes legacy cron launchers.
 5. **Verify.** `medic --mode scan --dry-run` loads clean, the release gates
-   are green now, `list-timers` shows sane next-fires, the three skill
+   are green now, `list-timers` shows sane next-fires, the six skill
    symlinks resolve.
 
 ## Uninstall
@@ -97,7 +108,7 @@ Remove the units and delete `.agents/`:
 systemctl --user disable --now <project>-*.timer
 rm ~/.config/systemd/user/<project>-*.{service,timer}
 systemctl --user daemon-reload
-rm -rf <project>/.agents <project>/.claude/skills/{polish-ticket,execute-ticket,coverage-audit}
+rm -rf <project>/.agents <project>/.claude/skills/{write-ticket,bug,feature,polish-ticket,execute-ticket,coverage-audit}
 ```
 
 The repo keeps nothing it didn't choose — the crew leaves no code behind, only
