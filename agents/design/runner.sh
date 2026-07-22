@@ -91,6 +91,25 @@ TOML
   printf '%s\n' '{"ts":"'"$TODAY"'T00:00:00Z","id":"fyi_1","text":"please add CSV export"}' \
     >"$PROJ/data/fyi-requests.jsonl"
 
+  # source-5 window fixtures: one stale (40 days old, outside the 7-day
+  # default window), one fresh (just written). Only the fresh one should
+  # ever show up in collect_signals()'s sources.medic_incidents.
+  echo '{"incident_id":"stale1","detected_at":"2026-01-01T00:00:00Z","reason":"old"}' \
+    >"$PROJ/tmp/medic-incident-stale.json"
+  touch -d "40 days ago" "$PROJ/tmp/medic-incident-stale.json"
+  echo '{"incident_id":"fresh1","detected_at":"'"$TODAY"'T00:00:00Z","reason":"new"}' \
+    >"$PROJ/tmp/medic-incident-fresh.json"
+
+  COLLECT_JSON="$(QUARTET_DIR="$QUARTET_DIR" QUARTET_EVENTS_DIR="$ST_EVENTS" \
+    bash "${BASH_SOURCE[0]}" --project "$PROJ" --collect-only)" \
+    || fail "--collect-only exited non-zero"
+  INC_COUNT="$(jq '.sources.medic_incidents.count' <<<"$COLLECT_JSON")"
+  [ "$INC_COUNT" = "1" ] || fail "expected 1 in-window incident, got $INC_COUNT"
+  jq -e '.sources.medic_incidents.examples | any(.file=="medic-incident-fresh.json")' \
+    <<<"$COLLECT_JSON" >/dev/null || fail "fresh incident missing from summary"
+  jq -e '.sources.medic_incidents.examples | all(.file!="medic-incident-stale.json")' \
+    <<<"$COLLECT_JSON" >/dev/null || fail "stale incident leaked into summary"
+
   # stub claude on PATH: returns 2 proposals in the --output-format json shape
   ST_BIN="$ST_TMP/bin"; mkdir -p "$ST_BIN"
   cat >"$ST_BIN/claude" <<'STUB'
@@ -126,7 +145,7 @@ STUB
   ROLES_OK="$(jq -R 'fromjson?' <"$EF" | jq -s '[.[] | select(.event=="design.proposal.opened") | select(.role=="design")] | length')"
   [ "$ROLES_OK" = "2" ] || fail "opened events missing role:design"
 
-  echo "self-test OK: 2 proposals written, 2 design.proposal.opened events, cap<=3 held"
+  echo "self-test OK: 2 proposals written, 2 design.proposal.opened events, cap<=3 held, stale incident excluded"
   exit 0
 fi
 
