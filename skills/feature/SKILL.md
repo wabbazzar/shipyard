@@ -78,7 +78,11 @@ is a refusal-worthy shortcut** (see Anti-patterns): attempt the check and cite
 it; an attempt that came back ambiguous is fine, a skipped check is not.
 
 **Then WAIT.** Surface the Unverified list and wait for the human to confirm or
-correct it before you write any acceptance criteria. If Unverified is empty,
+correct it before you write any acceptance criteria. **Default to a structured
+question prompt (AskUserQuestion or the harness equivalent) with concrete
+options per item** — that is what gets answered; a wall of bullets often gets
+skimmed. Plain-chat confirmation is acceptable only when the list is short and
+every item is a true/false check rather than a choice. If Unverified is empty,
 surface the Verified list with the **highest-stakes** item called out and ask
 the human to confirm *that one specifically* — a vague "looks good" doesn't
 count when they may not have read the list.
