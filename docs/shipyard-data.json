@@ -259,8 +259,9 @@
     {
       "id": 11,
       "title": "mentat",
-      "status": "pending",
-      "gist": "Collectors + pilot beacons + nightly proposals → dispatch Approve/Deny → polish-ticket → helldiver. Deny-suppression and budget caps proven with bats."
+      "status": "done",
+      "gist": "Collectors + pilot beacons + nightly proposals → dispatch Approve/Deny → polish-ticket → helldiver. Deny-suppression and budget caps proven with bats.",
+      "completed": "2026-07-22"
     },
     {
       "id": 12,
