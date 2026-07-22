@@ -275,14 +275,22 @@ AVAILABLE=$(( MAX_OPEN - UNDECIDED ))
 # --- build prompt -----------------------------------------------------------
 GATES=""
 [ -f "$PROJECT_DIR/.agents/gates.md" ] && GATES="$(cat "$PROJECT_DIR/.agents/gates.md")"
+# North star: the repo's one-line compass, handed to mentat as a directional
+# prior (never a gate). [design].north_star in config wins; else the GitHub
+# repo description; else empty. Soft-fail — a missing gh must not kill the run.
+NORTH_STAR="$(jq -r '.design.north_star // empty' <<<"$CFG_JSON" 2>/dev/null)"
+if [ -z "$NORTH_STAR" ] && command -v gh >/dev/null 2>&1; then
+  NORTH_STAR="$(cd "$PROJECT_DIR" && timeout 10 gh repo view --json description -q .description 2>/dev/null || true)"
+fi
 RUN_CONTEXT="$(jq -n \
   --arg name "$PROJECT_NAME" \
   --arg dir "$PROJECT_DIR" \
   --arg ts "$(now_iso)" \
+  --arg north "$NORTH_STAR" \
   --argjson max "$AVAILABLE" \
   --argjson summary "$SUMMARY" \
   --argjson cfg "$CFG_JSON" \
-  '{project_name:$name, project_dir:$dir, timestamp:$ts,
+  '{project_name:$name, project_dir:$dir, timestamp:$ts, north_star:$north,
     max_new_proposals:$max, telemetry:$summary, config:$cfg}')"
 
 PROMPT="$(cat "$ROLE_FILE")

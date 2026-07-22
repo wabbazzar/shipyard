@@ -36,7 +36,7 @@ run_install() {
 @test "dry-run announces the 6 skill symlinks + gates.md drop, writes nothing" {
   run run_install --dry-run
   [ "$status" -eq 0 ]
-  for s in polish-ticket execute-ticket coverage-audit write-ticket bug feature; do
+  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature; do
     echo "$output" | grep -q "would symlink: $PROJ/.claude/skills/$s"
   done
   echo "$output" | grep -q "would drop: $PROJ/.agents/gates.md"
@@ -49,7 +49,7 @@ run_install() {
 @test "real run symlinks the 6 skills into the repo skills/ and drops gates.md" {
   run run_install
   [ "$status" -eq 0 ]
-  for s in polish-ticket execute-ticket coverage-audit write-ticket bug feature; do
+  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature; do
     [ -L "$PROJ/.claude/skills/$s" ]
     [ "$(readlink -f "$PROJ/.claude/skills/$s")" = "$(readlink -f "$QUARTET_ROOT/skills/$s")" ]
     [ -f "$PROJ/.claude/skills/$s/SKILL.md" ]   # resolves to a real skill

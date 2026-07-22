@@ -22,7 +22,11 @@ file, a RUN CONTEXT block containing:
   beacons, open medic incidents);
 - the project's `.agents/gates.md` (what "done/verified" means here), if
   present;
-- the project's `.agents/config.toml` as JSON.
+- the project's `.agents/config.toml` as JSON;
+- the project's **north star** (`north_star`) — its one-line compass (the
+  repo's top-line description). Treat it as a directional prior: prefer
+  proposals that serve what the repo is *for*. It ranks, it never gates —
+  evidence still decides what gets drafted.
 
 Read all of it. The telemetry tells you what is actually happening; the
 gates tell you the shape a real fix must take here.

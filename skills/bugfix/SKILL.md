@@ -1,12 +1,12 @@
 ---
-name: bug
+name: bugfix
 roles: [design, human]
 disposition: new
 kind: frontdoor
 description: >
   Turn a bug report into a routed ticket — reproduce-and-root-cause FIRST, then
   hand a bug scope to write-ticket. Triggers on "fix bug", "X is broken",
-  "diagnose this regression", "/bug <desc>". Before any ticket exists it captures
+  "diagnose this regression", "/bugfix <desc>". Before any ticket exists it captures
   a reproduction (failing test, reliable manual steps, or an error/stack/log
   signature), pins the violated observable contract, falsifies rival causes with
   evidence, and names the coverage gap that let the bug through. It then calls
@@ -34,7 +34,7 @@ failing test here.** The reproduction you capture travels *in* the ticket;
 permanent regression test.
 
 **You are the front of the loop for bugs.** A machine ask (a medic/augur
-incident that names a defect) or a human ask (`/bug <desc>`, "X is broken") both
+incident that names a defect) or a human ask (`/bugfix <desc>`, "X is broken") both
 converge here. You do the reproduce-first intake, then call `write-ticket` with a
 scope — you never open a ticket that isn't backed by a reproduction.
 
@@ -130,7 +130,7 @@ repeat it — it takes your scope as given. After it emits the draft, run
 
 ### 7 — Stop at the human gate (do NOT auto-build)
 
-`/bug` runs **intake → write-ticket → polish-ticket and STOPS.** The polished
+`/bugfix` runs **intake → write-ticket → polish-ticket and STOPS.** The polished
 ticket is queued/surfaced for a human stamp, exactly as a stamped design
 proposal would be. **Unless the user explicitly said "and build it,"** do not
 call `execute-ticket`, do not edit app code, do not commit the failing test.
@@ -140,7 +140,7 @@ it is queued for a stamp.
 ## Adaptation Contract
 
 - **Parameter surface** (what install/config supplies, so this skill stays
-  generic): `/bug` owns no project specifics of its own — it **inherits
+  generic): `/bugfix` owns no project specifics of its own — it **inherits
   `write-ticket`'s configuration** (the `[write_ticket]` block in
   `<project>/.agents/config.toml`: context files, ticket dir + optional
   backlog/archive split, type enum, point scale + per-phase cap, commit scopes,
@@ -152,7 +152,7 @@ it is queued for a stamp.
 - **Learning surface** (where lessons accumulate): the project's Traps /
   coverage-gap history in `.agents/gates.md`. Each root cause's "why wasn't it
   caught" answer (step 4) is a coverage gap; as those accrete in the gate file's
-  Traps appendix, future `/bug` runs consult them to falsify causes faster and
+  Traps appendix, future `/bugfix` runs consult them to falsify causes faster and
   to recognize a recurring class. A portable lesson (a reproduce-first step every
   project should take) instead becomes an edit to the Procedure here, shipped as
   a core PR.
@@ -170,7 +170,7 @@ it is queued for a stamp.
   machine" is a hypothesis to test, not a closing condition.
 - **Overreaching into the fix.** Editing app code, running the fix, or
   committing the failing test — that's `execute-ticket`, behind the human gate.
-  A `/bug` slice that starts editing application code has overreached; `/bug`
+  A `/bugfix` slice that starts editing application code has overreached; `/bugfix`
   writes and routes a ticket, it does not build one.
 - **Baking a project's specifics into this file.** Ticket dir, type enum, test
   commands, scopes — all inherited from `write-ticket`'s config and the gate

@@ -357,7 +357,7 @@ done
 # hub's own symlinking.
 echo ""
 echo "==> shared skills → $PROJECT_DIR/.claude/skills/"
-GENERIC_SKILLS="polish-ticket execute-ticket coverage-audit write-ticket bug feature"
+GENERIC_SKILLS="polish-ticket execute-ticket coverage-audit write-ticket bugfix feature"
 SKILLS_DEST="$PROJECT_DIR/.claude/skills"
 [ "$DRY_RUN" = "1" ] || mkdir -p "$SKILLS_DEST"
 for skill in $GENERIC_SKILLS; do
