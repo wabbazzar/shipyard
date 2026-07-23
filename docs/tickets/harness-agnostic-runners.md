@@ -336,8 +336,19 @@ merge order + model_providers.)_
   the installer's `--dry-run` prints only `would write: <path>`, never unit bodies,
   so baking is verified by real-install unit inspection (stronger) — the DoD's
   "dry-run shows Environment lines" was infeasible and dropped. GATES: `bats tests/`
-  151 green, leak clean, deck fresh, `bash -n` ok. Commit: <pending>.
-- P5 —
+  151 green, leak clean, deck fresh, `bash -n` ok. Commit: 34d51fe.
+- P5 — DONE: install.sh step 4.6 drops a skill-bridge `AGENTS.md` at the project
+  root ONLY when an installed role runs on codex/hermes (claude reads CLAUDE.md,
+  not AGENTS.md, so it stays inert for claude-only projects and the current
+  all-claude fleet gets nothing). It lists each `.claude/skills/<name>/SKILL.md`
+  with "read+follow before acting"; never clobbers an existing AGENTS.md. CWD
+  guarantee: units already carry `WorkingDirectory=$PROJECT_DIR` (install.sh:570),
+  so the root AGENTS.md is auto-injected by codex/hermes — asserted, no dispatcher
+  change needed. SOUL.md skipped: AGENTS.md is read by both foreign harnesses and
+  is sufficient for skill delivery; SOUL.md is identity-only. uninstall leaves
+  AGENTS.md (like gates.md — may be operator-customized). 3 bats cases (bridge
+  dropped + CWD asserted; claude-only ⇒ none; existing ⇒ not clobbered). GATES:
+  `bats tests/` 154 green, leak clean, deck fresh, doctor green. Commit: <pending>.
 - P6 —
 
 ## Roll-up Definition of Done

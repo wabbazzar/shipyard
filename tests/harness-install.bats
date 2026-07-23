@@ -54,3 +54,31 @@ _install() {
 # NB: the installer's --dry-run prints "would write: <path>" only, never the
 # unit body, so the baked Environment lines are verified by real-install unit
 # inspection above (stronger evidence than dry-run text).
+
+# ---------------------------------------------------------------------------
+# Skill-bridge AGENTS.md (Phase 5)
+# ---------------------------------------------------------------------------
+
+@test "install: a non-claude role drops a skill-bridge AGENTS.md; unit CWD is the project" {
+  p="$(make_fixture_project abridge harness-config.toml)"   # build=codex
+  _install "$p" --agents build >/dev/null
+  [ -f "$p/AGENTS.md" ]
+  grep -q '.claude/skills/execute-ticket/SKILL.md' "$p/AGENTS.md"
+  grep -q '.claude/skills/write-ticket/SKILL.md'   "$p/AGENTS.md"
+  # CWD guarantee: the unit runs with WorkingDirectory at the project root, so
+  # the root AGENTS.md is auto-injected by codex/hermes.
+  grep -Fxq "WorkingDirectory=$p" "$HOME/.config/systemd/user/abridge-build.service"
+}
+
+@test "install: claude-only config drops NO AGENTS.md" {
+  p="$(make_fixture_project nobridge can-merge-true.toml)"  # no harness config
+  _install "$p" --agents build,release,medic,scribe >/dev/null
+  [ ! -f "$p/AGENTS.md" ]
+}
+
+@test "install: an existing AGENTS.md is never clobbered" {
+  p="$(make_fixture_project keepbridge harness-config.toml)"
+  printf 'MY OWN AGENTS FILE\n' > "$p/AGENTS.md"
+  _install "$p" --agents build >/dev/null
+  grep -Fxq 'MY OWN AGENTS FILE' "$p/AGENTS.md"
+}
