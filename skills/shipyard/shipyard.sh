@@ -21,10 +21,14 @@ QUARTET_DIR="${QUARTET_DIR:-$(cd "$(dirname "$_src")/../.." && pwd)}"
 
 SUBCMD=""
 PROJECT_DIR="$PWD"
+OPT_TO=""       # learn: explicit route (project|generic|install)
+OPT_ROLE=""     # learn --to project: which .agents/<role>.md
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --project) PROJECT_DIR="$2"; shift 2 ;;
+    --to)      OPT_TO="$2";      shift 2 ;;
+    --role)    OPT_ROLE="$2";    shift 2 ;;
     -h|--help) SUBCMD="help"; shift ;;
     -*) echo "shipyard: unknown flag '$1'" >&2; exit 2 ;;
     *)
@@ -58,6 +62,8 @@ shipyard — inspect and extend an installed crew.
   shipyard status                  what's installed here (default)
   shipyard add-specialist <sub>    scaffold a domain-specialist for <sub>
   shipyard learn "<lesson>"        route a lesson to the adaptation taxonomy
+    [--to project|generic|install] explicit route (else keyword heuristic)
+    [--role <role>]                 project route target (default release)
 
 Exit: 0 ok · 2 bad invocation · 3 nothing installed.
 EOF
@@ -217,13 +223,98 @@ PY
   return 0
 }
 
+# ---- learn ------------------------------------------------------------------
+# Route a lesson through the docs/ADAPTING.md triage taxonomy
+# (project-specific / generic / install-time) to a deterministic destination.
+# Classification is by an explicit --to flag, else a keyword heuristic; when
+# neither settles it, exit 2 and ask (honest ambiguity beats a mis-route). No
+# model is called — the routing, not the free-text judgement, is the value.
+_learn_classify() {
+  local l; l="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$l" in
+    *install*|*installer*|*interview*|*--theme*|*--agents*|*"first-run"*) echo install; return ;;
+  esac
+  case "$l" in
+    *"every project"*|*"all projects"*|*"fleet-wide"*|*"fleet wide"*|*portable*|*"core role"*|*"generic"*) echo generic; return ;;
+  esac
+  case "$l" in
+    *"this project"*|*"this repo"*|*"here we"*|*" here."*|*convention*) echo project; return ;;
+  esac
+  echo ""
+}
+
+cmd_learn() {
+  local lesson; lesson="${ARGS[*]:-}"
+  lesson="$(printf '%s' "$lesson" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  [ -n "$lesson" ] || { echo 'usage: shipyard learn "<lesson>"' >&2; return 2; }
+
+  local class="$OPT_TO"
+  case "$class" in
+    project|generic|install) ;;
+    "") class="$(_learn_classify "$lesson")" ;;
+    *) echo "learn: --to must be project|generic|install" >&2; return 2 ;;
+  esac
+  if [ -z "$class" ]; then
+    echo "learn: ambiguous lesson — cannot classify. Re-run with --to project|generic|install" >&2
+    return 2
+  fi
+
+  local dir="$PROJECT_DIR"
+  local slug
+  slug="$(printf '%s' "$lesson" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' \
+    | sed 's/^-//;s/-$//' | cut -c1-40)"
+  [ -n "$slug" ] || slug="lesson"
+  local stamp; stamp="$(date -u +%Y-%m-%d)"
+
+  case "$class" in
+    project)
+      local role="${OPT_ROLE:-release}"
+      case "$role" in design|build|release|medic|scribe) ;; *)
+        echo "learn: --role must be a role id (design|build|release|medic|scribe)" >&2; return 2 ;;
+      esac
+      local rf="$dir/.agents/$role.md"
+      [ -d "$dir/.agents" ] || { echo "learn: $dir has no .agents/" >&2; return 2; }
+      {
+        printf '\n<!-- shipyard:learn:%s -->\n' "$stamp"
+        printf '> LESSON (%s): %s\n' "$stamp" "$lesson"
+      } >> "$rf"
+      echo "learn: routed project-specific → .agents/$role.md"
+      ;;
+    generic)
+      mkdir -p "$dir/docs/tickets"
+      local f="$dir/docs/tickets/learned-$slug.md"
+      {
+        printf '# Learned (generic → core change): %s\n\n' "$lesson"
+        printf -- '- **Captured:** %s\n' "$stamp"
+        printf -- '- **Route:** generic — a portable lesson that belongs in a core `agents/<role>/role.md` (or a shared skill), leak-checked and fleet-live on merge.\n'
+        printf -- '- **Status:** Draft stub for human review — do NOT edit a core role file directly from this; polish into a real ticket first.\n\n'
+        printf '## Lesson\n\n%s\n\n' "$lesson"
+        printf '## Proposed core change\n\n_Describe the role-file / skill edit and the config flag that gates it (unset = today)._\n'
+      } > "$f"
+      echo "learn: routed generic → $f"
+      ;;
+    install)
+      mkdir -p "$dir/docs/tickets"
+      local f="$dir/docs/tickets/installer-question-$slug.md"
+      {
+        printf '# Installer question (install-time): %s\n\n' "$lesson"
+        printf -- '- **Captured:** %s\n' "$stamp"
+        printf -- '- **Route:** install-time — a new question for the installer interview so every future install decides this explicitly.\n'
+        printf -- '- **Status:** Draft proposal for human review.\n\n'
+        printf '## Lesson\n\n%s\n\n' "$lesson"
+        printf '## Proposed interview question\n\n_The prompt, its default, and the config key it sets._\n'
+      } > "$f"
+      echo "learn: routed install-time → $f"
+      ;;
+  esac
+  return 0
+}
+
 case "$SUBCMD" in
   help)   usage; exit 0 ;;
   status) cmd_status; exit $? ;;
   add-specialist) cmd_add_specialist; exit $? ;;
-  learn)
-    echo "shipyard: 'learn' is not available in this build" >&2
-    exit 2 ;;
+  learn) cmd_learn; exit $? ;;
   *)
     echo "shipyard: unknown subcommand '$SUBCMD'" >&2
     usage >&2
