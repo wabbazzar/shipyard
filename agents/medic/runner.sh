@@ -198,9 +198,9 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
       allow_no_ci:($cfg.build.allow_no_ci // false),
       restart_systemd:($cfg.medic.restart_systemd // true),
       sync_to_augur:($cfg.medic.sync_to_augur // true),
-      budgets:{claude_usd:0.50,
+      budgets:{budget_tokens_daily:($cfg.medic.budget_tokens_daily // 1000000),
                daily_escalation_cap:($cfg.medic.daily_escalation_cap // 5),
-               augur_wall_clock_sec:($cfg.build.wall_clock_sec // 3600)}}'
+               build_wall_clock_sec:($cfg.build.wall_clock_sec // 3600)}}'
   exit 0
 fi
 
@@ -795,6 +795,46 @@ if [ "$INCIDENTS_DETECTED" -eq 0 ]; then
   exit 0
 fi
 
+# ---------- daily token budget gate (D-O1: caps are token-based) ------------
+BUDGET_TOKENS="$(jq -r '.medic.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
+[[ "$BUDGET_TOKENS" =~ ^[0-9]+$ ]] || BUDGET_TOKENS=1000000
+
+# Sum today's job.end token usage for THIS svc only — the events dir is
+# fleet-shared, so an unscoped sum would count other projects' runs.
+tokens_used_today() {
+  local f="${QUARTET_EVENTS_DIR:-/nonexistent}/$(date -u +%Y-%m-%d).jsonl"
+  [ -f "$f" ] || { echo 0; return; }
+  jq -R 'fromjson?' <"$f" 2>/dev/null | \
+    jq -s --arg svc "$SVC" \
+      '[.[] | select(.svc==$svc and .event=="job.end") | (.tokens // 0)] | add // 0' \
+    2>/dev/null || echo 0
+}
+
+TOKENS_USED="$(tokens_used_today)"; [[ "$TOKENS_USED" =~ ^[0-9]+$ ]] || TOKENS_USED=0
+if [ "$TOKENS_USED" -ge "$BUDGET_TOKENS" ]; then
+  # Scanning already happened (probes/checks stay ungated); only the model
+  # spend is blocked. One page, one skip event, clean exit.
+  echo "[medic] skip classify: daily token budget reached ($TOKENS_USED >= $BUDGET_TOKENS), $INCIDENTS_DETECTED incident(s) pending" >> "$LOG_FILE"
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" medic.skipped \
+    reason=budget tokens_used="$TOKENS_USED" budget="$BUDGET_TOKENS" \
+    incidents="$INCIDENTS_DETECTED" || true
+  quartet_notify "${DISPLAY^} $PROJECT_NAME (budget)" \
+    "over daily token budget ($TOKENS_USED/$BUDGET_TOKENS); $INCIDENTS_DETECTED incident(s) unclassified until tomorrow" || true
+  jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --argjson n "$INCIDENTS_DETECTED" '{
+    pass: true, mode: $mode, timestamp: $ts,
+    incidents_detected: $n, incidents_classified: [],
+    actions_taken: [], augur_invocations: 0,
+    augur_lock_contention: 0, daily_cap_hit: false,
+    errors: ["daily token budget reached; classification skipped"]
+  }' > "$RESULT_FILE"
+  JOB_DUR=$(( $(date +%s) - JOB_START ))
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
+    mode="$MODE" status="skipped" reason="budget" duration_s="$JOB_DUR" \
+    tokens_used="$TOKENS_USED" budget="$BUDGET_TOKENS" \
+    incidents="$INCIDENTS_DETECTED" || true
+  exit 0
+fi
+
 # ---------- classify: invoke claude with role.md + medic.md + incidents -----
 RUN_CONTEXT="$(jq -n \
   --arg mode "$MODE" \
@@ -820,23 +860,28 @@ RUN CONTEXT (write your classified result to $RESULT_FILE — JSON only, no pros
 $RUN_CONTEXT"
 
 MODEL="${MEDIC_MODEL:-sonnet}"
-BUDGET="${MEDIC_BUDGET:-0.50}"
 
-echo "[medic] invoking claude (model=$MODEL budget=\$$BUDGET incidents=$INCIDENTS_DETECTED)" >> "$LOG_FILE"
+echo "[medic] invoking claude (model=$MODEL incidents=$INCIDENTS_DETECTED tokens_today=$TOKENS_USED/$BUDGET_TOKENS)" >> "$LOG_FILE"
 
 # Wipe any stale result.json so we can detect non-write.
 : > "$RESULT_FILE"
 
+# timeout replaces the retired per-invocation dollar ceiling as the runaway
+# guard; the json envelope gives real token usage for the daily gate.
 set +e
-claude -p \
+CLAUDE_OUT="$(timeout 900 claude -p \
   --model "$MODEL" \
   --dangerously-skip-permissions \
-  --max-budget-usd "$BUDGET" \
-  --output-format text \
+  --output-format json \
   "$PROMPT" \
-  >> "$LOG_FILE" 2>&1
+  2>>"$LOG_FILE")"
 CLAUDE_EXIT=$?
 set -e
+
+TOKENS="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0))' <<<"$CLAUDE_OUT" 2>/dev/null || echo 0)"
+[[ "$TOKENS" =~ ^[0-9]+$ ]] || TOKENS=0
+# Keep the operator debug trail the text mode used to provide.
+jq -r '.result // empty' <<<"$CLAUDE_OUT" >> "$LOG_FILE" 2>/dev/null || true
 
 if [ ! -s "$RESULT_FILE" ]; then
   echo "[medic] claude did not write result file (exit=$CLAUDE_EXIT)" >> "$LOG_FILE"
@@ -850,7 +895,7 @@ if [ ! -s "$RESULT_FILE" ]; then
   quartet_notify "${DISPLAY^} ($PROJECT_NAME) FAILED" \
     "Medic detected $INCIDENTS_DETECTED incident(s) but claude did not classify. See $LOG_FILE."
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
-    mode="$MODE" status="fail" exit_code="$CLAUDE_EXIT" || true
+    mode="$MODE" status="fail" exit_code="$CLAUDE_EXIT" tokens="$TOKENS" || true
   exit 1
 fi
 
@@ -1099,11 +1144,15 @@ FINAL="$(jq -n \
 echo "$FINAL" > "$RESULT_FILE"
 
 JOB_DUR=$(( $(date +%s) - JOB_START ))
+# A nonzero claude exit with a usable result is a PARTIAL run (e.g. the
+# runaway timeout fired after the result was written) — never report it ok.
+JOB_STATUS="ok"
+[ "${CLAUDE_EXIT:-0}" -ne 0 ] && JOB_STATUS="partial"
 [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
-  mode="$MODE" status="ok" duration_s="$JOB_DUR" \
+  mode="$MODE" status="$JOB_STATUS" duration_s="$JOB_DUR" \
   incidents="$INCIDENTS_DETECTED" \
   augur_invocations="$AUGUR_INVOCATIONS" \
-  cap_hit="$CAP_HIT" || true
+  cap_hit="$CAP_HIT" tokens="$TOKENS" claude_exit="$CLAUDE_EXIT" || true
 
 echo "[medic] done — incidents=$INCIDENTS_DETECTED augur=$AUGUR_INVOCATIONS" >> "$LOG_FILE"
 exit 0
