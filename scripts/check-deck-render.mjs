@@ -154,6 +154,40 @@ try {
   if (gloss && gloss.popover && gloss.heading !== gloss.term) {
     findings.push(`glossary popover heading "${gloss.heading}" != term "${gloss.term}"`);
   }
+
+  // 5: decision citations. Every D-L/D-O/D-U id that a reader can SEE must be
+  // clickable — a citation rendered as inert text is the defect this guards.
+  // Checked over rendered text, not the JSON: data can carry a decision that no
+  // rendered prose cites, and only the rendered side is what a reader meets.
+  const dec = await page.evaluate(() => {
+    const ids = new Set();
+    const linked = new Set();
+    const scan = root => {
+      root.querySelectorAll('.decision').forEach(d => { linked.add(d.dataset.decision); ids.add(d.dataset.decision); });
+      (root.innerText.match(/\bD-[LOU]\d+\b/g) || []).forEach(i => ids.add(i));
+    };
+    // Slides plus every crew drawer, with each card expanded so detail prose renders.
+    scan(document.getElementById('deck'));
+    for (const n of [...document.querySelectorAll('.loop-node')]) {
+      document.getElementById('crew-drawer-close').click();
+      n.click();
+      document.querySelectorAll('#crew-drawer-body .skill-item').forEach(it => it.classList.add('open'));
+      scan(document.getElementById('crew-drawer-body'));
+    }
+    document.getElementById('crew-drawer-close').click();
+    return { ids: [...ids], linked: [...linked] };
+  });
+  for (const id of dec.ids) {
+    if (!dec.linked.includes(id)) findings.push(`decision citation ${id} renders as inert text — not clickable`);
+  }
+  // Cross-check the links against the data the page was built from.
+  const known = Object.keys(JSON.parse(
+    await fs.readFile(path.join(DOCS, 'shipyard-data.json'), 'utf8')).decisions || {});
+  if (known.length) {
+    for (const id of dec.linked) {
+      if (!known.includes(id)) findings.push(`decision link ${id} has no entry in the decisions data`);
+    }
+  }
 } finally {
   await browser.close();
   live.close();
