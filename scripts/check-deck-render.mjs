@@ -155,16 +155,21 @@ try {
     findings.push(`glossary popover heading "${gloss.heading}" != term "${gloss.term}"`);
   }
 
-  // 5: decision citations. Every D-L/D-O/D-U id that a reader can SEE must be
-  // clickable — a citation rendered as inert text is the defect this guards.
-  // Checked over rendered text, not the JSON: data can carry a decision that no
-  // rendered prose cites, and only the rendered side is what a reader meets.
+  // 5: decision citations. Every decision id a reader can SEE must be clickable
+  // — a citation rendered as inert text is one defect this guards. The other:
+  // a rendered link must NOT carry a status-encoding letter (the pre-reindex
+  // D-L/D-O/D-U series), because that letter goes stale when the decision's
+  // state changes. Every live link's id must be the flat D-<n> form.
   const dec = await page.evaluate(() => {
     const ids = new Set();
     const linked = new Set();
+    const letterLinked = new Set();
     const scan = root => {
-      root.querySelectorAll('.decision').forEach(d => { linked.add(d.dataset.decision); ids.add(d.dataset.decision); });
-      (root.innerText.match(/\bD-[LOU]\d+\b/g) || []).forEach(i => ids.add(i));
+      root.querySelectorAll('.decision').forEach(d => {
+        linked.add(d.dataset.decision); ids.add(d.dataset.decision);
+        if (/^D-[LOU]\d+$/.test(d.dataset.decision)) letterLinked.add(d.dataset.decision);
+      });
+      (root.innerText.match(/\bD-(?:[LOU]\d+|\d+)\b/g) || []).forEach(i => ids.add(i));
     };
     // Slides plus every crew drawer, with each card expanded so detail prose renders.
     scan(document.getElementById('deck'));
@@ -175,10 +180,13 @@ try {
       scan(document.getElementById('crew-drawer-body'));
     }
     document.getElementById('crew-drawer-close').click();
-    return { ids: [...ids], linked: [...linked] };
+    return { ids: [...ids], linked: [...linked], letterLinked: [...letterLinked] };
   });
   for (const id of dec.ids) {
     if (!dec.linked.includes(id)) findings.push(`decision citation ${id} renders as inert text — not clickable`);
+  }
+  for (const id of dec.letterLinked) {
+    findings.push(`decision link ${id} carries a status-encoding letter — must be reindexed to a flat D-<n> id`);
   }
   // Cross-check the links against the data the page was built from.
   const known = Object.keys(JSON.parse(
