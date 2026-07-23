@@ -326,8 +326,17 @@ merge order + model_providers.)_
   failure. NOT unmetered — D-3 hole closed. The 0-fallback test caught a real
   errexit-safety bug (no-match sid grep returned 1); fixed with `|| true`. 3
   stubbed bats cases (compose+meter, 0-fallback, no-provider). GATES: `bats tests/`
-  149 green, leak clean, `bash -n` ok. Commit: <pending>.
-- P4 —
+  149 green, leak clean, `bash -n` ok. Commit: a4abee2.
+- P4 — DONE: `install.sh` env-baking loop (~549) now resolves per-role
+  harness/model/provider from config (precedence `[<role>].<knob>` →
+  `[harness].<default|model|provider>` → unbaked) and bakes `<ROLE>_HARNESS/_MODEL/_PROVIDER`
+  into each unit; secrets never baked. README gained a "Per-role harness/model/provider"
+  subsection + table. New `tests/fixtures/harness-config.toml` + `tests/harness-install.bats`
+  (2 cases: override+global-fallback baked; unset⇒nothing baked). TICKET CORRECTION:
+  the installer's `--dry-run` prints only `would write: <path>`, never unit bodies,
+  so baking is verified by real-install unit inspection (stronger) — the DoD's
+  "dry-run shows Environment lines" was infeasible and dropped. GATES: `bats tests/`
+  151 green, leak clean, deck fresh, `bash -n` ok. Commit: <pending>.
 - P5 —
 - P6 —
 
