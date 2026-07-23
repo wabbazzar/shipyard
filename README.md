@@ -176,14 +176,34 @@ stale unit set for the same project+role left under an old display name**, so
 a theme change or rename can never leave two sets of timers firing the same
 agent twice.
 
-**Uninstall** — the crew leaves nothing behind but the config you wrote:
+**Doctor** — a read-only audit of what a crew install owns, so drift is
+visible instead of surfacing weeks later:
 
 ```bash
-systemctl --user disable --now <project>-*.timer
-rm ~/.config/systemd/user/<project>-*.{service,timer}
-systemctl --user daemon-reload
-rm -rf <project>/.agents <project>/.claude/skills/{write-ticket,bugfix,feature,polish-ticket,execute-ticket,coverage-audit}
+install.sh --doctor --project <project_dir>
 ```
+
+Exit 0 clean; exit 1 with one `DOCTOR <class>: <detail>` line per finding.
+It checks the manifest install writes — expected units enabled and pointed at
+`$QUARTET_DIR`, no stale duplicate role units, no foreign `.service.d`
+drop-ins, no retired config keys, skill symlinks resolving into
+`$QUARTET_DIR/skills`, no dead `.claude/settings.json` hooks, no legacy
+launchers/cron — and finishes in well under a second, so a `[[medic.checks]]`
+entry can run it every scan. It never writes or touches systemd.
+
+**Uninstall** — remove exactly the installer-owned surface; the config you
+wrote and your data are left untouched:
+
+```bash
+install.sh --uninstall --project <project_dir> [--dry-run]
+```
+
+It disables + removes this project's crew units/timers, removes the shared
+skill symlinks that resolve into `$QUARTET_DIR/skills`, and prints what it
+deliberately leaves (`.agents/` incl. config + prompts + gates.md, `data/`,
+`tmp/`). `--dry-run` prints the plan without writing. Reinstall is just
+`install.sh --project <dir>` again — uninstall+install converges to a fresh
+install.
 
 ## Liveness probes & drift checks (medic)
 

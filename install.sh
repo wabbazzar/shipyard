@@ -3,11 +3,21 @@
 #
 # Usage:
 #   install.sh --project <project_dir> [--dry-run] [--agents LIST] [--theme T]
+#   install.sh --doctor    --project <project_dir>
+#   install.sh --uninstall --project <project_dir> [--dry-run]
 #
-#   --project   Path to the target project (must contain .agents/config.toml).
-#   --dry-run   Print every change without writing anything.
-#   --agents    Comma list of roles to install. Default: build,release,medic,scribe
-#               (design is opt-in).
+#   --project    Path to the target project (must contain .agents/config.toml).
+#   --dry-run    Print every change without writing anything.
+#   --agents     Comma list of roles to install. Default: build,release,medic,scribe
+#                (design is opt-in).
+#   --doctor     Read-only conformance audit of this project's crew install.
+#                Prints `DOCTOR <class>: <detail>` one line per finding; exit 0
+#                clean / 1 on drift. Never writes, never touches systemd. Fast
+#                enough to run as a [[medic.checks]] entry every scan.
+#   --uninstall  Remove exactly the installer-owned surface (crew units/timers
+#                + shared-skill symlinks resolving into $QUARTET_DIR/skills),
+#                then print the deliberate leave-behind (.agents/, data/, tmp/).
+#                Honors --dry-run. uninstall+install == fresh install.
 #   --theme     Display-name theme baked into the project's [names] block:
 #                 plain      role IDs verbatim (default): build/release/medic/scribe
 #                 spacetime  mentat/helldiver/proctor/suk/chronicler
@@ -67,7 +77,7 @@ SYSTEMD_DIR="$HOME/.config/systemd/user"
 source "$QUARTET_DIR/agents/lib/naming.sh"
 
 usage() {
-  sed -n '2,54p' "$0"
+  sed -n '2,63p' "$0"
   exit "${1:-2}"
 }
 
