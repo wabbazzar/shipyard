@@ -11,7 +11,7 @@
 // still owns its disposition chip and chevron, and that clicking either of them
 // expands the card.
 //
-// Usage:  node scripts/check-deck-render.mjs [--port <n>]
+// Usage:  node scripts/check-deck-render.mjs [--root <dir>]
 //
 // Exit codes:  0 = all assertions pass
 //              1 = an assertion failed (findings printed)
@@ -27,7 +27,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
-const DOCS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
+// --root <dir> renders a different copy of the deck (e.g. a site checkout that
+// mirrors docs/) with the identical assertions.
+const rootArg = (() => { const i = process.argv.indexOf('--root'); return i > -1 ? process.argv[i + 1] : null; })();
+const DOCS = rootArg
+  ? path.resolve(rootArg)
+  : path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs');
 
 async function loadPlaywright() {
   const dirs = [process.env.PLAYWRIGHT_MODULE_DIR, ...(process.env.NODE_PATH || '').split(':')]
@@ -63,24 +68,14 @@ function serve(root) {
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
 
-const argPort = (() => {
-  const i = process.argv.indexOf('--port');
-  return i > -1 ? Number(process.argv[i + 1]) : 0;
-})();
-
 const pw = await loadPlaywright();
 if (!pw) {
   console.log('SKIPPED: playwright not available (set PLAYWRIGHT_MODULE_DIR or NODE_PATH to enable)');
   process.exit(3);
 }
 
-const server = argPort ? await new Promise(r => {
-  const s = http.createServer(); s.listen(argPort, '127.0.0.1', () => r(s));
-}) : await serve(DOCS);
-const port = server.address().port;
-if (argPort) { server.close(); }
-const live = argPort ? null : server;
-const base = `http://127.0.0.1:${port}`;
+const live = await serve(DOCS);
+const base = `http://127.0.0.1:${live.address().port}`;
 
 const findings = [];
 const browser = await pw.chromium.launch({ headless: true });
@@ -161,7 +156,7 @@ try {
   }
 } finally {
   await browser.close();
-  if (live) live.close();
+  live.close();
 }
 
 if (findings.length) {
