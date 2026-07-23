@@ -214,11 +214,12 @@
     .crew-drawer .skill-detail p { margin: 0; }
 
     /* Clickable glossary jargon in prose */
-    button.gloss {
+    .gloss {
       font: inherit; color: var(--accent); background: none; border: none; padding: 0;
       cursor: pointer; border-bottom: 1px dotted var(--accent); line-height: inherit;
     }
-    button.gloss:hover { border-bottom-style: solid; }
+    .gloss:hover { border-bottom-style: solid; }
+    .gloss:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .gloss-pop {
       position: fixed; z-index: 200; max-width: min(560px, 92vw);
       background: var(--card, var(--code-bg)); border: 1px solid var(--rule, var(--dot-inactive));
@@ -519,7 +520,11 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
           let s = text;
           for (let j = kept.length - 1; j >= 0; j--) {
             const h = kept[j];
-            s = s.slice(0, h.index) + `<button class="gloss" data-term="${escAttr(h.term)}">${h.matched}</button>` + s.slice(h.index + h.len);
+            // A SPAN, never a <button>: this markup is injected into authored
+            // prose, and one of those slots is inside <button class="skill-toggle">.
+            // A nested <button> makes the parser close the toggle and reparent
+            // the chip and chevron out of the row (tests/deck-render.bats).
+            s = s.slice(0, h.index) + `<span class="gloss" role="button" tabindex="0" data-term="${escAttr(h.term)}">${h.matched}</span>` + s.slice(h.index + h.len);
           }
           out += s;
         }
@@ -956,6 +961,8 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
       // Keyboard-activate a focused graph node (Enter / Space).
       document.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
+        const gb = e.target.closest && e.target.closest('.gloss');
+        if (gb) { e.preventDefault(); e.stopPropagation(); openGloss(gb); return; }
         const sk = e.target.closest && e.target.closest('.sk-node');
         if (sk && sk.dataset.skillLabel) { e.preventDefault(); openSkill(sk.dataset.skillLabel); }
       });
