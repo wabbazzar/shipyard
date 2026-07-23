@@ -58,7 +58,9 @@ Delivery is `$CLAUDE_NOTE_CMD <session> <message>`; exit 2/3 means
 not-delivered and keeps the queue, and the critique is **cached across
 retries** — a failed delivery never re-spends the model. Spend is capped by
 `[release] budget_tokens_daily` (default 1M/day), counted from the project's
-own `release.critique` events.
+own `release.critique` events. Full mechanics — the hook, the queue, the
+debounce arithmetic, diff assembly, delivery exit codes, the opt-in stop gate —
+are in [docs/shoulder-mode.md](docs/shoulder-mode.md).
 
 Two crews sit outside the loop:
 
@@ -263,6 +265,7 @@ frozen, `repair_proposed`, resolved), `release.critique` +
 
 - [docs/INSTALL.md](docs/INSTALL.md) — the six-layer install model (L0 core → L5 skills), the flow, uninstall
 - [docs/ADAPTING.md](docs/ADAPTING.md) — how the crew adapts: five feedback channels, the routing rule
+- [docs/shoulder-mode.md](docs/shoulder-mode.md) — the shoulder-mode critic end to end: hook → queue → debounce → cold critique → delivery
 - [The deck](https://wabbazzar.com/shipyard/) — the system, narrated, with live status
 
 ## Using as a BopBop pack
@@ -289,7 +292,7 @@ agents/
 └── lib/        load-config.sh, naming.sh, post-run.sh, log_event.sh, revert-merge.sh
 skills/         the six shared skills + install + gates.md.template
 install.sh      per-project installer (idempotent; --theme names)
-docs/           INSTALL.md, ADAPTING.md, deck data
+docs/           INSTALL.md, ADAPTING.md, shoulder-mode.md, deck data
 pack.toml       BopBop pack manifest
 ```
 

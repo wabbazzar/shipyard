@@ -144,7 +144,7 @@
           "disposition": "new",
           "source": "agents/release/critic-role.md — built Phase 6, piloted on caladan",
           "summary": "Concurrent cold-context critique of the live diff.",
-          "detail": "Input is ONLY the diff, the changed-file list, the project's .agents/release.md, and the rubric — explicitly never the dev session transcript, because goal contamination is the thing this design exists to avoid. Debounce: 5 min idle OR 8 touched files (D-L3). Findings graded block / warn / note and delivered into the live session via claude-note.sh (exit 2 = ambiguous target, exit 3 = session at a prompt — retry, never treat as delivered). Budget: 1M tokens/day, enforced by summing today's critique events' token counts before spawning (D-O1 — a token cap, not dollars). It never writes code (D-L7). Verified by planting a real authz bug + an untested behavior change and requiring a block + warn within one debounce window."
+          "detail": "Every Edit/Write in the authoring session fires a PostToolUse hook that appends the path to a per-session queue and exits 0 — nothing expensive ever runs inside the author's tool loop. A separate watcher polls that queue and spends the model once per debounce window: 5 min idle OR 8 touched files (D-L3). Input is ONLY the diff, the changed-file list, the project's .agents/release.md, and the rubric — explicitly never the dev session transcript, because goal contamination is the thing this design exists to avoid. Findings graded block / warn / note and delivered into the live session via claude-note.sh (exit 2 = ambiguous target, exit 3 = session at a prompt — retry off the critique cache, never re-spend the model, never treat as delivered). Budget: 1M tokens/day, enforced by summing today's critique events' token counts before spawning (D-O1 — a token cap, not dollars); over cap the queue is deferred, not dropped. It never writes code (D-L7); teeth are opt-in, via a stop gate that stays disarmed unless a session asks for it. Verified by planting a real authz bug + an untested behavior change and requiring a block + warn within one debounce window."
         },
         {
           "name": "release-readiness rubric",
@@ -732,13 +732,38 @@
     },
     "shoulder mode": {
       "def": "The release critic running concurrently beside the authoring session, judging the diff cold while the code is still being written.",
-      "example": "You are **guardian's shoulder-mode critic**. You review a diff the way a\nrelease engineer would: cold, with no attachment to the goal that\nproduced it. You NEVER write code — you critique. Another agent (or a\nhuman) decides what to do with your findings.",
+      "example": "You are **release's shoulder-mode critic**. You review a diff the way a\nrelease engineer would: cold, with no attachment to the goal that\nproduced it. You NEVER write code — you critique. Another agent (or a\nhuman) decides what to do with your findings.",
       "source": "agents/release/critic-role.md:3-6"
     },
     "debounce window": {
       "def": "The batching rule that decides when the shoulder-mode critic actually fires instead of critiquing every keystroke.",
-      "example": "# Trigger: (queue idle >= CRITIC_IDLE_SEC AND non-empty)\n#          OR (>= CRITIC_BATCH_FILES distinct files queued).\n# Env knobs (test overrides): CRITIC_IDLE_SEC (300), CRITIC_BATCH_FILES (8),\n# CRITIC_POLL_SEC (30), GUARDIAN_CRITIC_MODEL (claude default model if unset).",
+      "example": "# Trigger: (queue idle >= CRITIC_IDLE_SEC AND non-empty)\n#          OR (>= CRITIC_BATCH_FILES distinct files queued).\n# Env knobs (test overrides): CRITIC_IDLE_SEC (300), CRITIC_BATCH_FILES (8),\n# CRITIC_POLL_SEC (30), CRITIC_MODEL (claude default model if unset).",
       "source": "agents/release/critic-watch.sh:13-16"
+    },
+    "PostToolUse hook": {
+      "def": "The one piece of shoulder mode that runs inside the authoring session: it appends the edited file to a per-session queue and exits 0. No model, no network, nothing that can slow or fail the author's tool loop.",
+      "example": "# Reads the Claude Code PostToolUse hook JSON from stdin, appends\n# \"<file_path> <epoch>\" to the per-session queue file, exits 0. No LLM,\n# no network, no blocking work — this runs inline in the dev agent's\n# tool loop and must never slow it down or fail it.\n#\n# Queue file: <project>/tmp/critic-queue-<session_id>",
+      "source": "agents/release/critic-queue.sh:5-10 — matcher Edit|Write|MultiEdit"
+    },
+    "goal contamination": {
+      "def": "What happens when a reviewer reads the author's reasoning: it inherits the author's goals and blind spots, and starts grading the intent instead of the diff. Shoulder mode's entire input contract exists to prevent it.",
+      "example": "You EXPLICITLY do NOT receive the dev session's transcript. That is by\ndesign: a critic that reads the author's reasoning inherits the\nauthor's goals and blind spots (goal contamination), and then it grades\nthe intent instead of the diff. If context seems missing, say so in a\nfinding — do not assume the author's justification.",
+      "source": "agents/release/critic-role.md:18-23"
+    },
+    "block / warn / note": {
+      "def": "The critic's whole output vocabulary — one severity per finding, machine-parseable as SEVERITY|file|finding. Ties break downward on purpose.",
+      "example": "- **block** — would break a release: a correctness bug, a security\n  regression, a forbidden-path touch, a migration without a rollback,\n  a deleted test.\n- **warn** — changed behavior without a test, scope creep, a new\n  dependency, a suppression added, missing error handling on a new\n  boundary.\n- **note** — style drift, doc gaps, TODO debt.\n\nWhen in doubt between two severities, pick the lower one — a critic\nthat cries block loses its audience.",
+      "source": "agents/release/critic-role.md:49-59"
+    },
+    "critique cache": {
+      "def": "The findings file from the last run, reused when delivery has to be retried. Undelivered findings keep the queue alive, and without the cache every 30-second poll would buy the same critique again.",
+      "example": "# Delivery-retry guard: when a critique already ran for this exact queue\n# state (findings newer than the last queue write), reuse it instead of\n# re-spending the model — claude-note exit 2/3 keeps the queue, and\n# without this every poll pass would re-run the whole critique.",
+      "source": "agents/release/critic-watch.sh:199-202"
+    },
+    "stop gate": {
+      "def": "Shoulder mode's opt-in teeth: a Stop hook that refuses to let a session end while block findings stand. Disarmed unless the session sets CRITIC_BLOCK=1, so headless crew runs are never affected.",
+      "example": "# Default: exit 0 immediately — the gate is DISARMED unless the session\n# explicitly sets CRITIC_BLOCK=1. Quartet agents' own headless\n# runs never set it, so they are unaffected.",
+      "source": "agents/release/critic-stop-gate.sh:4-6"
     },
     "event stream": {
       "def": "The append-only JSONL log, one file per day, where every agent run and incident lands as a machine-readable line.",
