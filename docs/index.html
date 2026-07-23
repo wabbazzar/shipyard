@@ -240,6 +240,7 @@
     .dec-status[data-s="superseded"] { border-color: var(--loop-release); color: var(--loop-release); }
     .dec-status[data-s="closed"] { border-color: var(--loop-design); color: var(--loop-design); }
     .dec-closeout { margin-top: 0.45rem; padding-left: 0.6rem; border-left: 2px solid var(--loop-medic); }
+    .dec-was { font-family: var(--mono); font-size: 0.66rem; color: var(--muted); margin-bottom: 0.3rem; }
     .gloss-pop {
       position: fixed; z-index: 200; max-width: min(560px, 92vw);
       background: var(--card, var(--code-bg)); border: 1px solid var(--rule, var(--dot-inactive));
@@ -296,9 +297,9 @@
         triage and docs. Systemd-timed, event-logged, PR-gated, with a human
         stamp at every irreversible handoff.</p>
 
-        <p>This page renders the live build data &mdash; crew, skills, phase
-        status &mdash; from the same file the ticket&rsquo;s gates require the
-        builder to update. If this page lags reality, a gate is broken.</p>
+        <p>This page is generated from the crew&rsquo;s own skill files &mdash;
+        the same definitions the agents run. If it drifts from the system it
+        describes, CI fails.</p>
 
         <div id="cast-block"></div>
       </div>
@@ -397,13 +398,13 @@
     <!-- ========== 3 · The build, live ========== -->
     <section id="plan">
       <div class="slide-inner">
-        <h2>What the build guaranteed</h2>
+        <h2>What the system guarantees</h2>
 
         <p id="guarantees-intro"></p>
 
         <div class="check-board" id="guarantee-board"></div>
 
-        <h3 class="open-windows-h">Still being measured</h3>
+        <h3 class="open-windows-h" id="open-windows-h" hidden>Still being measured</h3>
         <div class="check-board" id="open-windows"></div>
         <p class="board-meta" id="board-meta"></p>
       </div>
@@ -505,6 +506,14 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
       // The decision ledger, keyed by its stable ids — every D-L/D-O/D-U cited
       // in the prose becomes a clickable target (rendered in suk's colour).
       const decisions = data.decisions || {};
+      // Legacy ids (the pre-reindex D-L/D-O/D-U series) still resolve: each
+      // decision records what it `was`, so an old citation in an external link
+      // or an un-updated doc opens the same decision under its current id.
+      const decisionAlias = {};
+      for (const [id, d] of Object.entries(decisions)) {
+        if (d && d.was) decisionAlias[d.was] = id;
+      }
+      const resolveDecision = ref => decisions[ref] ? ref : (decisionAlias[ref] || null);
       function linkGloss(html) {
         if (!glossTerms.length && !Object.keys(decisions).length) return html;
         const parts = [];
@@ -540,10 +549,14 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
           // Decision ids (D-L3, D-O1, D-U1) cite the ledger. Unlike glossary
           // terms these link on EVERY occurrence — a citation the reader can't
           // follow where they meet it is the thing this fixes.
-          const decRe = /\bD-[LOU]\d+\b/g;
+          // Match both the current flat ids (D-3) and any legacy id (D-L3),
+          // resolving each to its canonical decision so the link never carries
+          // a status-encoding letter.
+          const decRe = /\bD-(?:[LOU]\d+|\d+)\b/g;
           let dm;
           while ((dm = decRe.exec(text))) {
-            if (decisions[dm[0]]) hits.push({ index: dm.index, len: dm[0].length, decision: dm[0], matched: dm[0] });
+            const canon = resolveDecision(dm[0]);
+            if (canon) hits.push({ index: dm.index, len: dm[0].length, decision: canon, matched: dm[0] });
           }
           hits.sort((a, b) => a.index - b.index);
           const kept = []; let end = -1;
@@ -603,7 +616,9 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
              <span class="check-claim">${esc(g.claim)}</span>
              <span class="pgist">${esc(g.proof)}</span>
            </div>`).join('');
-        document.getElementById('open-windows').innerHTML = (data.guarantees.open || []).map(w =>
+        const openWins = data.guarantees.open || [];
+        document.getElementById('open-windows-h').hidden = openWins.length === 0;
+        document.getElementById('open-windows').innerHTML = openWins.map(w =>
           `<div class="check-row open">
              <span class="check-mark" aria-hidden="true">&#9203;</span>
              <span class="check-claim">${esc(w.title)}</span>
@@ -962,7 +977,8 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
           const d = decisions[id];
           if (!d) return;
           head = `<h4>${esc(id)}<span class="dec-status" data-s="${escAttr(d.status || '')}">${esc(d.status || '')}</span></h4>`;
-          body = `<p>${esc(d.text || '')}</p>` +
+          body = (d.was ? `<div class="dec-was">was ${esc(d.was)}</div>` : '') +
+            `<p>${esc(d.text || '')}</p>` +
             (d.closeout ? `<p class="dec-closeout">${esc(d.closeout)}</p>` : '') +
             (d.source ? `<div class="gloss-src">${esc(d.source)}</div>` : '');
         } else {

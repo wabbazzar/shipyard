@@ -3,7 +3,7 @@
     "updated": "2026-07-22",
     "ticket": "citadel:docs/tickets/quartet-gaps-guardian-teeth.md",
     "repo": "https://github.com/wabbazzar/shipyard",
-    "note": "Canonical deck data — now tracking a LIVE system (Phases 0–11 shipped; the 7-day soak and 5-day trial are the open windows). Standing gate: every phase completion and direction-changing edit updates this file in the same push."
+    "note": "The data behind this deck — the crews, the skills each inherits, and the decisions that shaped them. Generated from the skill files themselves, so it can't drift from the system it describes."
   },
   "cast": {
     "note": "Six real repos run this system. Their names are changed for this deck; the telemetry, events, and command output shown are real.",
@@ -40,7 +40,7 @@
       "name": "mentat",
       "was": "",
       "loop": "design",
-      "status": "Live on 4 projects, nightly. Drafted its first real proposals from fleet telemetry — e.g. “medic incident flapping: 48 events vs 4 distinct in 7d.” The human front doors /bugfix and /feature enter the same loop through write-ticket.",
+      "status": "Live on four projects, nightly. It drafts proposals from fleet telemetry — a recurring incident, a run of feedback — for the operator to stamp. The /bugfix and /feature front doors enter the same loop.",
       "tagline": "Fleet telemetry and human /bugfix and /feature reports both become drafted proposals.",
       "headline": "Design was never a loop: every feature started as a chat conversation, gated by whatever the human operator happened to notice.",
       "gate": "proposal approved/denied in the daily dispatch; denied proposals are never re-proposed",
@@ -51,7 +51,7 @@
           "disposition": "new · shared",
           "source": "shipyard/skills/write-ticket — the precursor polish-ticket assumes; mentat drafts through it, humans invoke it",
           "summary": "Turn an ask into a ticket with acceptance criteria.",
-          "detail": "Reads the project's own conventions from a [write_ticket] config block (context files, ticket dir, type enum, point scale, commit scopes — never baked), resolves the next id, clarifies only genuinely-blocking ambiguities (default-and-record: lock sensible defaults into the decisions table for veto at review), and emits the ticket skeleton with an explicit Definition of Done. Precursor to polish-ticket. [Phase 13, D-L16/D-O11]"
+          "detail": "Reads the project's own conventions from a [write_ticket] config block (context files, ticket dir, type enum, point scale, commit scopes — never baked), resolves the next id, clarifies only genuinely-blocking ambiguities (default-and-record: lock sensible defaults into the decisions table for veto at review), and emits the ticket skeleton with an explicit Definition of Done. Precursor to polish-ticket. [D-16, D-27]"
         },
         {
           "_file": "bugfix",
@@ -59,7 +59,7 @@
           "disposition": "new · front door",
           "source": "shipyard/skills/bugfix — human front door into the design loop",
           "summary": "Reproduce and root-cause, then write the ticket.",
-          "detail": "Reproduce first (a failing test, reliable steps, or a captured signature — no ticket until the defect is pinned), the repro fails because of the bug, falsify rival causes, separate root from symptom, scope to the minimum diff. Then write-ticket with a bug scope: acceptance is the repro passing. The repro travels in the ticket; execute-ticket commits the failing test at build as the permanent regression test. [Phase 13, D-O12]"
+          "detail": "Reproduce first (a failing test, reliable steps, or a captured signature — no ticket until the defect is pinned), the repro fails because of the bug, falsify rival causes, separate root from symptom, scope to the minimum diff. Then write-ticket with a bug scope: acceptance is the repro passing. The repro travels in the ticket; execute-ticket commits the failing test at build as the permanent regression test. [D-28]"
         },
         {
           "_file": "feature",
@@ -67,7 +67,7 @@
           "disposition": "new · front door",
           "source": "shipyard/skills/feature — human front door into the design loop",
           "summary": "Clarify the ask and set a Definition of Done, then write the ticket.",
-          "detail": "Surface assumptions and verify one per candidate, confirm the unverified ones with the human, then set acceptance criteria as a checklist with Boundaries (always / ask-first / never). Uses the project's existing DoD convention. Then write-ticket with a feature scope: acceptance is the DoD met. [Phase 13]"
+          "detail": "Surface assumptions and verify one per candidate, confirm the unverified ones with the human, then set acceptance criteria as a checklist with Boundaries (always / ask-first / never). Uses the project's existing DoD convention. Then write-ticket with a feature scope: acceptance is the DoD met."
         },
         {
           "_file": "polish-ticket",
@@ -75,21 +75,21 @@
           "disposition": "adapted · live",
           "source": "shipyard/skills/ — symlinked into each project’s .claude/skills/ (agents + humans load the same file)",
           "summary": "Hardens a spec until a zero-context agent can build it unattended.",
-          "detail": "The A–H checklist survives unchanged: self-containment (exact files, units, ports, dated numbers with the command that produced them), orchestration protocol with the verbatim anti-cheating brief, per-phase gate assembly, toolchain proof (§C2: never hand over a ticket whose verification method you haven't run while polishing), verification surfaces where a test that can't fail is a finding, decisions split locked / open-with-default / user-class, thin-slice phasing, ledger + observable DoD. What changes: the gate menu, dashboard port, notify path, and sibling-repo hazards stop being baked prose and become parameters from .agents/config.toml + a hub gate file. Callers: mentat headless after a proposal is stamped; the human operator in-session. [Phase 10, D-L11]"
+          "detail": "The A–H checklist survives unchanged: self-containment (exact files, units, ports, dated numbers with the command that produced them), orchestration protocol with the verbatim anti-cheating brief, per-phase gate assembly, toolchain proof (§C2: never hand over a ticket whose verification method you haven't run while polishing), verification surfaces where a test that can't fail is a finding, decisions split locked / open-with-default / user-class, thin-slice phasing, ledger + observable DoD. What changes: the gate menu, dashboard port, notify path, and sibling-repo hazards stop being baked prose and become parameters from .agents/config.toml + a hub gate file. Callers: mentat headless after a proposal is stamped; the human operator in-session. [D-11]"
         },
         {
           "name": "telemetry collectors",
           "disposition": "new",
-          "source": "agents/design/ — Phase 11",
+          "source": "agents/design/",
           "summary": "Read-only signal mining across the fleet.",
-          "detail": "Sources verified live 2026-07-21: caddy access logs via journald (caddy logs to stdout — /var/log/caddy/ is empty), the event stream (92 day-files; pipe through jq -R 'fromjson?' — 2 corrupt lines abort bare jq), fyi-requests.jsonl, medic incident files, session transcripts under ~/.claude/projects/. Plus pilot usage beacons on salusa + caladan: POST /api/usage appending {ts, path, action, session} JSONL to gitignored data/usage/ — no third-party analytics, nothing leaves the box/tailnet. Further instrumentation ships as mentat's own proposals: the loop bootstraps itself. [D-L12, D-O8]"
+          "detail": "Read-only mining of signals that already exist: web access logs, the event stream, feedback files, incident records, and session transcripts. Plus lightweight usage beacons on two pilot apps — a local endpoint appending per-feature counts, no third-party analytics, nothing leaving the tailnet. Further instrumentation ships as the design crew's own proposals: the loop bootstraps itself. [D-12, D-24]"
         },
         {
           "name": "proposal drafting",
           "disposition": "new",
-          "source": "agents/design/runner — Phase 11",
+          "source": "agents/design/runner",
           "summary": "Nightly: signals → ≤3 open proposals per project.",
-          "detail": "Writes <project>/tmp/<project>-mentat-result.json (mirrors helldiver's result shape so the dispatch queue enrichment stays symmetric), emits design.proposal.opened events, respects a 1M-token daily cap. Skips drafting when 3 proposals sit undecided. Approve in the dispatch → mentat hardens via polish-ticket into <project>/docs/tickets/ and hands to helldiver. Deny → recorded in decisions.jsonl, never re-proposed. [D-O7, D-O9, D-L13] Incident-repair proposals (from suk) emit immediately, outside the nightly cadence, against the same token cap. [D-L15]"
+          "detail": "Nightly, it turns those signals into at most three open proposals per project, emits a proposal-opened event, and respects a daily token budget. Approve in the dispatch and it hardens the proposal into a ticket and hands it to the build crew; deny and it is recorded, never re-proposed. Incident-repair proposals from on-call arrive immediately, outside the nightly cadence. [D-23, D-25, D-13, D-15]"
         },
         {
           "_file": "coverage-audit",
@@ -97,7 +97,7 @@
           "disposition": "adapted · live",
           "source": "shipyard/skills/coverage-audit — moved off user scope, symlinked per project",
           "summary": "Session transcripts as ground truth for what automation misses.",
-          "detail": "Every time the user pointed out a bug in a session, the test suite had missed it. This skill samples the N most-recent transcripts, finds those moments, categorizes the failure classes, and triages each fix as project-specific / generic / install-time-configurable. It resolves the core ambiguity: 0 catches can mean 'stable' or 'checking what doesn't break'. Today it's trapped at user scope on one box; adapted, it installs with the system, renamed to role IDs, and its output feeds both mentat proposals and proctor rubric lines. [shared design + release]"
+          "detail": "Every time the operator pointed out a bug in a session, the test suite had missed it. This skill samples recent session transcripts, finds those moments, categorizes the failure classes, and triages each fix as project-specific, generic, or a new install-time question. It resolves the core ambiguity — zero catches can mean 'stable' or 'only checking what doesn't break' — and its output feeds both design proposals and the release rubric."
         }
       ]
     },
@@ -117,21 +117,21 @@
           "disposition": "adapted · live",
           "source": "shipyard/skills/ — symlinked per project; a default-off [build] ticket_mode hook lets the runner call it headless",
           "summary": "Orchestrated build with mandatory on-system verification.",
-          "detail": "Portable core: discover-state step 0, green-baseline-before-touching-anything, thin vertical slices with a safety patch before risky changes, verify-before-commit (never trust a subagent's green — re-run and read the actual output), the honest-blocker protocol (revert to last green + precise report beats faked green), and the user-decision class as the only reason to stop (money, outward-facing, destructive, overriding deliberate config, real design forks) with a Signal alert when stopping. Parameterized: gate menu, notify command, event-stream path. Callers: helldiver headless for ratified tickets; the human operator in-session. [Phase 10, D-L11]"
+          "detail": "Portable core: discover-state step 0, green-baseline-before-touching-anything, thin vertical slices with a safety patch before risky changes, verify-before-commit (never trust a subagent's green — re-run and read the actual output), the honest-blocker protocol (revert to last green + precise report beats faked green), and the user-decision class as the only reason to stop (money, outward-facing, destructive, overriding deliberate config, real design forks) with a Signal alert when stopping. Parameterized: gate menu, notify command, event-stream path. Callers: helldiver headless for ratified tickets; the human operator in-session. [D-11]"
         },
         {
           "name": "feedback triage → PRs",
           "disposition": "kept + hardened",
           "source": "agents/build/runner.sh + role.md",
           "summary": "Nightly fyi-requests.jsonl → autonomous PRs.",
-          "detail": "The flow stays; the gates change. Fixed (1c): augur_can_merge default flips true→false at runner.sh:226 + medic/runner.sh:84 — merge becomes opt-in per project. Fixed (1d): the green|no_checks case at runner.sh:441 splits — no_checks fails the gate unless [augur] allow_no_ci = true, and a waiver emits augur.incident.ci_waived. The hot case that forced the ordering: salusa runs augur_can_merge = true with zero CI workflows, so its CI must exist (Phase 2) before these gates go live (Phase 4)."
+          "detail": "The flow stays; the gates change. Auto-merge flips from opt-out to opt-in, so a repo only merges its own PRs when it deliberately says so. And the green-or-no-checks path splits: a repo with zero CI checks now fails the gate instead of passing it vacuously, waivable only by an explicit allow_no_ci with a logged waiver. [D-17]"
         },
         {
           "name": "incident repairs — via the loop",
           "disposition": "retired",
-          "source": "retired — agents/build/incident-role.md removed (D-L15); incidents now route through the design loop",
+          "source": "retired — agents/build/incident-role.md removed (D-15); incidents now route through the design loop",
           "summary": "The incident side-door into build is retired.",
-          "detail": "How it worked before: suk's scan opened an incident and helldiver's incident-role.md drafted a fix PR directly — a second road into build that bypassed the design gate. Now (D-L15, live): suk keeps ungated mitigation (restart, revert, contain — on-call waits for no stamp), but the code fix is an incident-repair proposal emitted the moment the incident opens, paged to the operator, stamped in the dispatch, polished by mentat, built by helldiver, gated by proctor. incident-role.md is deleted and build --mode incident is retired. One road into build; repeated incidents become design signal instead of one-off patches."
+          "detail": "How it worked before: suk's scan opened an incident and helldiver's incident-role.md drafted a fix PR directly — a second road into build that bypassed the design gate. Now (D-15, live): suk keeps ungated mitigation (restart, revert, contain — on-call waits for no stamp), but the code fix is an incident-repair proposal emitted the moment the incident opens, paged to the operator, stamped in the dispatch, polished by mentat, built by helldiver, gated by proctor. incident-role.md is deleted and build --mode incident is retired. One road into build; repeated incidents become design signal instead of one-off patches."
         }
       ]
     },
@@ -140,17 +140,17 @@
       "name": "proctor",
       "was": "",
       "loop": "release",
-      "status": "Live. The shoulder-mode critic caught a planted auth-bypass on a pilot repo and delivered it into the session — the first real regression this loop has ever surfaced.",
+      "status": "Live. A cold-context critic reviews the diff while the code is still being written, and delivers its findings straight into the working session.",
       "tagline": "Cold-context release-readiness critic; judges diffs while the code is being written.",
       "headline": "Nightly re-runs of already-green tests catch nothing — the authoring session already optimized against that exact signal.",
-      "gate": "block findings must be addressed before ship; delivered as in-session notes, never hard stops (D-L2)",
+      "gate": "block findings must be addressed before ship; delivered as in-session notes, never hard stops (D-2)",
       "skills": [
         {
           "name": "shoulder-mode critic",
           "disposition": "new",
-          "source": "agents/release/critic-role.md — built Phase 6, piloted on caladan",
+          "source": "agents/release/critic-role.md — the cold-context review rubric",
           "summary": "Concurrent cold-context critique of the live diff.",
-          "detail": "Every Edit/Write in the authoring session fires a PostToolUse hook that appends the path to a per-session queue and exits 0 — nothing expensive ever runs inside the author's tool loop. A separate watcher polls that queue and spends the model once per debounce window: 5 min idle OR 8 touched files (D-L3). Input is ONLY the diff, the changed-file list, the project's .agents/release.md, and the rubric — explicitly never the dev session transcript, because goal contamination is the thing this design exists to avoid. Findings graded block / warn / note and delivered into the live session via claude-note.sh (exit 2 = ambiguous target, exit 3 = session at a prompt — retry off the critique cache, never re-spend the model, never treat as delivered). Budget: 1M tokens/day, enforced by summing today's critique events' token counts before spawning (D-O1 — a token cap, not dollars); over cap the queue is deferred, not dropped. The model is left unset, so critiques follow the CLI default rather than a pinned one (D-O2 — still open). It never writes code (D-L7); teeth are opt-in, via a stop gate that stays disarmed unless a session asks for it. Installing the hook into live authoring sessions was an ask-first boundary (D-U1) — piloted on one repo, then widened fleet-wide by the operator, with the blocking stop gate still opt-in. Verified by planting a real authz bug + an untested behavior change and requiring a block + warn within one debounce window."
+          "detail": "Every Edit/Write in the authoring session fires a PostToolUse hook that appends the path to a per-session queue and exits 0 — nothing expensive ever runs inside the author's tool loop. A separate watcher polls that queue and spends the model once per debounce window: 5 min idle OR 8 touched files (D-3). Input is ONLY the diff, the changed-file list, the project's .agents/release.md, and the rubric — explicitly never the dev session transcript, because goal contamination is the thing this design exists to avoid. Findings graded block / warn / note and delivered into the live session via claude-note.sh (exit 2 = ambiguous target, exit 3 = session at a prompt — retry off the critique cache, never re-spend the model, never treat as delivered). Budget: 1M tokens/day, enforced by summing today's critique events' token counts before spawning (D-17 — a token cap, not dollars); over cap the queue is deferred, not dropped. The model is left unset, so critiques follow the CLI default rather than a pinned one (D-18 — still open). It never writes code (D-7); teeth are opt-in, via a stop gate that stays disarmed unless a session asks for it. Installing the hook into live authoring sessions was a decision reserved for the operator (D-32); it now runs fleet-wide, with the blocking stop gate still opt-in per session."
         },
         {
           "name": "release-readiness rubric",
@@ -164,7 +164,7 @@
           "disposition": "kept",
           "source": "agents/release/role.md + runner.sh",
           "summary": "The deterministic floor.",
-          "detail": "Stays as the backstop and as suk's post-merge validator (D-L4: shoulder mode runs beside it, not instead of it). The nightly LLM pass is repurposed from 're-run green tests' to 'critique what changed since my last run' — role.md:116 already builds a git log --since='24 hours ago' -p block to extend. The measured failure mode it replaces: every recorded failure was environmental (playwright errors, db locks, dirty worktrees), zero real regressions caught, fixAttempts: 0 in every sampled result.json."
+          "detail": "Stays as the backstop and as suk's post-merge validator (D-4: shoulder mode runs beside it, not instead of it). The nightly LLM pass is repurposed from re-running already-green tests to critiquing what changed since its last run — the measured failure mode it replaces caught zero real regressions, every recorded failure environmental."
         },
         {
           "_file": "coverage-audit",
@@ -181,29 +181,29 @@
       "name": "suk",
       "was": "",
       "loop": "on-call",
-      "status": "Live. Reverts and restarts are logged honestly; a regression now opens an incident-repair proposal (one road into build) rather than an auto-merge side-door. Mitigation stays instant and ungated.",
+      "status": "Live. Reverts and restarts are logged for what they actually did; a regression opens a stamped incident-repair proposal rather than an auto-merge side-door. Mitigation stays instant and ungated.",
       "tagline": "Answers when the ship is holed: triage, assign repair, restart, revert.",
       "headline": "The merge→validate→revert loop never worked — and its notifications claimed 'reverted' regardless.",
       "gate": "reverts and restarts are logged honestly (reverted vs revert_failed); timers fire every 10 minutes",
       "skills": [
         {
           "name": "merge → validate → revert",
-          "disposition": "kept · rerouted (D-L15)",
-          "source": "agents/medic/runner.sh — kept as a self-tested function; the auto-merge path that called it was retired by D-L15 (one road into build)",
+          "disposition": "kept · rerouted (D-15)",
+          "source": "agents/medic/runner.sh — kept as a self-tested function; the auto-merge path that called it was retired (D-15, one road into build)",
           "summary": "Post-merge validation with an honest revert path.",
-          "detail": "The confirmed-live bug chain: post-merge validation invoked the release runner without --project (runner.sh:951), which exits 2 before doing any work, so the outcome was always 'fail', so the revert always ran; git revert -m 1 fails on squash merges (no second parent) and the failure was swallowed by || true; the Signal notification at :962 then claimed 'reverted' no matter what. Fixed (1a/1b): pass --project; choose revert shape by commit topology (rev-parse MERGE_SHA^2); capture the exit code; notify reverted vs revert_failed truthfully; emit medic.action.revert with outcome. Proven against a bats fixture with a real bare-origin + clone topology, both commit shapes, each test first shown failing against the pre-fix code."
+          "detail": "The bug chain it fixes: post-merge validation called the release runner with no project, which exits before doing any work, so the outcome was always failure, so the revert always ran; the revert itself failed on squash merges and the failure was swallowed; the notification then claimed 'reverted' no matter what. Now it validates the real project, chooses the revert shape by commit topology, captures the exit code, and reports reverted versus revert_failed truthfully — proven against a real bare-origin + clone fixture for both merge shapes, each test first shown failing."
         },
         {
           "name": "incident triage",
           "disposition": "kept",
           "source": "agents/medic/runner.sh + check-examples/ — now emits an incident-repair proposal on a code fix",
           "summary": "Every-10-minute scan; opens incidents, assigns repair.",
-          "detail": "Detects failures on live services every 10 minutes. Mitigation is immediate and ungated: restart, revert, contain. Repair is not: on opening an incident, suk emits an incident-repair proposal to the top of the loop (design → stamp → build → release) and pages the operator — it no longer hands fix work directly to build (D-L15). The 10-minute cadence is also the merge-is-live hazard: units execute runners from the dev clone, so anything merged to trunk is live within 10 minutes — all ticket work stays on a branch until the single Phase-4 cutover."
+          "detail": "Detects failures on live services every ten minutes. Mitigation is immediate and ungated: restart, revert, contain. Repair is not: opening an incident emits an incident-repair proposal to the top of the loop and pages the operator — it no longer hands fix work straight to build (D-15)."
         },
         {
           "name": "--check-config + --self-test",
           "disposition": "new",
-          "source": "all runners (1f); medic (1g)",
+          "source": "all runners",
           "summary": "Prove the gates and the loop without touching anything live.",
           "detail": "--check-config: read-only effective-gate printout (can_merge, allow_no_ci, resolved trunk, scope globs, budgets) as one JSON object — swept across the whole fleet and diffed against the audited inventory before any cutover. --self-test: run merge → post-merge-fail → revert on the fixture topology for both commit shapes; non-zero exit if the revert path doesn't actually revert."
         }
@@ -214,7 +214,7 @@
       "name": "chronicler",
       "was": "",
       "loop": "docs",
-      "status": "Live under the new name; its record meets the human operator in the Daily Dispatch.",
+      "status": "Keeps the log: a daily documentation pass, and the fleet's record as it reaches the operator in the Daily Dispatch.",
       "tagline": "Keeps the log: daily doc refresh, the record of what the fleet did.",
       "headline": "The only agent whose job was already honest — it gets the rename and nothing else.",
       "gate": "docs follow the code; the daily dispatch (hub-side) is where its record meets the human",
@@ -224,14 +224,14 @@
           "disposition": "kept",
           "source": "agents/scribe/role.md + runner.sh",
           "summary": "Daily documentation pass per project.",
-          "detail": "Unchanged behavior; rename-only changes in Phase 9 (unit names, svc strings, role: field on events). Two projects run scribe-only installs today (sietch and the citadel hub itself)."
+          "detail": "Unchanged behavior: a daily documentation pass per project. Two projects run docs-only installs today (a small club app and the hub itself)."
         },
         {
           "name": "install playbook",
           "disposition": "replaced (system skill)",
           "source": "hub skills/install-quartet stubbed → shipyard/skills/install (adds --theme + conventions interview)",
           "summary": "The installer keeps the recon, gains the theme knob.",
-          "detail": "Not chronicler's skill — listed here as the system-level entry. Kept from install-quartet: Step-0 recon (stack detection so a Python project never inherits Node test commands, git remote + gh auth checks, tracked-secrets sweep before anything pushes, medic service-surface and chat-DB shape questions), coverage-audit-first ordering, and the safety sweep. Added: the --theme question (spacetime / plain / custom), role-ID config keys with QUARTET_* accepted through the deprecation window (D-O6). The hub copy becomes a stub."
+          "detail": "Not chronicler's skill — listed here as the system-level entry. Kept from install-quartet: Step-0 recon (stack detection so a Python project never inherits Node test commands, git remote + gh auth checks, tracked-secrets sweep before anything pushes, medic service-surface and chat-DB shape questions), coverage-audit-first ordering, and the safety sweep. Added: the --theme question (spacetime / plain / custom), role-ID config keys with QUARTET_* accepted through the deprecation window (D-22). The hub copy becomes a stub."
         }
       ]
     }
@@ -282,7 +282,7 @@
       "id": 6,
       "title": "shoulder mode",
       "status": "done",
-      "gist": "Proctor's critic built + piloted on caladan: planted-bug test, debounce test, blocking-gate test, cost guard, wrote-no-code check. Hooks merged additively into existing settings. Piloting was an ask-first boundary (D-U1) — the operator later widened it fleet-wide, every repo queueing edits to a watcher daemon.",
+      "gist": "Proctor's critic built + piloted on caladan: planted-bug test, debounce test, blocking-gate test, cost guard, wrote-no-code check. Hooks merged additively into existing settings. Piloting was an ask-first boundary (D-32) — the operator later widened it fleet-wide, every repo queueing edits to a watcher daemon.",
       "completed": "2026-07-21"
     },
     {
@@ -717,7 +717,7 @@
       "source": "~/code/citadel/data/newspaper/2026-07-22.json (live edition No. 203; lines 3, 9-10, 77-79)"
     },
     "one road into build": {
-      "def": "The D-L15 rule that a code fix — even for an incident — may only enter the build loop as a stamped proposal, never through a side-door.",
+      "def": "The D-15 rule that a code fix — even for an incident — may only enter the build loop as a stamped proposal, never through a side-door.",
       "example": "      # D-L15 — incident repair no longer escalates to build/augur (that\n      # side-door is retired). Medic writes an IMMEDIATE incident-repair\n      # proposal into the design loop's result file (mentat → helldiver via\n      # the dispatch), pages once, and lets the owner stamp it. This is a\n      # deterministic write: no augur.lock, no model spend, no merge. The\n      # restart/revert MITIGATION classes above are untouched — suk still\n      # restarts/reverts immediately; only the CODE FIX is rerouted.",
       "source": "agents/medic/runner.sh:1008-1014"
     },
@@ -733,7 +733,7 @@
     }
   },
   "guarantees": {
-    "intro": "The build is done. These are the properties it locked in — each enforced by a gate, not a promise. Two measurement windows are still running below.",
+    "intro": "Each of these is a property the system holds — enforced by a gate in the pipeline, not by a promise.",
     "items": [
       {
         "claim": "Recovery is rehearsed, not assumed",
@@ -768,122 +768,131 @@
         "proof": "Legacy names keep resolving until each repo is deliberately re-baked — merging a rename is a no-op for running timers."
       }
     ],
-    "open": [
-      {
-        "title": "7-day soak",
-        "what": "Fleet failure rate vs the pre-hardening baseline, accruing daily through Jul 28."
-      },
-      {
-        "title": "5-day trial",
-        "what": "Four floors: a real bug caught and fixed, usage assessed across repos, a feature shipped end-to-end through the loop, one consequential decision surfaced. Through Jul 27; the operator signs the result."
-      }
-    ]
+    "open": []
   },
   "decisions": {
-    "D-L2": {
+    "D-2": {
       "status": "locked",
+      "was": "D-L2",
       "text": "block findings on a live interactive session are delivered as notes only — never a hard stop, never a page.",
       "closeout": "",
       "source": "design ledger — locked 2026-07-21"
     },
-    "D-L3": {
+    "D-3": {
       "status": "locked",
+      "was": "D-L3",
       "text": "Debounce = 5 minutes idle OR 8 touched files, whichever comes first.",
       "closeout": "",
       "source": "design ledger — locked 2026-07-21"
     },
-    "D-L4": {
+    "D-4": {
       "status": "locked",
+      "was": "D-L4",
       "text": "Shoulder mode runs beside the daily battery, not instead of it. The battery stays the deterministic backstop and the on-call crew's post-merge validator.",
       "closeout": "",
       "source": "design ledger — locked 2026-07-21"
     },
-    "D-L7": {
+    "D-7": {
       "status": "locked",
+      "was": "D-L7",
       "text": "The shoulder-mode critic never writes code. It critiques; the dev agent or the human decides what to do with the findings.",
       "closeout": "",
       "source": "design ledger — locked 2026-07-21"
     },
-    "D-L11": {
+    "D-11": {
       "status": "locked",
+      "was": "D-L11",
       "text": "Skills-parity: the ticket skills live in this repo and install per project. Agents invoke the same skill files a human session invokes — no agent-only forks of the workflow.",
       "closeout": "",
       "source": "design ledger — locked 2026-07-21"
     },
-    "D-L12": {
+    "D-12": {
       "status": "locked",
+      "was": "D-L12",
       "text": "Design telemetry v1 mines signals that already exist — web access logs, the event stream, the feedback file, incidents, session transcripts — plus light usage instrumentation on two pilot apps. Further instrumentation ships as the design crew's own proposals.",
       "closeout": "",
       "source": "design ledger — locked 2026-07-21"
     },
-    "D-L13": {
+    "D-13": {
       "status": "locked",
+      "was": "D-L13",
       "text": "Design proposals gate through the operator's live Approve/Deny queue. Nothing builds without a stamp, and decisions land in a per-project ledger; a denied proposal is never re-drafted.",
       "closeout": "",
       "source": "design ledger — locked 2026-07-21"
     },
-    "D-L15": {
+    "D-15": {
       "status": "locked",
+      "was": "D-L15",
       "text": "Incident repair enters at the top of the loop. Mitigation stays ungated — restart, revert, contain — but the code fix becomes a proposal instead of a side-door into build. One road into build.",
       "closeout": "",
       "source": "design ledger — locked 2026-07-21"
     },
-    "D-L16": {
+    "D-16": {
       "status": "locked",
+      "was": "D-L16",
       "text": "write-ticket is a separate precursor to polish-ticket, not folded into it: creation (what and why) and hardening (how to build it safely) are distinct, independently-testable skills.",
       "closeout": "",
       "source": "design ledger — locked 2026-07-22"
     },
-    "D-O1": {
+    "D-17": {
       "status": "closed",
+      "was": "D-O1",
       "text": "Budget caps are token-based, never dollars: 1M tokens/day, enforced by summing today's critique events before spawning.",
       "closeout": "Shipped. budget_tokens_daily (default 1000000) under [release] and [design]; the cap is computed from the crew's own events, and a test asserts no dollar cap exists in any runner.",
       "source": "closed out 2026-07-23 against the as-built code"
     },
-    "D-O6": {
-      "status": "closed",
-      "text": "Legacy config keys keep being read for one release with a deprecation warning; event consumers match the new role field with a service-name fallback. Never break a running fleet mid-rename.",
-      "closeout": "Shipped, and the window has since closed: the legacy compat layer is retired, while consumers still match the old event names so historical stream lines keep rendering.",
-      "source": "closed out 2026-07-23 against the as-built code"
-    },
-    "D-O7": {
-      "status": "closed",
-      "text": "The design crew runs nightly on the same 1M-token cap, and skips drafting when 3 proposals are already undecided.",
-      "closeout": "Shipped. Nightly timers fleet-wide, max_open_proposals default 3, with a skipped event naming the open cap as the reason.",
-      "source": "closed out 2026-07-23 against the as-built code"
-    },
-    "D-O8": {
-      "status": "closed",
-      "text": "Pilot usage instrumentation is the smallest thing that yields per-feature counts: a local beacon endpoint appending JSONL. No third-party analytics, nothing leaves the machine.",
-      "closeout": "Shipped on both pilot apps; a real beacon line was proven to aggregate into per-feature counts end-to-end.",
-      "source": "closed out 2026-07-23 against the as-built code"
-    },
-    "D-O9": {
-      "status": "closed",
-      "text": "Design proposals land in the project's result file, mirroring the build crew's result shape so the dispatch queue's enrichment stays symmetric.",
-      "closeout": "Shipped — same result-file convention, so the queue reads both crews the same way.",
-      "source": "closed out 2026-07-23 against the as-built code"
-    },
-    "D-O11": {
-      "status": "closed",
-      "text": "write-ticket reads the project's conventions and never bakes them: ticket dir, type enum, point scale, commit scopes, test commands and house rules all come from the project's config, with the gate file as fallback.",
-      "closeout": "Shipped; seven projects now carry a write_ticket config block.",
-      "source": "closed out 2026-07-23 against the as-built code"
-    },
-    "D-O12": {
-      "status": "closed",
-      "text": "The bug reproduction lives in the ticket, not in a commit from the front door. execute-ticket writes and commits the failing test at build time, where it becomes the permanent regression test.",
-      "closeout": "Shipped, and demonstrated twice on real defects — each ticket carried its repro, neither front-door run committed a test.",
-      "source": "closed out 2026-07-23 against the as-built code"
-    },
-    "D-O2": {
+    "D-18": {
       "status": "open",
+      "was": "D-O2",
       "text": "The critic's model is unset by default, meaning it follows the CLI's default model rather than a pinned one.",
       "closeout": "Deliberately held OPEN: an unset model means critique cost and judgment quality track whatever the default becomes, with no decision recorded. Pinning it is a live question.",
       "source": "reviewed 2026-07-23; kept open by the operator"
     },
-    "D-U1": {
+    "D-22": {
+      "status": "closed",
+      "was": "D-O6",
+      "text": "Legacy config keys keep being read for one release with a deprecation warning; event consumers match the new role field with a service-name fallback. Never break a running fleet mid-rename.",
+      "closeout": "Shipped, and the window has since closed: the legacy compat layer is retired, while consumers still match the old event names so historical stream lines keep rendering.",
+      "source": "closed out 2026-07-23 against the as-built code"
+    },
+    "D-23": {
+      "status": "closed",
+      "was": "D-O7",
+      "text": "The design crew runs nightly on the same 1M-token cap, and skips drafting when 3 proposals are already undecided.",
+      "closeout": "Shipped. Nightly timers fleet-wide, max_open_proposals default 3, with a skipped event naming the open cap as the reason.",
+      "source": "closed out 2026-07-23 against the as-built code"
+    },
+    "D-24": {
+      "status": "closed",
+      "was": "D-O8",
+      "text": "Pilot usage instrumentation is the smallest thing that yields per-feature counts: a local beacon endpoint appending JSONL. No third-party analytics, nothing leaves the machine.",
+      "closeout": "Shipped on both pilot apps; a real beacon line was proven to aggregate into per-feature counts end-to-end.",
+      "source": "closed out 2026-07-23 against the as-built code"
+    },
+    "D-25": {
+      "status": "closed",
+      "was": "D-O9",
+      "text": "Design proposals land in the project's result file, mirroring the build crew's result shape so the dispatch queue's enrichment stays symmetric.",
+      "closeout": "Shipped — same result-file convention, so the queue reads both crews the same way.",
+      "source": "closed out 2026-07-23 against the as-built code"
+    },
+    "D-27": {
+      "status": "closed",
+      "was": "D-O11",
+      "text": "write-ticket reads the project's conventions and never bakes them: ticket dir, type enum, point scale, commit scopes, test commands and house rules all come from the project's config, with the gate file as fallback.",
+      "closeout": "Shipped; seven projects now carry a write_ticket config block.",
+      "source": "closed out 2026-07-23 against the as-built code"
+    },
+    "D-28": {
+      "status": "closed",
+      "was": "D-O12",
+      "text": "The bug reproduction lives in the ticket, not in a commit from the front door. execute-ticket writes and commits the failing test at build time, where it becomes the permanent regression test.",
+      "closeout": "Shipped, and demonstrated twice on real defects — each ticket carried its repro, neither front-door run committed a test.",
+      "source": "closed out 2026-07-23 against the as-built code"
+    },
+    "D-32": {
       "status": "superseded",
+      "was": "D-U1",
       "text": "Owner's call: should the shoulder-mode hooks be installed into live interactive sessions, and should the blocking stop gate apply to the crews' own headless runs? Default while unanswered: pilot repo only, ask before widening.",
       "closeout": "Superseded by an owner decision — shoulder mode went fleet-wide, every repo carrying the queue hook and a watcher daemon. The blocking stop gate stayed opt-in as decided, so headless crew runs are unaffected.",
       "source": "escalated 2026-07-21; widened by owner decision 2026-07-22"
