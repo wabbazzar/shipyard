@@ -251,6 +251,26 @@ time** (user services don't inherit your shell env), so set them when running
 | `QUARTET_OPS_JSON` | optional systemd/cron state snapshot for medic's scan |
 | `QUARTET_SCRIBE_PRE_HOOK` | optional executable run before each scribe pass |
 
+### Per-role harness / model / provider
+
+Each role runs on `claude` (Claude Code) by default. Point a role at a different
+agentic harness — `codex` (OpenAI Codex CLI) or `hermes` (Hermes Agent) — and a
+model/provider **via config**; `install.sh` bakes the resolved values into that
+role's unit. Precedence: `[<role>].<knob>` → `[harness].<default|model|provider>`
+→ unset (⇒ today's `claude`/`sonnet`, byte-identical). Provider API keys
+(`OPENROUTER_API_KEY`, …) are **never** baked — source them at runtime.
+
+| config key | baked unit env | effect |
+|---|---|---|
+| `[harness].default` / `[<role>].harness` | `<ROLE>_HARNESS` | `claude` (default) · `codex` · `hermes` |
+| `[harness].model` / `[<role>].model` | `<ROLE>_MODEL` | model id (e.g. `sonnet`, `gpt-5.4`, `openrouter:moonshotai/kimi-k3`) |
+| `[harness].provider` / `[<role>].provider` | `<ROLE>_PROVIDER` | provider for the harness (e.g. `openrouter`) |
+
+Token accounting is normalized per harness for the daily gate: claude reads the
+JSON usage envelope, codex the `turn.completed` usage event, and hermes (which
+emits no per-invocation count) reads usage back from its session store
+(`hermes sessions export`).
+
 ## Event stream
 
 Every run appends JSONL to `data/events/YYYY-MM-DD.jsonl`: `job.start` /

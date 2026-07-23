@@ -545,6 +545,19 @@ for role in $ROLES_LIST; do
     [ -n "$val" ] && quartet_env+="Environment=$var=$val"$'\n'
   done
 
+  # Bake the per-role harness/model/provider knobs into the unit env. Precedence:
+  # [<role>].<knob>  >  [harness].<default|knob>  >  (unbaked). Only non-empty
+  # values are written, so an unset config leaves the runner on its built-in
+  # claude/sonnet default — today's behavior, byte-identical. Secrets
+  # (OPENROUTER_API_KEY &c.) are NEVER baked here; they are sourced at runtime.
+  role_upper="$(tr '[:lower:]' '[:upper:]' <<<"$role")"
+  h_val="$(jq -r --arg r "$role" '(.[$r].harness  // .harness.default  // empty)' <<<"$CFG_JSON")"
+  m_val="$(jq -r --arg r "$role" '(.[$r].model     // .harness.model    // empty)' <<<"$CFG_JSON")"
+  p_val="$(jq -r --arg r "$role" '(.[$r].provider  // .harness.provider // empty)' <<<"$CFG_JSON")"
+  [ -n "$h_val" ] && quartet_env+="Environment=${role_upper}_HARNESS=$h_val"$'\n'
+  [ -n "$m_val" ] && quartet_env+="Environment=${role_upper}_MODEL=$m_val"$'\n'
+  [ -n "$p_val" ] && quartet_env+="Environment=${role_upper}_PROVIDER=$p_val"$'\n'
+
   # The release role (tests + build) wants network; the others don't.
   unit_extras=""
   [ "$role" = "release" ] && unit_extras=$'Wants=network-online.target\nAfter=network-online.target\n'
