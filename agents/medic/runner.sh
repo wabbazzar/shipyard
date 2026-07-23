@@ -432,11 +432,16 @@ detect_scan_probes() {
   local i=0
   while [ "$i" -lt "$n_probes" ]; do
     local probe; probe="$(echo "$CFG_JSON" | jq -c ".medic.probes[$i]")"
-    local p_name p_url p_expect p_timeout
+    local p_name p_url p_expect p_timeout p_resolve
     p_name="$(jq -r '.name // ""' <<<"$probe")"
     p_url="$(jq -r '.url // ""' <<<"$probe")"
     p_expect="$(jq -r '.expect_status // 200' <<<"$probe")"
     p_timeout="$(jq -r '.timeout_sec // 10' <<<"$probe")"
+    # Optional `resolve = "host:port:addr"` -> curl --resolve. Lets a probe hit
+    # the real local serving stack when LAN->public-IP hairpin NAT is broken
+    # (probes false-alarmed a healthy site for 12h+ on 2026-07-23; external
+    # traffic was fine, only same-LAN curls got 000).
+    p_resolve="$(jq -r '.resolve // ""' <<<"$probe")"
 
     if [ -z "$p_name" ] || [ -z "$p_url" ]; then
       echo "[medic] probe $i missing name/url; skipping" >> "$LOG_FILE"
@@ -444,10 +449,9 @@ detect_scan_probes() {
     fi
 
     local status_code
-    status_code="$(curl -sS -o /dev/null \
-      -w "%{http_code}" \
-      --max-time "$p_timeout" \
-      "$p_url" 2>/dev/null || echo "000")"
+    local curl_args=(-sS -o /dev/null -w "%{http_code}" --max-time "$p_timeout")
+    [ -n "$p_resolve" ] && curl_args+=(--resolve "$p_resolve")
+    status_code="$(curl "${curl_args[@]}" "$p_url" 2>/dev/null || echo "000")"
 
     if [ "$status_code" = "$p_expect" ]; then
       echo "[medic] probe $p_name OK ($status_code)" >> "$LOG_FILE"

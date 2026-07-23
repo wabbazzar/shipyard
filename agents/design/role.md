@@ -71,6 +71,7 @@ each element an object with exactly these keys:
   "rationale": "why this is worth doing now, in 1-3 sentences",
   "evidence": "the exact datum from the telemetry that motivates it",
   "suggested_scope": "the rough surface a build agent would touch — files/dirs/endpoints, and what is explicitly out of scope",
+  "approval_action": "ONE sentence, imperative, telling the owner exactly what approving builds (e.g. 'Ship a nightly job that archives resolved incident files older than 7 days.') — the title states the problem, this states the deliverable",
   "severity": "high" | "med" | "low"
 }
 ```
