@@ -107,6 +107,30 @@ tokens_used_today() {
     2>/dev/null || echo 0
 }
 
+# ---------- queue consumption -----------------------------------------------
+# Remove only the entries captured in the pre-critique snapshot. Hook entries
+# appended while the (minutes-long) claude run was in flight survive in the
+# queue for the next pass instead of being rm'd unreviewed. No snapshot
+# (legacy path, tests driving deliver_findings directly) falls back to
+# dropping the whole queue.
+consume_queue() {
+  local queue="$1" session="$2"
+  local snap="$QUEUE_DIR/critic-snapshot-$session"
+  if [ -f "$snap" ]; then
+    local rest
+    rest="$(grep -Fxv -f "$snap" "$queue" 2>/dev/null || true)"
+    if [ -n "$rest" ]; then
+      printf '%s\n' "$rest" >"$queue"
+      log "queue kept: $(grep -c . <<<"$rest") entr(ies) arrived during critique"
+    else
+      rm -f "$queue"
+    fi
+    rm -f "$snap"
+  else
+    rm -f "$queue"
+  fi
+}
+
 # ---------- delivery (separate so retries can reuse a cached critique) ------
 deliver_findings() {
   local queue="$1" session="$2" findings_file="$3" n_files="$4"
@@ -118,7 +142,7 @@ deliver_findings() {
 
   if [ -z "${CLAUDE_NOTE_CMD:-}" ]; then
     log "CLAUDE_NOTE_CMD unset; skipping delivery"
-    rm -f "$queue"
+    consume_queue "$queue" "$session"
     return 0
   fi
 
@@ -133,13 +157,36 @@ $(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
   # shellcheck disable=SC2086 — word-splitting CLAUDE_NOTE_CMD is intentional
   $CLAUDE_NOTE_CMD "$session" "$summary"
   note_rc=$?
+  local attempts_file="$QUEUE_DIR/critic-attempts-$session"
   case "$note_rc" in
+    0)
+      rm -f "$attempts_file"
+      consume_queue "$queue" "$session" ;;
     2|3)
       # 2 = ambiguous target, 3 = session at an interactive prompt — the
-      # note was NOT delivered. Keep the queue so a later pass retries.
+      # note was NOT delivered but the condition is session-state that a
+      # later pass can find cleared. Keep the queue; no attempt cap.
       log "claude-note exit $note_rc; queue kept for retry" ;;
     *)
-      rm -f "$queue" ;;
+      # Any other nonzero (1 crash, 127 command-not-found, ...) means the
+      # note command itself is broken — the finding was NOT delivered, so
+      # dropping the queue here would silently lose it. Retry up to 3
+      # passes, then give up LOUDLY: the findings file stays on disk for
+      # the stop gate / manual reading, and a delivery_failed event fires.
+      local attempts
+      attempts="$(cat "$attempts_file" 2>/dev/null || echo 0)"
+      [[ "$attempts" =~ ^[0-9]+$ ]] || attempts=0
+      attempts=$((attempts + 1))
+      if [ "$attempts" -ge 3 ]; then
+        log "claude-note exit $note_rc after $attempts attempts; giving up — findings kept at $findings_file"
+        emit_event release.critique.delivery_failed source=shoulder \
+          rc="$note_rc" attempts="$attempts"
+        rm -f "$attempts_file"
+        consume_queue "$queue" "$session"
+      else
+        printf '%s\n' "$attempts" >"$attempts_file"
+        log "claude-note exit $note_rc; queue kept for retry ($attempts/3)"
+      fi ;;
   esac
   return 0
 }
@@ -170,9 +217,13 @@ critique_queue() {
     log "skip: daily token budget reached ($used >= $BUDGET_TOKENS)"
     emit_event release.critique.skipped source=shoulder reason=budget \
       tokens_used="$used" budget="$BUDGET_TOKENS"
-    rm -f "$queue"
+    rm -f "$queue" "$QUEUE_DIR/critic-snapshot-$session"
     return 0
   fi
+
+  # Snapshot the queue state being critiqued. Delivery consumes exactly these
+  # entries; anything the hook appends while claude is running stays queued.
+  cp "$queue" "$QUEUE_DIR/critic-snapshot-$session" 2>/dev/null || true
 
   # ---- gather the diff: working tree + branch vs trunk ----------------------
   local trunk="" diff="" changed=""
@@ -224,7 +275,7 @@ $(git -C "$PROJECT_DIR" diff --no-index -- /dev/null "$abs" 2>/dev/null || true)
     log "skip: empty diff (changed files: ${n_files:-0}); queue dropped"
     emit_event release.critique.skipped source=shoulder reason=empty_diff \
       files="${n_files:-0}"
-    rm -f "$queue"
+    rm -f "$queue" "$QUEUE_DIR/critic-snapshot-$session"
     return 0
   fi
 
