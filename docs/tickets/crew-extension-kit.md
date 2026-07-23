@@ -472,8 +472,8 @@ gate that could not be made green by legitimate means.)_
 
 | Phase | Plan / commit | Notes |
 |---|---|---|
-| P1 | | |
-| P2 | | |
+| P1 | `[release].hunk_safe_gates` flag + `_annotate_no_hunk` in critic-watch.sh; input-contract note in critic-role.md; red-first `hunk-safe-gates.bats` + fixture. **`a8d61eb`** | Green. Flag-OFF byte-identity pinned; flag-ON marks phantom only. Red-first verified (test 1 fails on pre-change code via `git stash`). Note: critic-role.md's own note contains "(no hunks)", so assertions key on filename+marker, not the bare marker. |
+| P2 | `agents/specialist/{role.md,decision-log.template.md}` (placeholder-only archetype); ADAPTING.md section; red-first `specialist-archetype.bats`. | Green. 4 anchors asserted; red-first verified (files moved aside → all fail). No skill/frontmatter touched ⇒ deck stays fresh without regen. |
 | P3 | | |
 | P4 | | |
 | P5 | | |
