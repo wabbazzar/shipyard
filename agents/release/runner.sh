@@ -1,5 +1,5 @@
 #!/bin/bash
-# agents/release/runner.sh — generic release (guardian) wrapper.
+# agents/release/runner.sh — generic release wrapper.
 #
 # Usage:
 #   runner.sh --project DIR --mode {hook|daily}
@@ -8,12 +8,12 @@
 #
 # Reads <project>/.agents/config.toml. Prompt = agents/release/role.md
 # + <project>/.agents/release.md + RUN CONTEXT block. Writes result to
-# <project>/tmp/<project>-guardian-result.json. Trailer via
+# <project>/tmp/<svc>-result.json. Trailer via
 # agents/lib/post-run.sh emits job.end and (on fail) escalates to medic.
 #
 # post-merge mode is deterministic — runs the project's test_cmd +
 # typecheck against the current checkout, no Claude invocation. Used
-# by medic post-augur-merge to validate before retrigger.
+# by medic post-build-merge to validate before retrigger.
 
 set -uo pipefail
 
@@ -62,7 +62,7 @@ CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
 PROJECT_NAME="$(jq -r '.project_name' <<<"$CFG_JSON")"
 
 # Canonical role identity + resolved display name (svc string). Legacy
-# configs (no [names] block) resolve release→"guardian", so the svc/units
+# configs (no [names] block) resolve the display to the role id "release";
 # stay exactly as they are today.
 ROLE="release"
 export QUARTET_ROLE="$ROLE"
@@ -74,8 +74,9 @@ SVC="$PROJECT_NAME-$DISPLAY"
 RESULT_DIR_REL="$(jq -r '.paths.result_dir // "tmp"' <<<"$CFG_JSON")"
 TEST_CMD="$(jq -r '.release.test_cmd // "npx vitest run"' <<<"$CFG_JSON")"
 TYPECHECK_CMD="$(jq -r '.release.typecheck // "npx tsc --noEmit"' <<<"$CFG_JSON")"
-BUDGET_HOOK="$(jq -r '.release.budget_hook // 0.50' <<<"$CFG_JSON")"
-BUDGET_DAILY="$(jq -r '.release.budget_daily // 2.00' <<<"$CFG_JSON")"
+BUDGET_TOKENS="$(jq -r '.release.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
+[[ "$BUDGET_TOKENS" =~ ^[0-9]+$ ]] || BUDGET_TOKENS=1000000
+WALL_CLOCK="$(jq -r '.release.wall_clock_sec // 3600' <<<"$CFG_JSON")"
 
 # ---------- --check-config: print effective gates, then stop ----------------
 # STRICTLY read-only: no result files, no events, no claude, no network.
@@ -97,8 +98,7 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
       can_merge:($cfg.medic.can_merge // false),
       allow_no_ci:($cfg.build.allow_no_ci // false),
       test_cmd:$test_cmd, typecheck:$typecheck,
-      budgets:{hook_usd:($cfg.release.budget_hook // 0.50),
-               daily_usd:($cfg.release.budget_daily // 2.00)}}'
+      budgets:{budget_tokens_daily:($cfg.release.budget_tokens_daily // 1000000)}}'
   exit 0
 fi
 
@@ -149,13 +149,32 @@ fi
 # ---------- hook | daily: invoke Claude -------------------------------------
 echo "[$SVC] $(now_iso) start mode=$MODE" > "$LOG_FILE"
 
-# Pick budget by mode.
-if [ "$MODE" = "daily" ]; then
-  BUDGET="$BUDGET_DAILY"
-else
-  BUDGET="$BUDGET_HOOK"
+# ---------- daily token budget gate (D-O1: caps are token-based) ------------
+# Sum today's job.end token usage for THIS svc only — the events dir is
+# fleet-shared, so an unscoped sum would count other projects' runs.
+tokens_used_today() {
+  local f="${QUARTET_EVENTS_DIR:-/nonexistent}/$(date -u +%Y-%m-%d).jsonl"
+  [ -f "$f" ] || { echo 0; return; }
+  jq -R 'fromjson?' <"$f" 2>/dev/null | \
+    jq -s --arg svc "$SVC" \
+      '[.[] | select(.svc==$svc and .event=="job.end") | (.tokens // 0)] | add // 0' \
+    2>/dev/null || echo 0
+}
+TOKENS_USED="$(tokens_used_today)"; [[ "$TOKENS_USED" =~ ^[0-9]+$ ]] || TOKENS_USED=0
+if [ "$TOKENS_USED" -ge "$BUDGET_TOKENS" ]; then
+  echo "[$SVC] skip: daily token budget reached ($TOKENS_USED >= $BUDGET_TOKENS)" >> "$LOG_FILE"
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" release.skipped \
+    reason=budget tokens_used="$TOKENS_USED" budget="$BUDGET_TOKENS" || true
+  quartet_notify "$SVC (budget)" \
+    "over daily token budget ($TOKENS_USED/$BUDGET_TOKENS); run skipped until tomorrow" || true
+  JOB_DUR=$(( $(date +%s) - JOB_START ))
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
+    mode="$MODE" status="skipped" reason="budget" duration_s="$JOB_DUR" \
+    tokens_used="$TOKENS_USED" budget="$BUDGET_TOKENS" || true
+  exit 0
 fi
-MODEL="${GUARDIAN_MODEL:-sonnet}"
+
+MODEL="${RELEASE_MODEL:-sonnet}"
 
 RUN_CONTEXT="$(jq -n \
   --arg mode "$MODE" \
@@ -181,16 +200,21 @@ $RUN_CONTEXT"
 
 : > "$RESULT_FILE"
 
+# timeout replaces the retired per-invocation dollar ceiling as the runaway
+# guard; the json envelope gives real token usage for the daily gate.
 set +e
-claude -p \
+CLAUDE_OUT="$(timeout "$WALL_CLOCK" claude -p \
   --model "$MODEL" \
   --dangerously-skip-permissions \
-  --max-budget-usd "$BUDGET" \
-  --output-format text \
+  --output-format json \
   "$PROMPT" \
-  >> "$LOG_FILE" 2>&1
+  2>>"$LOG_FILE")"
 EXIT=$?
 set -e
+TOKENS="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0))' <<<"$CLAUDE_OUT" 2>/dev/null || echo 0)"
+[[ "$TOKENS" =~ ^[0-9]+$ ]] || TOKENS=0
+# Keep the operator debug trail the text mode used to provide.
+jq -r '.result // empty' <<<"$CLAUDE_OUT" >> "$LOG_FILE" 2>/dev/null || true
 
 # If the Claude run died without writing results (budget cut, timeout,
 # or the session backgrounded a step and exited — real incident),
@@ -213,9 +237,11 @@ else
 fi
 
 if [ "$PASS" = "true" ]; then JOB_STATUS="ok"; else JOB_STATUS="fail"; fi
+# A nonzero claude exit with a usable result is a PARTIAL run — never ok.
+[ "$JOB_STATUS" = "ok" ] && [ "$EXIT" -ne 0 ] && JOB_STATUS="partial"
 
 # Build category tag from the result fields (project-specific structure
-# but the field names are stable across guardian-style runs).
+# but the field names are stable across release-style runs).
 CATEGORY="$(python3 - "$RESULT_FILE" <<'PY' 2>/dev/null || echo unknown
 import json, sys
 try:
@@ -236,7 +262,7 @@ PY
 
 # Notify the human (Signal) — kept human-readable; the dashboard reads
 # from the events stream, not from the notification body.
-SUMMARY="$(tail -30 "$LOG_FILE" | grep -A20 -i "GUARDIAN RESULT" | head -10 || true)"
+SUMMARY="$(tail -30 "$LOG_FILE" | grep -A20 -i "RELEASE RESULT" | head -10 || true)"
 [ -z "$SUMMARY" ] && SUMMARY="$SVC completed (mode=$MODE, exit=$EXIT). See $LOG_FILE."
 if [ "$PASS" = "true" ]; then
   quartet_notify "$PROJECT_NAME ${DISPLAY^} ($MODE)" "$SUMMARY" || true
@@ -250,7 +276,7 @@ JOB_DUR=$(( $(date +%s) - JOB_START ))
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/post-run.sh"
 agent_finish "$SVC" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
-  mode="$MODE" exit_code="$EXIT" category="$CATEGORY" >> "$LOG_FILE" 2>&1
+  mode="$MODE" exit_code="$EXIT" tokens="$TOKENS" category="$CATEGORY" >> "$LOG_FILE" 2>&1
 
 echo "[$SVC] done pass=$PASS exit=$EXIT" >> "$LOG_FILE"
 exit "$EXIT"

@@ -5,7 +5,7 @@
 #
 # Each test fails on the real defect: the build runner is a recording stub,
 # so a reroute that regressed to escalating would record a call and the
-# assertion `stub_calls augur-runner == 0` would fail. The retirement and
+# assertion `stub_calls build-runner == 0` would fail. The retirement and
 # ticket-mode cases assert on real exit codes + event/side-effect absence.
 
 bats_require_minimum_version 1.5.0
@@ -24,7 +24,7 @@ install_agents() {
   mkdir -p "$dir/.agents" "$dir/tmp"
   sed "s/__PROJECT_NAME__/$name/g" "$FIXTURES_DIR/$cfg" >"$dir/.agents/config.toml"
   local a
-  for a in guardian augur medic scribe; do
+  for a in release build medic scribe design; do
     printf '# %s — %s\nFixture prompt.\n' "$name" "$a" >"$dir/.agents/$a.md"
   done
   grep -q '^tmp/$' "$dir/.gitignore" 2>/dev/null || printf 'tmp/\n' >>"$dir/.gitignore"
@@ -45,7 +45,7 @@ make_fake_quartet() {
   # Recording build stub — a regression must NEVER reach it post-D-L15.
   cat >"$FAKE_QD/agents/build/runner.sh" <<STUB
 #!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$SHIM_LOG/augur-runner.argv"
+printf '%s\n' "\$*" >> "$SHIM_LOG/build-runner.argv"
 exit 1
 STUB
   chmod +x "$FAKE_QD/agents/build/runner.sh"
@@ -117,7 +117,7 @@ run_medic_scan() {
   [ "$(printf '%s\n' "$output" | grep -c .)" = "1" ]
 
   # (4) the build runner was NOT invoked in incident mode (zero calls)
-  [ "$(stub_calls augur-runner)" = "0" ]
+  [ "$(stub_calls build-runner)" = "0" ]
 }
 
 # ---------------------------------------------------------------------------

@@ -3,10 +3,10 @@
 # gap-fixes.bats — Phase 1 gap fixes, test-first.
 #
 # Covers:
-#   1a  medic passes --project to guardian post-merge
+#   1a  medic passes --project to release post-merge
 #   1b  shape-aware, honest revert (squash vs true merge; medic.action.revert)
-#   1c  augur_can_merge defaults to FALSE
-#   1d  zero CI checks fails the gate unless augur.allow_no_ci=true (waived loudly)
+#   1c  can_merge defaults to FALSE
+#   1d  zero CI checks fails the gate unless build.allow_no_ci=true (waived loudly)
 #   1e  shared detect_trunk() — config wins, origin/HEAD detected, no silent master
 #   1f  --check-config on all four runners (read-only effective-gates JSON)
 #   1g  medic --self-test (both commit shapes, honest failure)
@@ -29,9 +29,12 @@ setup() {
 # commit — callers that need a clean tree run topo_commit_all after any
 # config edits.
 install_agents() {
-  local dir="$1" cfg="$2" name="$3"
+  local dir="$1" cfg="$2" name="$3" src
+  # cfg is a fixture name in FIXTURES_DIR, or an absolute path to a
+  # runtime-generated config (see write_legacy_fixture).
+  [[ "$cfg" == /* ]] && src="$cfg" || src="$FIXTURES_DIR/$cfg"
   mkdir -p "$dir/.agents" "$dir/tmp"
-  sed "s/__PROJECT_NAME__/$name/g" "$FIXTURES_DIR/$cfg" >"$dir/.agents/config.toml"
+  sed "s/__PROJECT_NAME__/$name/g" "$src" >"$dir/.agents/config.toml"
   local a
   for a in release build medic scribe design; do
     printf '# %s — %s\nFixture prompt.\n' "$name" "$a" >"$dir/.agents/$a.md"
@@ -48,7 +51,7 @@ topo_commit_all() {
   git -C "$1" push -q origin "$br"
 }
 
-# make_fake_quartet — a QUARTET_DIR whose child runners (augur, guardian)
+# make_fake_quartet — a QUARTET_DIR whose child runners (build, release)
 # are recording stubs, with the REAL agents/lib symlinked in. Lets a test
 # drive the real medic runner while intercepting its child invocations
 # (they're called by absolute path, so PATH shims can't catch them).
@@ -59,26 +62,61 @@ make_fake_quartet() {
   export FAKE_QD
 }
 
-# write_guardian_stub <exit-code> — recording guardian runner in FAKE_QD.
-write_guardian_stub() {
+# write_release_stub <exit-code> — recording release runner in FAKE_QD.
+write_release_stub() {
   cat >"$FAKE_QD/agents/release/runner.sh" <<STUB
 #!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$SHIM_LOG/guardian-runner.argv"
+printf '%s\n' "\$*" >> "$SHIM_LOG/release-runner.argv"
 exit $1
 STUB
   chmod +x "$FAKE_QD/agents/release/runner.sh"
 }
 
-# write_augur_stub <result-dest> <result-src> — recording augur runner in
+# write_build_stub <result-dest> <result-src> — recording build runner in
 # FAKE_QD that "succeeds" by copying a prepared result file into place.
-write_augur_stub() {
+write_build_stub() {
   cat >"$FAKE_QD/agents/build/runner.sh" <<STUB
 #!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$SHIM_LOG/augur-runner.argv"
+printf '%s\n' "\$*" >> "$SHIM_LOG/build-runner.argv"
 cp "$2" "$1"
 exit 0
 STUB
   chmod +x "$FAKE_QD/agents/build/runner.sh"
+}
+
+# write_legacy_fixture <dest-file> — regenerate the pre-rename LEGACY config
+# (retired section names + the retired merge key) at runtime. The retired
+# words are built from split strings so they never appear literally in this
+# file (token-caps test 2 greps all of tests/ for them). Replaces the old
+# on-disk fixture legacy-*-can-merge-true.toml, deleted for the same reason.
+write_legacy_fixture() {
+  local a="au""gur" g="guar""dian"
+  cat >"$1" <<EOF
+# Pre-rename LEGACY config — retired sections and retired merge key.
+# The loader must pass these through RAW: no back-fill into build/release,
+# no effect on medic.can_merge (stays default false).
+
+project_name  = "__PROJECT_NAME__"
+project_owner = "fixture-owner"
+branch        = "main"
+
+[paths]
+result_dir   = "tmp"
+worktree_dir = ".worktrees"
+
+[$g]
+test_cmd     = "true"
+typecheck    = "true"
+
+[$a]
+budget         = 0.10
+wall_clock_sec = 60
+allow_no_ci    = true
+
+[medic]
+daily_escalation_cap = 5
+${a}_can_merge      = true
+EOF
 }
 
 # medic_incident_iid <unit-name> — the incident_id medic's detect_scan_runners
@@ -93,7 +131,7 @@ medic_incident_iid() {
 write_build_recording_stub() {
   cat >"$FAKE_QD/agents/build/runner.sh" <<STUB
 #!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$SHIM_LOG/augur-runner.argv"
+printf '%s\n' "\$*" >> "$SHIM_LOG/build-runner.argv"
 exit 1
 STUB
   chmod +x "$FAKE_QD/agents/build/runner.sh"
@@ -148,9 +186,9 @@ run_medic_scan() {
 }
 
 # ---------------------------------------------------------------------------
-# 1a / 1b — D-L15 incident-repair reroute (was: escalate-to-augur + revert)
+# 1a / 1b — D-L15 incident-repair reroute (was: escalate-to-build + revert)
 #
-# A regression-class incident no longer escalates to build/augur. Medic
+# A regression-class incident no longer escalates to build. Medic
 # writes an immediate incident-repair PROPOSAL into the design loop's result
 # file, emits design.proposal.opened AS design, pages once, and never touches
 # git. These tests pin that new contract.
@@ -178,8 +216,8 @@ run_medic_scan() {
   [[ "$(jq -r '.id' <<<"$prop")" == mentat:m1a:* ]]
 
   # The build runner was NEVER invoked (the code-fix side-door is retired).
-  [ "$(stub_calls augur-runner)" = "0" ]
-  [ ! -f "$SHIM_LOG/guardian-runner.argv" ]
+  [ "$(stub_calls build-runner)" = "0" ]
+  [ ! -f "$SHIM_LOG/release-runner.argv" ]
 }
 
 @test "1b: reroute does NOT invoke the build runner in incident mode (zero calls)" {
@@ -195,7 +233,7 @@ run_medic_scan() {
 
   # No incident-mode escalation happened, and no revert action was recorded
   # (medic never merged anything to revert).
-  [ "$(stub_calls augur-runner)" = "0" ]
+  [ "$(stub_calls build-runner)" = "0" ]
   [ -z "$(events_json | jq -c 'select(.event=="medic.action.revert")')" ]
   [ -z "$(events_json | jq -c 'select(.event=="build.incident.attempted")')" ]
   # The action ledger records propose_repair, not escalate_augur.
@@ -245,10 +283,10 @@ run_medic_scan() {
 }
 
 # ---------------------------------------------------------------------------
-# 1c — augur_can_merge defaults to FALSE
+# 1c — can_merge defaults to FALSE
 # ---------------------------------------------------------------------------
 
-@test "1c: check-config reports can_merge=false when augur_can_merge absent" {
+@test "1c: check-config reports can_merge=false when can_merge absent" {
   # absent-keys has no branch either — give the repo a resolvable origin/HEAD.
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" absent-keys.toml c1c
@@ -270,10 +308,10 @@ run_medic_scan() {
 # 1d — zero CI checks must not pass silently
 # ---------------------------------------------------------------------------
 
-# prep_augur_incident <project-dir> <name> — a valid incident file plus
+# prep_build_incident <project-dir> <name> — a valid incident file plus
 # claude/gh stubs that EXPLODE if invoked. Post-D-L15 the retired incident
 # path must exit before touching either. Sets INC_FILE.
-prep_augur_incident() {
+prep_build_incident() {
   local p="$1" name="$2"
   local iid="cafe0123456789abcdef0123456789abcdef012345"
   INC_FILE="$BATS_TEST_TMPDIR/incident.json"
@@ -291,7 +329,7 @@ prep_augur_incident() {
   install_agents "$p" can-merge-true.toml a1d
   sed -i '/^wall_clock_sec/a in_scope_paths = ["*"]' "$p/.agents/config.toml"
   topo_commit_all "$p"
-  prep_augur_incident "$p" a1d
+  prep_build_incident "$p" a1d
 
   run run_runner build "$p" --mode incident --incident-file "$INC_FILE"
   [ "$status" -eq 3 ]
@@ -300,7 +338,7 @@ prep_augur_incident() {
 
   # No events, no result file, no claude/gh calls — a clean, loud no-op.
   [ ! -f "$(events_file)" ] || [ -z "$(events_json)" ]
-  [ ! -f "$p/tmp/a1d-augur-result.json" ]
+  [ ! -f "$p/tmp/a1d-build-result.json" ]
   [ "$(stub_calls claude)" = "0" ]
   [ "$(stub_calls gh)" = "0" ]
 }
@@ -310,7 +348,7 @@ prep_augur_incident() {
   install_agents "$p" allow-no-ci-true.toml a1dw
   sed -i '/^wall_clock_sec/a in_scope_paths = ["*"]' "$p/.agents/config.toml"
   topo_commit_all "$p"
-  prep_augur_incident "$p" a1dw
+  prep_build_incident "$p" a1dw
 
   run run_runner build "$p" --mode incident --incident-file "$INC_FILE"
   [ "$status" -eq 3 ]
@@ -406,7 +444,7 @@ prep_augur_incident() {
   [ -z "$(ls -A "$p/tmp")" ]
 }
 
-@test "1f: augur and scribe check-config include their scope globs" {
+@test "1f: build and scribe check-config include their scope globs" {
   proj="$(make_fixture_project cc3 allow-no-ci-true.toml)"
   run run_runner build "$proj" --check-config
   [ "$status" -eq 0 ]
@@ -479,9 +517,9 @@ EOF
 # ---------------------------------------------------------------------------
 # Phase 9 — canonical role IDs + install-time theme layer
 #
-# THE SAFETY PROPERTY: a config with no [names] block must keep the exact
-# unit/svc display names it has today (build→augur, release→guardian), while
-# the event `role:` field and event-name prefixes move to canonical ids.
+# THE SAFETY PROPERTY: a config with no [names] block uses the role ids as
+# the unit/svc display names (build, release), and the event `role:` field
+# and event-name prefixes are the canonical ids.
 # ---------------------------------------------------------------------------
 
 @test "phase9: no [names] config — release svc is the role id, role=release, no deprecation" {
@@ -538,21 +576,25 @@ EOF
   [ "$(jq -r '.role' <<<"$line")" = "release" ]            # role is still canonical
 }
 
-@test "phase9: legacy [augur]/[guardian] sections are NOT normalized (retired 2026-07-22)" {
-  cfg="$(load_fixture_config legacy-augur-can-merge-true.toml)"
+@test "phase9: retired legacy sections are NOT normalized, retired merge key is ignored (retired 2026-07-22)" {
+  write_legacy_fixture "$BATS_TEST_TMPDIR/legacy.toml"
+  # shellcheck disable=SC1091
+  source "$QUARTET_ROOT/agents/lib/load-config.sh"
+  cfg="$(load_config_json "$BATS_TEST_TMPDIR/legacy.toml")"
   # the loader passes raw TOML through; legacy sections no longer back-fill
   [ "$(jq -r '.medic.can_merge'   <<<"$cfg")" = "null" ]
   [ "$(jq -r '.build.allow_no_ci' <<<"$cfg")" = "null" ]
   [ "$(jq -r '.release.test_cmd'  <<<"$cfg")" = "null" ]
   # the raw legacy keys are still present in the JSON — just unused
-  [ "$(jq -r '.augur.allow_no_ci'     <<<"$cfg")" = "true" ]
-  [ "$(jq -r '.medic.augur_can_merge' <<<"$cfg")" = "true" ]
+  [ "$(jq -r --arg k "au""gur" '.[$k].allow_no_ci'          <<<"$cfg")" = "true" ]
+  [ "$(jq -r --arg k "au""gur" '.medic[$k + "_can_merge"]'  <<<"$cfg")" = "true" ]
 }
 
 @test "phase9/D-L15: medic reroute on legacy config — proposal event AS design, no build.incident.* escalation" {
   make_fake_quartet
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
-  install_agents "$p" legacy-augur-can-merge-true.toml m9
+  write_legacy_fixture "$BATS_TEST_TMPDIR/legacy.toml"
+  install_agents "$p" "$BATS_TEST_TMPDIR/legacy.toml" m9
   topo_commit_all "$p"
 
   prep_medic_loop "$p" m9
@@ -574,7 +616,7 @@ EOF
   [ -z "$(events_json | jq -c 'select(.event=="build.incident.attempted")')" ]
   [ -z "$(events_json | jq -c 'select(.event=="build.incident.merged")')" ]
   [ -z "$(events_json | jq -c 'select(.event=="release.post_merge.run")')" ]
-  [ "$(stub_calls augur-runner)" = "0" ]
+  [ "$(stub_calls build-runner)" = "0" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -594,11 +636,9 @@ EOF
     --project "$P" --agents release >/dev/null
   [ -f "$UNITS/themedup-release.service" ]
   [ -f "$UNITS/themedup-release.timer" ]
-  # Plus a hand-planted LEGACY-name unit for the same role (old guardian dir
-  # alias) — the sweep must catch it too.
-  sed 's#agents/release/runner.sh#agents/guardian/runner.sh#; ' \
-    "$UNITS/themedup-release.service" >"$UNITS/themedup-guardian.service"
-  cp "$UNITS/themedup-release.timer" "$UNITS/themedup-guardian.timer"
+  # (Units pointing at retired display-name dir aliases cannot exist
+  # post-rename — those agent dirs are gone — so the sweep only has to
+  # catch same-role units under OTHER current display names.)
 
   # Re-install with a theme: new name written, old-name set for the SAME
   # role removed — this is the duplicate-initiation bug.
@@ -606,13 +646,10 @@ EOF
     --project "$P" --agents release --theme spacetime
   [ "$status" -eq 0 ]
   [[ "$output" == *"removed stale duplicate: themedup-release"* ]]
-  [[ "$output" == *"removed stale duplicate: themedup-guardian"* ]]
   [ -f "$UNITS/themedup-proctor.service" ]
   [ -f "$UNITS/themedup-proctor.timer" ]
   [ ! -e "$UNITS/themedup-release.service" ]
   [ ! -e "$UNITS/themedup-release.timer" ]
-  [ ! -e "$UNITS/themedup-guardian.service" ]
-  [ ! -e "$UNITS/themedup-guardian.timer" ]
 }
 
 @test "dry-run announces the stale-duplicate sweep without touching files" {

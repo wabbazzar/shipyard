@@ -35,7 +35,7 @@ PY
   [ -n "$raw" ] || return 1
 
   # Canonical shape only: [build]/[release] sections and medic.can_merge.
-  # (The legacy [augur]/[guardian]/augur_can_merge normalization is retired;
+  # (The legacy section/merge-key normalization from the old display names is retired;
   # configs were migrated fleet-wide 2026-07-22.)
   printf '%s\n' "$raw"
 }
