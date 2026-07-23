@@ -97,11 +97,132 @@ cmd_status() {
   return 0
 }
 
+# ---- add-specialist --------------------------------------------------------
+# Scaffold the domain-specialist archetype (agents/specialist/*) for one named
+# subsystem into the target project, and wire it into three surfaces. The
+# decision log is instantiated from the TEMPLATE (deterministic) — no model call
+# is made, so drafting spends nothing and token-caps hold vacuously; the
+# specialist role fills the log over time.
+cmd_add_specialist() {
+  local sub="${ARGS[0]:-}"
+  [ -n "$sub" ] || { echo "usage: shipyard add-specialist <subsystem>" >&2; return 2; }
+  case "$sub" in
+    *[!a-zA-Z0-9_-]*) echo "add-specialist: subsystem must be [A-Za-z0-9_-]" >&2; return 2 ;;
+  esac
+  local dir="$PROJECT_DIR"
+  [ -d "$dir/.agents" ] || {
+    echo "add-specialist: $dir has no .agents/ (is the crew installed?)" >&2; return 2; }
+
+  # 1. decision-log doc in the project's docs dir (discovered, not hardcoded)
+  local docs_dir="docs"
+  [ -d "$dir/doc" ] && [ ! -d "$dir/docs" ] && docs_dir="doc"
+  mkdir -p "$dir/$docs_dir"
+  local log_rel="$docs_dir/${sub}-decisions.md" log_abs="$dir/$docs_dir/${sub}-decisions.md"
+  [ -f "$log_abs" ] || \
+    sed "s/<subsystem>/$sub/g" "$QUARTET_DIR/agents/specialist/decision-log.template.md" > "$log_abs"
+
+  # 2. the specialist subagent definition (archetype role + subsystem pointers)
+  mkdir -p "$dir/.claude/agents"
+  local agent_file="$dir/.claude/agents/${sub}-specialist.md"
+  if [ ! -f "$agent_file" ]; then
+    {
+      printf -- '---\n'
+      printf -- 'name: %s-specialist\n' "$sub"
+      printf -- 'description: Standing reviewer for the %s subsystem. Reads %s before reviewing; guards settled decisions against fresh-context erosion.\n' "$sub" "$log_rel"
+      printf -- '---\n\n'
+      printf -- '# %s specialist\n\n' "$sub"
+      printf -- 'Subsystem: **%s**. Decision log: `%s` (read it first).\n\n' "$sub" "$log_rel"
+      printf -- 'Subsystem files: _list the globs/paths this specialist owns here._\n\n'
+      printf -- '---\n\n'
+      cat "$QUARTET_DIR/agents/specialist/role.md"
+    } > "$agent_file"
+  fi
+
+  local marker="<!-- shipyard:specialist:$sub -->"
+
+  # 3a. gates.md — a "consult the specialist" note (creates the file if absent)
+  local gates="$dir/.agents/gates.md"
+  if ! grep -qsF "$marker" "$gates"; then
+    {
+      printf '\n%s\n' "$marker"
+      printf '### Specialist — %s — APPLIES: on changes to the %s subsystem\n' "$sub" "$sub"
+      printf 'Consult the `%s-specialist` subagent and its decision log (`%s`) before landing a change to the %s subsystem; a change that re-introduces a rejected approach or breaks a stated invariant is a block.\n' "$sub" "$log_rel" "$sub"
+    } >> "$gates"
+  fi
+
+  # 3b. release.md — a HUNK-KEYED file-conditional block (never membership-keyed)
+  local rel="$dir/.agents/release.md"
+  if ! grep -qsF "$marker" "$rel"; then
+    {
+      printf '\n%s\n' "$marker"
+      printf '## Conventions — %s specialist gate\n\n' "$sub"
+      printf -- '- When the DIFF contains real +/- hunks for a %s subsystem file, verify the change cites the relevant `%s` decision-log entry. Key on the presence of hunks in DIFF, NOT on mere membership in the CHANGED FILES list (which is a superset — a listed file with no hunk is at most a note).\n' "$sub" "$log_rel"
+    } >> "$rel"
+  fi
+
+  # 3c. [write_ticket].context_files += the decision log (idempotent line-edit)
+  local cfg="$dir/.agents/config.toml"
+  if [ -f "$cfg" ]; then
+    if ! QUARTET_LOG_REL="$log_rel" python3 - "$cfg" <<'PY'
+import os, sys, re
+path = sys.argv[1]; rel = os.environ["QUARTET_LOG_REL"]
+txt = open(path, encoding="utf-8").read()
+if rel in txt:            # idempotent
+    sys.exit(0)
+lines = txt.split("\n")
+hdr = next((i for i, l in enumerate(lines)
+            if re.match(r'\s*\[write_ticket\]\s*$', l)), None)
+entry = '"%s"' % rel
+if hdr is None:
+    if txt and not txt.endswith("\n"):
+        txt += "\n"
+    txt += '\n[write_ticket]\ncontext_files = [%s]\n' % entry
+    open(path, "w", encoding="utf-8").write(txt); sys.exit(0)
+cf = None
+for i in range(hdr + 1, len(lines)):
+    if re.match(r'\s*\[[^\]]+\]\s*$', lines[i]):
+        break
+    if re.match(r'\s*context_files\s*=', lines[i]):
+        cf = i; break
+if cf is None:
+    lines.insert(hdr + 1, 'context_files = [%s]' % entry)
+else:
+    j = cf
+    while '[' not in lines[j]:
+        j += 1
+    k = lines[j].index('[')
+    lines[j] = lines[j][:k + 1] + entry + ', ' + lines[j][k + 1:]
+open(path, "w", encoding="utf-8").write("\n".join(lines))
+PY
+    then
+      echo "add-specialist: failed to wire context_files" >&2; return 2
+    fi
+    if ! QUARTET_LOG_REL="$log_rel" python3 - "$cfg" <<'PY'
+import os, sys, tomllib
+d = tomllib.load(open(sys.argv[1], "rb"))
+rel = os.environ["QUARTET_LOG_REL"]
+assert rel in d.get("write_ticket", {}).get("context_files", []), "context_files missing path"
+PY
+    then
+      echo "add-specialist: config no longer parses after wiring" >&2; return 2
+    fi
+  fi
+
+  echo "add-specialist: wired '$sub' specialist"
+  echo "  agent:   .claude/agents/${sub}-specialist.md"
+  echo "  log:     $log_rel"
+  echo "  gates:   .agents/gates.md (consult note)"
+  echo "  release: .agents/release.md (hunk-keyed gate)"
+  echo "  config:  [write_ticket].context_files += $log_rel"
+  return 0
+}
+
 case "$SUBCMD" in
   help)   usage; exit 0 ;;
   status) cmd_status; exit $? ;;
-  add-specialist|learn)
-    echo "shipyard: '$SUBCMD' is not available in this build" >&2
+  add-specialist) cmd_add_specialist; exit $? ;;
+  learn)
+    echo "shipyard: 'learn' is not available in this build" >&2
     exit 2 ;;
   *)
     echo "shipyard: unknown subcommand '$SUBCMD'" >&2
