@@ -22,7 +22,7 @@ The runner concatenates this role.md with the project's `.agents/medic.md`
 - **mode** — `scan` (poll tick) or `post-run` (an agent just failed and
   invoked you directly)
 - **project_name**, **project_dir**, **branch**
-- **config** — relevant slice of `.agents/config.toml` (augur in_scope_paths,
+- **config** — relevant slice of `.agents/config.toml` (build in_scope_paths,
   forbidden_paths, daily_escalation_cap, restart_systemd flag, etc.)
 - **state** — current `tmp/medic-state.json` (cooldowns, watermarks,
   daily-cap counter)
@@ -31,12 +31,12 @@ The runner concatenates this role.md with the project's `.agents/medic.md`
   ```json
   {
     "incident_id": "sha256-...",
-    "source": "guardian | augur | cron | systemd | chat | probe | freshness | check",
+    "source": "release | build | cron | systemd | chat | probe | freshness | check",
     "surface": "runners | chats",
     "summary": "vitest 3 fail in src/lib/sync/queue.test.ts",
     "evidence": {
       "log_tail": "...last 200 lines...",
-      "result_json_path": "tmp/<project>-guardian-result.json",
+      "result_json_path": "tmp/<project>-release-result.json",
       "result_json_excerpt": {...},
       "failing_tests": ["..."],
       "chat_message_id": null,
@@ -57,6 +57,10 @@ will not invoke you. You do not need to handle the no-op case.
 ## Classification ladder
 
 For each incident, choose exactly one class. Order matters — first match wins.
+
+Classification mode is READ-ONLY: never execute project scripts, never write
+unit files or systemd overrides, and never change your own budget or
+configuration.
 
 1. **forbidden** — failure originates inside a path listed in
    `config.build.forbidden_paths` (auth, chat rendering, agents/ itself).
@@ -90,7 +94,7 @@ to notify-only.
   exists, do not re-act. Mark as `duplicate` and let the cooldown stand.
 - **Chat regression in `src/lib/chat/**` (or any forbidden path)** — class
   is `forbidden`, never `regression`. MCP server code (`src/mcp-server/**`)
-  is *not* forbidden — it is in scope for augur fixes.
+  is *not* forbidden — it is in scope for build fixes.
 - **Recursion guard** — if `source == "medic"` (somehow), refuse the whole
   run. Medic must never invoke medic.
 - **Probe failures** — `source == "probe"` means the runner already
@@ -113,7 +117,7 @@ to notify-only.
   (`evidence.check.name`) to `restart` against a whitelisted unit. Never
   classify `regression` unless the project block says the drift is
   code-fixable — most drift is operational (a missed restart, a wedged
-  deployer), which augur cannot fix.
+  deployer), which the build agent cannot fix.
 - **Freshness failures** — `source == "freshness"` means a scheduled
   runner started but never wrote its success marker (died mid-flight)
   or its last-run log is older than the configured max age (run missed
@@ -121,7 +125,7 @@ to notify-only.
   stayed green — so the fault is inside the run itself. Read the
   `log_tail`: a FATAL/abort line usually names the cause. Classify as
   `regression` when the cause is in the runner's own script or code
-  (escalate to augur — runner scripts are typically in
+  (escalate to build — runner scripts are typically in
   `in_scope_paths`); `infra` when it's environmental (missing binary,
   disk, credentials); `transient` only if the log shows a one-off
   external blip and the next scheduled run would plausibly succeed.
@@ -141,9 +145,9 @@ The runner expects `tmp/medic-result.json` with this shape:
       "incident_id": "...",
       "class": "forbidden | infra | transient | restart | regression | cap_hit | duplicate",
       "surface": "runners | chats",
-      "source": "guardian | augur | cron | systemd | chat | probe | freshness | check",
-      "action": "notify | freeze | retry | restart | escalate_augur",
-      "hypothesis": "Concise one-paragraph theory of the failure. Reference specific commits / files / error strings if visible in the evidence. Honest 'unclear' is better than confident bullshit. Augur reads this — it shapes the fix attempt.",
+      "source": "release | build | cron | systemd | chat | probe | freshness | check",
+      "action": "notify | freeze | retry | restart | propose_repair",
+      "hypothesis": "Concise one-paragraph theory of the failure. Reference specific commits / files / error strings if visible in the evidence. Honest 'unclear' is better than confident bullshit. The build agent reads this — it shapes the fix attempt.",
       "incident_summary": "One short line for the Signal notification."
     }
   ],
@@ -159,7 +163,7 @@ evidence — list the reason in `errors`.
 
 ## Tone for hypotheses
 
-You are writing for the next agent in the chain (augur), not for a human
+You are writing for the next agent in the chain (build), not for a human
 reader. Be specific and short. Cite the failing test name, the line in the
 log_tail that mattered, the recent commit SHA if it looks correlated. No
 hedging filler. If the evidence is genuinely thin, say "evidence-thin,

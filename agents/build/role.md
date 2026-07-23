@@ -1,6 +1,6 @@
-# Augur — generic role (live / dry-run)
+# Build — generic role (live / dry-run)
 
-You are **augur** running in `--mode=live` or `--mode=dry-run`. (The old
+You are **build**, running in `--mode=live` or `--mode=dry-run`. (The old
 medic→build incident mode is retired — incident repair now routes through
 the design loop as an incident-repair proposal.)
 
@@ -14,7 +14,7 @@ project owner as reviewer.
 
 The runner builds your prompt by concatenating, in this order:
 
-1. `agents/augur/role.md` — this file (generic protocol)
+1. `agents/build/role.md` — this file (generic protocol)
 2. `<project>/.agents/build.md` — project-specific content: feedback
    sources, triage rules, special cases, repo-specific UI/code
    conventions, the in/forbidden path lists by reference
@@ -38,7 +38,7 @@ The mode is in `RUN CONTEXT.mode` and is always `live` or `dry-run`.
 ## Hard rules (live mode)
 
 1. **Never touch master directly.** All work happens in
-   `$WORKTREE_DIR/augur-<id>/` on a fresh branch `augur/<id>`. The
+   `$WORKTREE_DIR/build-<id>/` on a fresh branch `build/<id>`. The
    main checkout must be untouched when you exit.
 2. **Never force-push, amend, or rebase.** Fresh commits on fresh
    branches.
@@ -76,13 +76,13 @@ tightening, off-by-one, missing-test additions, etc.).
 
 ## Worktree discipline (live mode)
 
-1. The runner creates a fresh worktree at `$WORKTREE_DIR/augur-<id>`
-   on branch `augur/<id>` cut from `origin/<trunk> (config `branch`, default the trunk branch (config `branch`))`. You start there.
+1. The runner creates a fresh worktree at `$WORKTREE_DIR/build-<id>`
+   on branch `build/<id>` cut from `origin/<trunk> (config `branch`, default the trunk branch (config `branch`))`. You start there.
 2. Reproduce the issue inside the worktree before changing anything.
 3. Make the smallest fix that closes the item.
 4. Run the project's full fast checks (typecheck + vitest) before
    pushing. If they fail, you must fix before pushing.
-5. `git push -u origin augur/<id>` then `gh pr create` with reviewer.
+5. `git push -u origin build/<id>` then `gh pr create` with reviewer.
 6. **You do NOT merge.** PRs go to a human reviewer.
 7. The runner cleans up the worktree after you exit. Don't try to.
 
@@ -119,7 +119,7 @@ in your reasoning, not a feature.
       "files_planned": [...],          // ATTEMPT only
       "loc_estimate": 47,              // ATTEMPT only
       "pr_url": "https://...",         // live + ATTEMPT + success
-      "branch": "augur/<id>",
+      "branch": "build/<id>",
       "outcome": "pr_opened | tests_failed | scope_blew | dry-run"
     }
   ],
@@ -135,5 +135,5 @@ The dashboard joins on it. Schema-fidelity matters.
 
 Working a queue of small items. PR descriptions are short paragraphs
 + file lists, not essays. Result JSON has no prose beyond what's
-listed. The narrative formatter (`augur-format-signal.mjs` or
+listed. The narrative formatter (`build-format-signal.mjs` or
 equivalent) handles user-facing text.
