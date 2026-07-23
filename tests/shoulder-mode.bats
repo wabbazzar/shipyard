@@ -154,6 +154,61 @@ critique_events() {
   [ ! -e "$P/tmp/critic-queue-s1" ]
 }
 
+@test "critic-queue drops absolute paths outside the project" {
+  P="$(make_fixture_project critq-xproj)"
+  run bash -c "printf '%s' '{\"session_id\":\"s1\",\"tool_input\":{\"file_path\":\"/some/other/repo/src/a.ts\"}}' \
+    | CLAUDE_PROJECT_DIR='$P' bash '$QUARTET_ROOT/$QUEUE_HOOK'"
+  [ "$status" -eq 0 ]
+  run bash -c "ls '$P/tmp'/critic-queue-* 2>/dev/null"
+  [ -z "$output" ]
+}
+
+@test "budget-exhausted queue is deferred, not discarded; skip event once per day" {
+  P="$(make_fixture_project crite-defer)"
+  make_stub claude 0 "$CANNED_CLAUDE_JSON"
+  printf '%s\n' \
+    '{"ts":"2026-01-01T00:00:00Z","svc":"crite-defer-guardian","event":"release.critique","tokens":999999999}' \
+    >> "$(events_file)"
+  queue_files "$P" s1 2
+  export CRITIC_IDLE_SEC=1
+
+  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ -s "$P/tmp/critic-queue-s1" ]          # queue survives for next window
+  [ "$(stub_calls claude)" = "0" ]
+
+  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ -s "$P/tmp/critic-queue-s1" ]
+  # second pass on the same blown budget does not re-emit the skip event
+  N="$(events_json | jq -c 'select(.event=="release.critique.skipped" and .reason=="budget")' | wc -l)"
+  [ "$N" -eq 1 ]
+}
+
+@test "claude spawn failure gives up loudly after 3 attempts" {
+  P="$(make_fixture_project critspawn)"
+  make_stub claude 1
+  queue_files "$P" s1 2
+  export CRITIC_IDLE_SEC=1
+
+  for i in 1 2; do
+    touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+    run run_watch "$P" --session s1 --once
+    [ "$status" -eq 0 ]
+    [ -s "$P/tmp/critic-queue-s1" ]        # kept for retry
+  done
+
+  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ ! -e "$P/tmp/critic-queue-s1" ]        # 3rd failure: gave up
+  EV="$(events_json | jq -c 'select(.event=="release.critique.spawn_failed")')"
+  [ -n "$EV" ]
+  [ "$(jq -r '.attempts' <<<"$EV")" = "3" ]
+}
+
 # ---------------------------------------------------------------------------
 # (d) severity parser + delivery
 # ---------------------------------------------------------------------------

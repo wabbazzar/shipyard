@@ -27,6 +27,17 @@ SESSION_ID="$(jq -r '.session_id // empty' <<<"$INPUT" 2>/dev/null || true)"
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 
+# Absolute paths outside this project belong to some other repo's critic
+# (a session working across two checkouts edits both); queueing them here
+# gets them critiqued against the WRONG project's conventions and trunk.
+case "$FILE_PATH" in
+  /*)
+    case "$FILE_PATH" in
+      "$PROJECT_DIR"/*) ;;
+      *) exit 0 ;;
+    esac ;;
+esac
+
 # Gitignored paths (result JSONs, scratch files under tmp/) are runtime
 # artifacts, never release candidates. Queueing them produced critic runs
 # whose only "change" was e.g. tmp/medic-result.json — pure noise, paid
