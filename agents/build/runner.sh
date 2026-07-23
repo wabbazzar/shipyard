@@ -1,5 +1,5 @@
 #!/bin/bash
-# agents/build/runner.sh — generic build (augur) wrapper.
+# agents/build/runner.sh — generic build wrapper.
 #
 # Live and dry-run modes run natively here (nightly feedback triage →
 # autonomous PRs). Incident mode is RETIRED (D-L15): incident repair now
@@ -13,7 +13,7 @@
 #   runner.sh --project DIR --mode ticket --ticket-file PATH   # gated: [build].ticket_mode
 #   runner.sh --project DIR --check-config   # print effective gates, read-only
 #
-# Result file (written to $PROJECT_DIR/$paths.result_dir/$project-augur-result.json):
+# Result file (written to $PROJECT_DIR/$paths.result_dir/<svc>-result.json):
 #   {pass, incident_id, branch, pr_url, merge_sha, files_changed, errors}
 
 set -uo pipefail
@@ -57,7 +57,7 @@ CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
 PROJECT_NAME="$(jq -r '.project_name' <<<"$CFG_JSON")"
 
 # Canonical role identity + resolved display name (svc string). Legacy
-# configs (no [names] block) resolve build→"augur", so the svc/units stay
+# configs (no [names] block) resolve the display to the role id "build";
 # exactly as they are today.
 ROLE="build"
 export QUARTET_ROLE="$ROLE"
@@ -205,7 +205,7 @@ RUN CONTEXT (write your result to $RESULT_FILE — JSON only, no prose):
 
 $RUN_CONTEXT"
 
-  MODEL="${AUGUR_MODEL:-sonnet}"
+  MODEL="${BUILD_MODEL:-sonnet}"
   : > "$RESULT_FILE"
 
   # The json envelope gives real token usage for the daily gate; timeout
@@ -225,14 +225,14 @@ $RUN_CONTEXT"
   # Keep the operator debug trail the text mode used to provide.
   jq -r '.result // empty' <<<"$CLAUDE_OUT" >> "$LOG_FILE" 2>/dev/null || true
 
-  # Live mode only — clean up any worktrees augur left behind. Belt-and-
+  # Live mode only — clean up any worktrees the build agent left behind. Belt-and-
   # suspenders for the case where claude crashed mid-run.
   if [ "$MODE" = "live" ]; then
     while read -r wt; do
       [ -z "$wt" ] && continue
       path="$(awk '{print $1}' <<<"$wt")"
       case "$path" in
-        *"/.worktrees/augur-"*|*"/.worktrees/medic-incident-"*)
+        *"/.worktrees/build-"*|*"/.worktrees/medic-incident-"*)
           echo "[$SVC] cleanup leftover worktree $path" >> "$LOG_FILE"
           git worktree remove --force "$path" 2>>"$LOG_FILE" || true ;;
       esac
@@ -240,9 +240,9 @@ $RUN_CONTEXT"
   fi
 
   # Build human-facing summary. Project may ship its own formatter at
-  # scripts/augur-format-signal.mjs (optional per-project); fall back to a
+  # scripts/build-format-signal.mjs (optional per-project); fall back to a
   # generic line if not.
-  FMT="$PROJECT_DIR/scripts/augur-format-signal.mjs"
+  FMT="$PROJECT_DIR/scripts/build-format-signal.mjs"
   SUMMARY_FILE="$RESULT_DIR/$SVC-signal.txt"
   if [ -f "$RESULT_FILE" ] && [ -s "$RESULT_FILE" ]; then
     if [ -x "$FMT" ] || [ -f "$FMT" ]; then

@@ -1,8 +1,8 @@
 ---
 name: install
 description: >
-  Install the crew (design/build/release/medic/scribe — legacy names
-  augur/guardian) on a project. Use when the user says "install the crew (or
+  Install the crew (design/build/release/medic/scribe) on a project. Use
+  when the user says "install the crew (or
   crew) on <project>", "set up the agents on <project>", "add the crew
   to <project>", or "wire <project> into the fleet". Drives the whole flow from
   the operator's hub: recon (via coverage-audit), the install-time interview
@@ -209,8 +209,7 @@ removes legacy `<project>-<agent>.sh` cron/launchers, **symlinks
 `skills/{polish-ticket,execute-ticket,coverage-audit}` → `<project>/.claude/skills/`**
 so agents (headless) and humans (in-session) load the identical files, **drops
 `gates.md.template` → `<project>/.agents/gates.md` if absent**, and verifies.
-Subset with `--agents build,release,medic` (legacy `guardian`/`augur` tokens
-are accepted and mapped).
+Subset with `--agents build,release,medic` (role IDs only).
 
 ## Step 7 — Smoke-verify before declaring done
 
@@ -230,13 +229,16 @@ repo (stage explicitly; never sweep up unrelated dirty files).
 
 - **Env knobs** `QUARTET_NOTIFY_CMD` / `QUARTET_OPS_JSON` / `QUARTET_EVENTS_DIR`
   are current, not deprecated — keep setting them.
-- **Role tokens** `guardian`/`augur` in `--agents` are accepted and mapped to
-  `release`/`build`. **Config key** `[medic].augur_can_merge` is the legacy
-  spelling of `[medic].can_merge`; it still loads but warns for one release —
-  migrate to `can_merge`. Legacy installs with no `[names]` block keep their
-  exact unit names (build→augur, release→guardian) until re-baked with
-  `--theme`. Renaming the running fleet is a deliberate, supervised step —
-  merging the rename must never silently rename live units.
+- **Role tokens** in `--agents` are the canonical role IDs only
+  (`design,build,release,medic,scribe`) — the previous generation's
+  display-name tokens are retired and no longer mapped.
+- **Config keys** are canonical only (`[build]`/`[release]` sections,
+  `[medic].can_merge`); the legacy section/key compat layer is retired —
+  migrate any old config before re-installing.
+- Installs with no `[names]` block get unit names from the role IDs.
+  Renaming a running fleet's units (re-baking with `--theme`) is a
+  deliberate, supervised step — merging a rename must never silently
+  rename live units.
 
 ## Constraints / honesty
 

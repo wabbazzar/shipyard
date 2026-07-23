@@ -28,9 +28,9 @@ ambiguity using the user's Claude Code session history as ground truth — every
 time the user pointed out a bug, the test suite had missed it. Surface those,
 categorize, and recommend specific enhancements.
 
-> **Role IDs.** This skill speaks in canonical role IDs. Legacy names map:
-> `guardian → release` (the release-readiness critic), `augur → build`,
-> `medic → on-call`, `scribe → docs`. A project's per-role prompt file is
+> **Role IDs.** This skill speaks in canonical role IDs: `release` (the
+> release-readiness critic), `build` (the fix crew), `medic` (on-call),
+> `scribe` (docs). A project's per-role prompt file is
 > `<project>/.agents/<role>.md`; the shared core prompt is
 > `agents/<role>/role.md` in the harness repo.
 

@@ -167,7 +167,7 @@ critique_events() {
   P="$(make_fixture_project crite-defer)"
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
   printf '%s\n' \
-    '{"ts":"2026-01-01T00:00:00Z","svc":"crite-defer-guardian","event":"release.critique","tokens":999999999}' \
+    '{"ts":"2026-01-01T00:00:00Z","svc":"crite-defer-release","event":"release.critique","tokens":999999999}' \
     >> "$(events_file)"
   queue_files "$P" s1 2
   export CRITIC_IDLE_SEC=1
@@ -255,7 +255,7 @@ critique_events() {
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
   # Pre-seed today's stream with a critique that already blew the budget.
   printf '%s\n' \
-    '{"ts":"2026-01-01T00:00:00Z","svc":"crite-guardian","event":"release.critique","tokens":999999999}' \
+    '{"ts":"2026-01-01T00:00:00Z","svc":"crite-release","event":"release.critique","tokens":999999999}' \
     >> "$(events_file)"
   queue_files "$P" s1 2
   touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
