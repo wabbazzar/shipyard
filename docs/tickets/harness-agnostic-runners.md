@@ -301,7 +301,7 @@ merge order + model_providers.)_
   dispatcher; add argv-log byte-identity cases. NOTE: critic-watch with `CRITIC_MODEL`
   set is the ONE order deviation (`--model` moves ahead of `--output-format json`) —
   same binary/flags/behavior; documented, not hidden.
-  DONE: `agents/lib/spawn.sh` added (claude branch; canonical argv; errexit-safe
+  DONE (commit 658bc65): `agents/lib/spawn.sh` added (claude branch; canonical argv; errexit-safe
   capture; SPAWN_RAW/RC/TEXT/TOKENS/TOKEN_SOURCE globals; unknown harness → rc 2).
   All 7 sites route through it; `<ROLE>_HARNESS`/`_PROVIDER` env reads added
   (unset⇒claude). token-caps test 10 migrated (grep → dispatcher assertions),
@@ -311,7 +311,12 @@ merge order + model_providers.)_
   leak-check clean, deck-fresh, `bash -n` clean. The one order deviation
   (critic-watch + CRITIC_MODEL) is unreachable today (CRITIC_MODEL unset on the
   fleet) and behavior-identical. Commit: <pending>.
-- P2 —
+- P2 — DONE: `_spawn_codex` added — `codex exec [-m][-c model_provider][-s
+  workspace-write --dangerously-bypass-approvals-and-sandbox] -o <tmp> --json PROMPT`;
+  final text ← `-o` file; tokens ← last `turn.completed.usage` (input+output), 0-fallback;
+  `SPAWN_TOKEN_SOURCE=codex`. NOT using `--output-schema` (codex#15451). 3 stubbed
+  bats cases (composition+usage, 0-fallback, no-provider⇒no-`-c`). GATES: `bats tests/`
+  146 green, leak clean, `bash -n` ok. Commit: <pending>.
 - P3 —
 - P4 —
 - P5 —
