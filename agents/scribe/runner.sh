@@ -73,7 +73,9 @@ DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
 SVC="$PROJECT_NAME-$DISPLAY"
 
 RESULT_DIR_REL="$(jq -r '.paths.result_dir // "tmp"' <<<"$CFG_JSON")"
-BUDGET="$(jq -r '.scribe.budget // 1.50' <<<"$CFG_JSON")"
+BUDGET_TOKENS="$(jq -r '.scribe.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
+[[ "$BUDGET_TOKENS" =~ ^[0-9]+$ ]] || BUDGET_TOKENS=1000000
+WALL_CLOCK="$(jq -r '.scribe.wall_clock_sec // 3600' <<<"$CFG_JSON")"
 COMMIT_PREFIX="$(jq -r '.scribe.commit_message_prefix // "scribe: nightly refresh"' <<<"$CFG_JSON")"
 AUTO_COMMIT="$(jq -r '.scribe.auto_commit // true' <<<"$CFG_JSON")"
 AUTO_PUSH="$(jq -r '.scribe.auto_push // false' <<<"$CFG_JSON")"
@@ -99,7 +101,7 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
       content_paths:($cfg.scribe.content_paths // []),
       auto_commit:($cfg.scribe.auto_commit // true),
       auto_push:($cfg.scribe.auto_push // false),
-      budgets:{daily_usd:($cfg.scribe.budget // 1.50)}}'
+      budgets:{budget_tokens_daily:($cfg.scribe.budget_tokens_daily // 1000000)}}'
   exit 0
 fi
 
@@ -116,6 +118,31 @@ cd "$PROJECT_DIR"
 [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.start \
   mode="$MODE" project="$PROJECT_NAME" || true
 echo "[$SVC] $(now_iso) start mode=$MODE" > "$LOG_FILE"
+
+# ---------- daily token budget gate (D-O1: caps are token-based) ------------
+# Sum today's job.end token usage for THIS svc only — the events dir is
+# fleet-shared, so an unscoped sum would count other projects' runs.
+tokens_used_today() {
+  local f="${QUARTET_EVENTS_DIR:-/nonexistent}/$(date -u +%Y-%m-%d).jsonl"
+  [ -f "$f" ] || { echo 0; return; }
+  jq -R 'fromjson?' <"$f" 2>/dev/null | \
+    jq -s --arg svc "$SVC" \
+      '[.[] | select(.svc==$svc and .event=="job.end") | (.tokens // 0)] | add // 0' \
+    2>/dev/null || echo 0
+}
+TOKENS_USED="$(tokens_used_today)"; [[ "$TOKENS_USED" =~ ^[0-9]+$ ]] || TOKENS_USED=0
+if [ "$TOKENS_USED" -ge "$BUDGET_TOKENS" ]; then
+  echo "[$SVC] skip: daily token budget reached ($TOKENS_USED >= $BUDGET_TOKENS)" >> "$LOG_FILE"
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" scribe.skipped \
+    reason=budget tokens_used="$TOKENS_USED" budget="$BUDGET_TOKENS" || true
+  quartet_notify "$SVC (budget)" \
+    "over daily token budget ($TOKENS_USED/$BUDGET_TOKENS); run skipped until tomorrow" || true
+  JOB_DUR=$(( $(date +%s) - JOB_START ))
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
+    mode="$MODE" status="skipped" reason="budget" duration_s="$JOB_DUR" \
+    tokens_used="$TOKENS_USED" budget="$BUDGET_TOKENS" || true
+  exit 0
+fi
 
 # Optional pre-hook: a project can run a cheap, AI-free refresh step
 # before scribe (e.g. regenerate a state snapshot scribe reads).
@@ -150,17 +177,22 @@ $RUN_CONTEXT"
 MODEL="${SCRIBE_MODEL:-sonnet}"
 : > "$RESULT_FILE"
 
+# timeout replaces the retired per-invocation dollar ceiling as the runaway
+# guard; the json envelope gives real token usage for the daily gate.
 set +e
-claude -p \
+CLAUDE_OUT="$(timeout "$WALL_CLOCK" claude -p \
   --model "$MODEL" \
   --dangerously-skip-permissions \
-  --max-budget-usd "$BUDGET" \
-  --output-format text \
+  --output-format json \
   "$PROMPT" \
-  >> "$LOG_FILE" 2>&1
+  2>>"$LOG_FILE")"
 EXIT=$?
 set -e
 echo "[$SVC] claude exit=$EXIT" >> "$LOG_FILE"
+TOKENS="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0))' <<<"$CLAUDE_OUT" 2>/dev/null || echo 0)"
+[[ "$TOKENS" =~ ^[0-9]+$ ]] || TOKENS=0
+# Keep the operator debug trail the text mode used to provide.
+jq -r '.result // empty' <<<"$CLAUDE_OUT" >> "$LOG_FILE" 2>/dev/null || true
 
 # Determine pass/fail. Scribe's own result.json is the source of truth;
 # a non-zero claude exit alone isn't enough (it may have written the
@@ -171,6 +203,8 @@ else
   PASS="false"
 fi
 if [ "$PASS" = "true" ]; then JOB_STATUS="ok"; else JOB_STATUS="fail"; fi
+# A nonzero claude exit with a usable result is a PARTIAL run — never ok.
+[ "$JOB_STATUS" = "ok" ] && [ "$EXIT" -ne 0 ] && JOB_STATUS="partial"
 
 # Count diffed files inside content_paths only — no commits to anything else.
 CHANGED=0
@@ -228,7 +262,7 @@ JOB_DUR=$(( $(date +%s) - JOB_START ))
 source "$QUARTET_DIR/agents/lib/post-run.sh"
 agent_finish "$SVC" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
   --no-escalate \
-  mode="$MODE" exit_code="$EXIT" changed="$CHANGED" \
+  mode="$MODE" exit_code="$EXIT" tokens="$TOKENS" changed="$CHANGED" \
   commit_outcome="$COMMIT_OUTCOME" >> "$LOG_FILE" 2>&1
 
 echo "[$SVC] done status=$JOB_STATUS changed=$CHANGED commit=$COMMIT_OUTCOME" >> "$LOG_FILE"

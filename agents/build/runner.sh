@@ -87,8 +87,7 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
       allow_no_ci:($cfg.build.allow_no_ci // false),
       in_scope_paths:($cfg.build.in_scope_paths // []),
       forbidden_paths:($cfg.build.forbidden_paths // []),
-      budgets:{live_usd:($cfg.build.budget // 2.00),
-               incident_usd:($cfg.build.budget_incident // 1.50),
+      budgets:{budget_tokens_daily:($cfg.build.budget_tokens_daily // 1000000),
                wall_clock_sec:($cfg.build.wall_clock_sec // 3600)}}'
   exit 0
 fi
@@ -107,7 +106,8 @@ if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
   [ -f "$PROJECT_PROMPT" ] || { echo "project build.md missing: $PROJECT_DIR/.agents/" >&2; exit 2; }
 
   WALL_CLOCK="$(jq -r '.build.wall_clock_sec // 3600' <<<"$CFG_JSON")"
-  BUDGET="$(jq -r '.build.budget // 2.00' <<<"$CFG_JSON")"
+  BUDGET_TOKENS="$(jq -r '.build.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
+  [[ "$BUDGET_TOKENS" =~ ^[0-9]+$ ]] || BUDGET_TOKENS=1000000
   PROJECT_OWNER="$(jq -r '.project_owner // ""' <<<"$CFG_JSON")"
 
   RESULT_FILE="$RESULT_DIR/$SVC-result.json"
@@ -154,6 +154,31 @@ if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
     fi
   fi
 
+# ---------- daily token budget gate (D-O1: caps are token-based) ------------
+  # Sum today's job.end token usage for THIS svc only — the events dir is
+  # fleet-shared, so an unscoped sum would count other projects' runs.
+  tokens_used_today() {
+    local f="${QUARTET_EVENTS_DIR:-/nonexistent}/$(date -u +%Y-%m-%d).jsonl"
+    [ -f "$f" ] || { echo 0; return; }
+    jq -R 'fromjson?' <"$f" 2>/dev/null | \
+      jq -s --arg svc "$SVC" \
+        '[.[] | select(.svc==$svc and .event=="job.end") | (.tokens // 0)] | add // 0' \
+      2>/dev/null || echo 0
+  }
+  TOKENS_USED="$(tokens_used_today)"; [[ "$TOKENS_USED" =~ ^[0-9]+$ ]] || TOKENS_USED=0
+  if [ "$TOKENS_USED" -ge "$BUDGET_TOKENS" ]; then
+    echo "[$SVC] skip: daily token budget reached ($TOKENS_USED >= $BUDGET_TOKENS)" >> "$LOG_FILE"
+    [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" build.skipped \
+      reason=budget tokens_used="$TOKENS_USED" budget="$BUDGET_TOKENS" || true
+    quartet_notify "$SVC (budget)" \
+      "over daily token budget ($TOKENS_USED/$BUDGET_TOKENS); run skipped until tomorrow" || true
+    JOB_DUR=$(( $(date +%s) - JOB_START ))
+    [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
+      mode="$MODE" status="skipped" reason="budget" duration_s="$JOB_DUR" \
+      tokens_used="$TOKENS_USED" budget="$BUDGET_TOKENS" || true
+    exit 0
+  fi
+
   RUN_CONTEXT="$(jq -n \
     --arg mode "$MODE" \
     --arg name "$PROJECT_NAME" \
@@ -183,17 +208,22 @@ $RUN_CONTEXT"
   MODEL="${AUGUR_MODEL:-sonnet}"
   : > "$RESULT_FILE"
 
+  # The json envelope gives real token usage for the daily gate; timeout
+  # stays as the per-invocation runaway guard.
   set +e
-  timeout "$WALL_CLOCK" claude -p \
+  CLAUDE_OUT="$(timeout "$WALL_CLOCK" claude -p \
     --model "$MODEL" \
     --dangerously-skip-permissions \
-    --max-budget-usd "$BUDGET" \
-    --output-format text \
+    --output-format json \
     "$PROMPT" \
-    >> "$LOG_FILE" 2>&1
+    2>>"$LOG_FILE")"
   EXIT=$?
   set -e
   echo "[$SVC] claude exit=$EXIT" >> "$LOG_FILE"
+  TOKENS="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0))' <<<"$CLAUDE_OUT" 2>/dev/null || echo 0)"
+  [[ "$TOKENS" =~ ^[0-9]+$ ]] || TOKENS=0
+  # Keep the operator debug trail the text mode used to provide.
+  jq -r '.result // empty' <<<"$CLAUDE_OUT" >> "$LOG_FILE" 2>/dev/null || true
 
   # Live mode only — clean up any worktrees augur left behind. Belt-and-
   # suspenders for the case where claude crashed mid-run.
@@ -238,12 +268,14 @@ $RUN_CONTEXT"
     quartet_notify "$PROJECT_NAME ${DISPLAY^} FAILED ($MODE)" "$SUMMARY" || true
     JOB_STATUS="fail"
   fi
+  # A nonzero claude exit with a usable result is a PARTIAL run — never ok.
+  [ "$JOB_STATUS" = "ok" ] && [ "$EXIT" -ne 0 ] && JOB_STATUS="partial"
 
   JOB_DUR=$(( $(date +%s) - JOB_START ))
   # shellcheck disable=SC1091
   source "$QUARTET_DIR/agents/lib/post-run.sh"
   agent_finish "$SVC" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
-    mode="$MODE" exit_code="$EXIT" >> "$LOG_FILE" 2>&1
+    mode="$MODE" exit_code="$EXIT" tokens="$TOKENS" >> "$LOG_FILE" 2>&1
 
   echo "[$SVC] done pass=$PASS exit=$EXIT" >> "$LOG_FILE"
   exit "$EXIT"
@@ -263,7 +295,6 @@ if [ "$MODE" = "ticket" ]; then
   [ -f "$TICKET_FILE" ] || { echo "ticket file not found: $TICKET_FILE" >&2; exit 2; }
 
   WALL_CLOCK="$(jq -r '.build.wall_clock_sec // 3600' <<<"$CFG_JSON")"
-  BUDGET="$(jq -r '.build.budget // 2.00' <<<"$CFG_JSON")"
   LOG_FILE="$RESULT_DIR/$SVC-ticket-last-run.log"
   JOB_START="$(date +%s)"
   echo "[$SVC] $(now_iso) start mode=ticket ticket=$TICKET_FILE" > "$LOG_FILE"
@@ -278,22 +309,24 @@ if [ "$MODE" = "ticket" ]; then
 
   cd "$PROJECT_DIR"
   set +e
-  timeout "$WALL_CLOCK" claude -p \
+  CLAUDE_OUT="$(timeout "$WALL_CLOCK" claude -p \
     --model "$MODEL" \
     --dangerously-skip-permissions \
-    --max-budget-usd "$BUDGET" \
-    --output-format text \
+    --output-format json \
     "$PROMPT" \
-    >> "$LOG_FILE" 2>&1
+    2>>"$LOG_FILE")"
   EXIT=$?
   set -e
   echo "[$SVC] execute-ticket exit=$EXIT" >> "$LOG_FILE"
+  TOKENS="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0))' <<<"$CLAUDE_OUT" 2>/dev/null || echo 0)"
+  [[ "$TOKENS" =~ ^[0-9]+$ ]] || TOKENS=0
+  jq -r '.result // empty' <<<"$CLAUDE_OUT" >> "$LOG_FILE" 2>/dev/null || true
 
   JOB_DUR=$(( $(date +%s) - JOB_START ))
   JOB_STATUS=$([ "$EXIT" = "0" ] && echo "ok" || echo "fail")
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
     mode="ticket" status="$JOB_STATUS" duration_s="$JOB_DUR" exit_code="$EXIT" \
-    project="$PROJECT_NAME" || true
+    tokens="$TOKENS" project="$PROJECT_NAME" || true
   exit "$EXIT"
 fi
 
