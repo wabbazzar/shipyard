@@ -217,7 +217,7 @@
           "disposition": "kept",
           "source": "agents/scribe/role.md + runner.sh",
           "summary": "Daily documentation pass per project.",
-          "detail": "Unchanged behavior; rename-only changes in Phase 9 (unit names, svc strings, role: field on events). Two projects run scribe-only installs today (sietch and the citadel hub itself)."
+          "detail": "Unchanged behavior: a daily documentation pass per project. Two projects run docs-only installs today (a small club app and the hub itself)."
         },
         {
           "name": "install playbook",
