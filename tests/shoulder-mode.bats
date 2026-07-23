@@ -268,6 +268,58 @@ critique_events() {
   [ "$(critique_events | wc -l)" -eq 1 ]
 }
 
+@test "broken note command (exit 127) keeps queue, gives up loudly after 3 attempts" {
+  P="$(make_fixture_project critf4)"
+  make_stub claude 0 "$CANNED_CLAUDE_JSON"
+  make_stub claude-note 127
+  queue_files "$P" s1 2
+  export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
+
+  for i in 1 2; do
+    touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+    run run_watch "$P" --session s1 --once
+    [ "$status" -eq 0 ]
+    [ -s "$P/tmp/critic-queue-s1" ]        # kept for retry
+  done
+
+  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ ! -e "$P/tmp/critic-queue-s1" ]        # 3rd failure: gave up
+  [ -s "$P/tmp/critic-findings-s1" ]       # findings preserved on disk
+  FAILEV="$(events_json | jq -c 'select(.event=="release.critique.delivery_failed")')"
+  [ -n "$FAILEV" ]
+  [ "$(jq -r '.rc' <<<"$FAILEV")" = "127" ]
+}
+
+@test "entries queued during the claude run survive delivery (snapshot race)" {
+  P="$(make_fixture_project crith)"
+  # claude stub simulates a mid-run hook append: while the "model" runs, a
+  # new edit lands in the queue. It must NOT be consumed by this delivery.
+  cat > "$SHIM_BIN/claude" <<EOF
+#!/bin/bash
+echo 'src/late.ts 9999999999' >> "$P/tmp/critic-queue-s1"
+printf '%s' '$CANNED_CLAUDE_JSON'
+EOF
+  chmod +x "$SHIM_BIN/claude"
+  make_stub claude-note 0
+  mkdir -p "$P/src"
+  printf '// stub\n' > "$P/src/early.ts"
+  printf '// stub\n' > "$P/src/late.ts"
+  printf 'src/early.ts %s\n' "$(date +%s)" >> "$P/tmp/critic-queue-s1"
+  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
+
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  # delivery succeeded, but the late entry is still queued for the next pass
+  [ -s "$P/tmp/critic-queue-s1" ]
+  run grep -c '^src/late.ts ' "$P/tmp/critic-queue-s1"
+  [ "$output" = "1" ]
+  run grep -c '^src/early.ts ' "$P/tmp/critic-queue-s1"
+  [ "$output" = "0" ]
+}
+
 # ---------------------------------------------------------------------------
 # (g) stop gate
 # ---------------------------------------------------------------------------
