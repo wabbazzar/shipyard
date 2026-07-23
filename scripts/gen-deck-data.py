@@ -197,6 +197,10 @@ def main():
 
     if "glossary" in ed:
         out["glossary"] = ed["glossary"]
+    # Decisions are authored prose keyed by the ledger's stable ids (D-L3,
+    # D-O1, D-U1 …); the deck linkifies those ids wherever they appear.
+    if "decisions" in ed:
+        out["decisions"] = ed["decisions"]
 
     # NOTE: the committed docs/shipyard-data.json has no trailing newline, so we
     # match it byte-for-byte (a trailing newline would make the deck-coupling

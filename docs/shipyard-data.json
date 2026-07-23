@@ -144,7 +144,7 @@
           "disposition": "new",
           "source": "agents/release/critic-role.md — built Phase 6, piloted on caladan",
           "summary": "Concurrent cold-context critique of the live diff.",
-          "detail": "Every Edit/Write in the authoring session fires a PostToolUse hook that appends the path to a per-session queue and exits 0 — nothing expensive ever runs inside the author's tool loop. A separate watcher polls that queue and spends the model once per debounce window: 5 min idle OR 8 touched files (D-L3). Input is ONLY the diff, the changed-file list, the project's .agents/release.md, and the rubric — explicitly never the dev session transcript, because goal contamination is the thing this design exists to avoid. Findings graded block / warn / note and delivered into the live session via claude-note.sh (exit 2 = ambiguous target, exit 3 = session at a prompt — retry off the critique cache, never re-spend the model, never treat as delivered). Budget: 1M tokens/day, enforced by summing today's critique events' token counts before spawning (D-O1 — a token cap, not dollars); over cap the queue is deferred, not dropped. It never writes code (D-L7); teeth are opt-in, via a stop gate that stays disarmed unless a session asks for it. Verified by planting a real authz bug + an untested behavior change and requiring a block + warn within one debounce window."
+          "detail": "Every Edit/Write in the authoring session fires a PostToolUse hook that appends the path to a per-session queue and exits 0 — nothing expensive ever runs inside the author's tool loop. A separate watcher polls that queue and spends the model once per debounce window: 5 min idle OR 8 touched files (D-L3). Input is ONLY the diff, the changed-file list, the project's .agents/release.md, and the rubric — explicitly never the dev session transcript, because goal contamination is the thing this design exists to avoid. Findings graded block / warn / note and delivered into the live session via claude-note.sh (exit 2 = ambiguous target, exit 3 = session at a prompt — retry off the critique cache, never re-spend the model, never treat as delivered). Budget: 1M tokens/day, enforced by summing today's critique events' token counts before spawning (D-O1 — a token cap, not dollars); over cap the queue is deferred, not dropped. The model is left unset, so critiques follow the CLI default rather than a pinned one (D-O2 — still open). It never writes code (D-L7); teeth are opt-in, via a stop gate that stays disarmed unless a session asks for it. Verified by planting a real authz bug + an untested behavior change and requiring a block + warn within one debounce window."
         },
         {
           "name": "release-readiness rubric",
@@ -275,7 +275,7 @@
       "id": 6,
       "title": "shoulder mode",
       "status": "done",
-      "gist": "Proctor's critic built + piloted on caladan: planted-bug test, debounce test, blocking-gate test, cost guard, wrote-no-code check. Hooks merged additively into existing settings.",
+      "gist": "Proctor's critic built + piloted on caladan: planted-bug test, debounce test, blocking-gate test, cost guard, wrote-no-code check. Hooks merged additively into existing settings. Piloting was an ask-first boundary (D-U1) — the operator later widened it fleet-wide, every repo queueing edits to a watcher daemon.",
       "completed": "2026-07-21"
     },
     {
@@ -799,6 +799,116 @@
       "def": "The critic's first rubric line: did the change actually do what the task claims, or just satisfy the specific eval the author optimized against?",
       "example": "1. **Goodhart check** — does the change do what the task claims,\n   beyond the specific eval/test the author optimized? A fix that\n   special-cases the failing input is a `block`.",
       "source": "agents/release/critic-role.md:62 — Rubric v1, line 1"
+    }
+  },
+  "decisions": {
+    "D-L2": {
+      "status": "locked",
+      "text": "block findings on a live interactive session are delivered as notes only — never a hard stop, never a page.",
+      "closeout": "",
+      "source": "design ledger — locked 2026-07-21"
+    },
+    "D-L3": {
+      "status": "locked",
+      "text": "Debounce = 5 minutes idle OR 8 touched files, whichever comes first.",
+      "closeout": "",
+      "source": "design ledger — locked 2026-07-21"
+    },
+    "D-L4": {
+      "status": "locked",
+      "text": "Shoulder mode runs beside the daily battery, not instead of it. The battery stays the deterministic backstop and the on-call crew's post-merge validator.",
+      "closeout": "",
+      "source": "design ledger — locked 2026-07-21"
+    },
+    "D-L7": {
+      "status": "locked",
+      "text": "The shoulder-mode critic never writes code. It critiques; the dev agent or the human decides what to do with the findings.",
+      "closeout": "",
+      "source": "design ledger — locked 2026-07-21"
+    },
+    "D-L11": {
+      "status": "locked",
+      "text": "Skills-parity: the ticket skills live in this repo and install per project. Agents invoke the same skill files a human session invokes — no agent-only forks of the workflow.",
+      "closeout": "",
+      "source": "design ledger — locked 2026-07-21"
+    },
+    "D-L12": {
+      "status": "locked",
+      "text": "Design telemetry v1 mines signals that already exist — web access logs, the event stream, the feedback file, incidents, session transcripts — plus light usage instrumentation on two pilot apps. Further instrumentation ships as the design crew's own proposals.",
+      "closeout": "",
+      "source": "design ledger — locked 2026-07-21"
+    },
+    "D-L13": {
+      "status": "locked",
+      "text": "Design proposals gate through the operator's live Approve/Deny queue. Nothing builds without a stamp, and decisions land in a per-project ledger; a denied proposal is never re-drafted.",
+      "closeout": "",
+      "source": "design ledger — locked 2026-07-21"
+    },
+    "D-L15": {
+      "status": "locked",
+      "text": "Incident repair enters at the top of the loop. Mitigation stays ungated — restart, revert, contain — but the code fix becomes a proposal instead of a side-door into build. One road into build.",
+      "closeout": "",
+      "source": "design ledger — locked 2026-07-21"
+    },
+    "D-L16": {
+      "status": "locked",
+      "text": "write-ticket is a separate precursor to polish-ticket, not folded into it: creation (what and why) and hardening (how to build it safely) are distinct, independently-testable skills.",
+      "closeout": "",
+      "source": "design ledger — locked 2026-07-22"
+    },
+    "D-O1": {
+      "status": "closed",
+      "text": "Budget caps are token-based, never dollars: 1M tokens/day, enforced by summing today's critique events before spawning.",
+      "closeout": "Shipped. budget_tokens_daily (default 1000000) under [release] and [design]; the cap is computed from the crew's own events, and a test asserts no dollar cap exists in any runner.",
+      "source": "closed out 2026-07-23 against the as-built code"
+    },
+    "D-O6": {
+      "status": "closed",
+      "text": "Legacy config keys keep being read for one release with a deprecation warning; event consumers match the new role field with a service-name fallback. Never break a running fleet mid-rename.",
+      "closeout": "Shipped, and the window has since closed: the legacy compat layer is retired, while consumers still match the old event names so historical stream lines keep rendering.",
+      "source": "closed out 2026-07-23 against the as-built code"
+    },
+    "D-O7": {
+      "status": "closed",
+      "text": "The design crew runs nightly on the same 1M-token cap, and skips drafting when 3 proposals are already undecided.",
+      "closeout": "Shipped. Nightly timers fleet-wide, max_open_proposals default 3, with a skipped event naming the open cap as the reason.",
+      "source": "closed out 2026-07-23 against the as-built code"
+    },
+    "D-O8": {
+      "status": "closed",
+      "text": "Pilot usage instrumentation is the smallest thing that yields per-feature counts: a local beacon endpoint appending JSONL. No third-party analytics, nothing leaves the machine.",
+      "closeout": "Shipped on both pilot apps; a real beacon line was proven to aggregate into per-feature counts end-to-end.",
+      "source": "closed out 2026-07-23 against the as-built code"
+    },
+    "D-O9": {
+      "status": "closed",
+      "text": "Design proposals land in the project's result file, mirroring the build crew's result shape so the dispatch queue's enrichment stays symmetric.",
+      "closeout": "Shipped — same result-file convention, so the queue reads both crews the same way.",
+      "source": "closed out 2026-07-23 against the as-built code"
+    },
+    "D-O11": {
+      "status": "closed",
+      "text": "write-ticket reads the project's conventions and never bakes them: ticket dir, type enum, point scale, commit scopes, test commands and house rules all come from the project's config, with the gate file as fallback.",
+      "closeout": "Shipped; seven projects now carry a write_ticket config block.",
+      "source": "closed out 2026-07-23 against the as-built code"
+    },
+    "D-O12": {
+      "status": "closed",
+      "text": "The bug reproduction lives in the ticket, not in a commit from the front door. execute-ticket writes and commits the failing test at build time, where it becomes the permanent regression test.",
+      "closeout": "Shipped, and demonstrated twice on real defects — each ticket carried its repro, neither front-door run committed a test.",
+      "source": "closed out 2026-07-23 against the as-built code"
+    },
+    "D-O2": {
+      "status": "open",
+      "text": "The critic's model is unset by default, meaning it follows the CLI's default model rather than a pinned one.",
+      "closeout": "Deliberately held OPEN: an unset model means critique cost and judgment quality track whatever the default becomes, with no decision recorded. Pinning it is a live question.",
+      "source": "reviewed 2026-07-23; kept open by the operator"
+    },
+    "D-U1": {
+      "status": "superseded",
+      "text": "Owner's call: should the shoulder-mode hooks be installed into live interactive sessions, and should the blocking stop gate apply to the crews' own headless runs? Default while unanswered: pilot repo only, ask before widening.",
+      "closeout": "Superseded by an owner decision — shoulder mode went fleet-wide, every repo carrying the queue hook and a watcher daemon. The blocking stop gate stayed opt-in as decided, so headless crew runs are unaffected.",
+      "source": "escalated 2026-07-21; widened by owner decision 2026-07-22"
     }
   }
 }
