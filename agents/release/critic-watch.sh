@@ -72,6 +72,13 @@ fi
 PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON")"
 [ -n "$PROJECT_NAME" ] || PROJECT_NAME="$(basename "$PROJECT_DIR")"
 BUDGET_TOKENS="$(jq -r '.release.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
+# When true, annotate any CHANGED FILES entry that has NO diff hunk with a
+# "(no hunks)" marker, so a project-authored file-conditional critic check can
+# key on real +/- hunks instead of mere list membership (the changed-file list
+# is a superset of the files that actually have hunks — a hook-queued but
+# reverted tracked file lands in the list with no delta). Default false ⇒ the
+# CHANGED FILES block is byte-identical to before.
+HUNK_SAFE="$(jq -r '.release.hunk_safe_gates // false' <<<"$CFG_JSON")"
 
 # The shoulder-mode critic IS the release role's out-of-band voice: svc is
 # "<project>-<display>" (role id when no [names]) and the critique event
@@ -193,6 +200,25 @@ $(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
   return 0
 }
 
+# _annotate_no_hunk <changed-list> <diff> — echo the changed list with a
+# "(no hunks)" suffix on any path that has NO diff header in <diff>. A path
+# "has a hunk" iff a `diff --git`/`+++`/`---` header line mentions it (this
+# covers tracked modifications AND the --no-index synth used for untracked
+# queued files, whose header carries the absolute path ending in the relative
+# one). Used only when [release].hunk_safe_gates=true.
+_annotate_no_hunk() {
+  local list="$1" d="$2" f headers
+  headers="$(printf '%s\n' "$d" | grep -E '^(diff --git |\+\+\+ |--- )' || true)"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if printf '%s\n' "$headers" | grep -qF -- "$f"; then
+      printf '%s\n' "$f"
+    else
+      printf '%s (no hunks)\n' "$f"
+    fi
+  done <<<"$list"
+}
+
 # ---------- one critique over a queue file ----------------------------------
 critique_queue() {
   local queue="$1" session="$2"
@@ -301,6 +327,12 @@ $(git -C "$PROJECT_DIR" diff --no-index -- /dev/null "$abs" 2>/dev/null || true)
   local project_ext="" ext_file="$PROJECT_DIR/.agents/release.md"
   [ -f "$ext_file" ] && project_ext="$(cat "$ext_file")"
 
+  # CHANGED FILES block: byte-identical to $changed unless hunk_safe_gates is on,
+  # in which case no-hunk entries are marked so a file-conditional check can key
+  # on real hunks (see critic-role.md "Input contract").
+  local changed_block="$changed"
+  [ "$HUNK_SAFE" = "true" ] && changed_block="$(_annotate_no_hunk "$changed" "$diff")"
+
   local prompt
   prompt="$(cat "$ROLE_FILE")
 
@@ -314,7 +346,7 @@ $project_ext
 
 CHANGED FILES:
 
-$changed
+$changed_block
 
 ---
 
