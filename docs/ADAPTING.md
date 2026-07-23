@@ -99,3 +99,10 @@ block (never a changed-file-membership one — see the critic input contract).
 | a project gate or budget | `.agents/config.toml` / `.agents/gates.md` |
 | portable doctrine | a core PR (leak-checked, fleet-live on merge) |
 | a question every future install should ask | the installer interview |
+
+`/shipyard learn "<lesson>"` applies this rule mechanically: `--to project`
+appends a note to `.agents/<role>.md`, `--to generic` drafts a `docs/tickets/`
+core-change stub (reviewed before it touches a core role file), and `--to
+install` drafts an installer-question proposal — with a keyword heuristic when
+`--to` is omitted, and an honest "ambiguous, re-run with --to" (exit 2) rather
+than a mis-route.
