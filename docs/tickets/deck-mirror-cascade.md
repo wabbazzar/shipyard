@@ -281,9 +281,25 @@ exits 0.
 _(builder appends per phase: plan, commit hash, gate output — bats tally,
 `git diff`, exit codes — and honest notes on anything deferred.)_
 
-- P1 —
-- P2 —
-- P3 —
+- **P1 — `1b11750`** `scripts/sync-deck-mirror.sh`. Verified against a fixture
+  mirror (bare origin): cascade byte-matches the sha for data/styles, index diff
+  == exactly the 2 hunks, clean scoped commit (empty body — no attribution),
+  pushed; idempotent (exit 3); unset no-op (exit 3); D-8 from-sha (dirty worktree
+  ignored); determinism guard, not-on-main, dirty-deck all exit 2; leak-check
+  clean, no `/home/`. Chose exit **3** (not 0) for the unset no-op so the hook can
+  tell "nothing configured" from "cascaded"; hook treats both as success.
+- **P2 — `9f29242`** `.githooks/pre-push` + `tests/deck-mirror.bats` (10 cases).
+  Hook gained a `QUARTET_DIR` override for testability (harmless in prod:
+  unset ⇒ `git rev-parse --show-toplevel`). Failing-first proven: a naive hook
+  that ignores the ref FAILS the main-only case; real hook passes. Full suite
+  **138 → 148**, leak-check clean.
+- **P3 — this commit** README "Deck publishing" section (`[deck] mirror_dir` /
+  `$DECK_MIRROR_DIR`, the hook, manual run + exit codes). Final e2e gate green.
+  **Deferred (machine-local):** the `.agents/gates.md` Traps line — that file is
+  gitignored/per-box (absent in the worktree), so it's a local doc edit, not a
+  branch change; apply on the box if wanted. **Not done (by design):** no
+  `mirror_dir` was set and nothing was pushed to the real `wabbazzar.github.io` —
+  the branch is inert until stamped + configured.
 
 ## Run it
 
