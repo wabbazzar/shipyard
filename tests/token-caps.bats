@@ -216,15 +216,34 @@ printf '%s' '$(usage_envelope)'"
 # 6. Runaway guard
 # ---------------------------------------------------------------------------
 
-@test "timeout: no bare 'claude -p' invocation remains in any runner" {
-  for r in medic build release scribe; do
+@test "timeout: no bare 'claude -p' in any runner; the dispatcher guards it" {
+  # The literal model invocation now lives ONLY in agents/lib/spawn.sh; no
+  # runner spawns claude directly (comments don't count — anchor to stmt start).
+  for r in medic build release scribe design; do
     run grep -nE '^[[:space:]]*claude -p' "$QUARTET_ROOT/agents/$r/runner.sh"
     echo "$r: $output"
     [ "$status" -ne 0 ]
-    run grep -cE 'timeout[[:space:]]+("?\$?[A-Z_{}0-9"]+)?[[:space:]]*claude -p' \
-      "$QUARTET_ROOT/agents/$r/runner.sh"
+  done
+  run grep -nE '^[[:space:]]*claude -p' "$QUARTET_ROOT/agents/release/critic-watch.sh"
+  echo "critic-watch: $output"
+  [ "$status" -ne 0 ]
+
+  # The dispatcher wraps the invocation in `timeout "$timeout_val"` when the
+  # caller requests a timeout (the runaway guard, preserved).
+  run grep -cF 'timeout "$timeout_val" "${cmd[@]}"' "$QUARTET_ROOT/agents/lib/spawn.sh"
+  echo "spawn.sh timeout guard count: $output"
+  [ "${output:-0}" -ge 1 ]
+
+  # Every timeout-bearing role passes a non-empty --timeout to spawn_model
+  # (design and the shoulder critic historically pass none — preserved).
+  for r in medic release scribe; do
+    run grep -cE -- '--timeout[[:space:]]+[^[:space:]]' "$QUARTET_ROOT/agents/$r/runner.sh"
+    echo "$r --timeout passers: $output"
     [ "${output:-0}" -ge 1 ]
   done
+  run grep -cE -- '--timeout[[:space:]]+[^[:space:]]' "$QUARTET_ROOT/agents/build/runner.sh"
+  echo "build --timeout passers: $output"
+  [ "${output:-0}" -ge 2 ]   # build has two spawn sites (live + ticket)
 }
 
 # ---------------------------------------------------------------------------

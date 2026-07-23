@@ -50,6 +50,8 @@ CONFIG_FILE="$PROJECT_DIR/.agents/config.toml"
 
 source "$QUARTET_DIR/agents/lib/load-config.sh"
 # shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/spawn.sh"
+# shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
 CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
@@ -206,22 +208,17 @@ RUN CONTEXT (write your result to $RESULT_FILE — JSON only, no prose):
 $RUN_CONTEXT"
 
   MODEL="${BUILD_MODEL:-sonnet}"
+  HARNESS="${BUILD_HARNESS:-claude}"
+  PROVIDER="${BUILD_PROVIDER:-}"
   : > "$RESULT_FILE"
 
   # The json envelope gives real token usage for the daily gate; timeout
   # stays as the per-invocation runaway guard.
-  set +e
-  CLAUDE_OUT="$(timeout "$WALL_CLOCK" claude -p \
-    --model "$MODEL" \
-    --dangerously-skip-permissions \
-    --output-format json \
-    "$PROMPT" \
-    2>>"$LOG_FILE")"
-  EXIT=$?
-  set -e
+  spawn_model --harness "$HARNESS" --model "$MODEL" --provider "$PROVIDER" \
+    --prompt "$PROMPT" --log "$LOG_FILE" --timeout "$WALL_CLOCK" \
+    --skip-perms --json
+  CLAUDE_OUT="$SPAWN_RAW"; EXIT="$SPAWN_RC"; TOKENS="$SPAWN_TOKENS"
   echo "[$SVC] claude exit=$EXIT" >> "$LOG_FILE"
-  TOKENS="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0))' <<<"$CLAUDE_OUT" 2>/dev/null || echo 0)"
-  [[ "$TOKENS" =~ ^[0-9]+$ ]] || TOKENS=0
   # Keep the operator debug trail the text mode used to provide.
   jq -r '.result // empty' <<<"$CLAUDE_OUT" >> "$LOG_FILE" 2>/dev/null || true
 
@@ -305,21 +302,16 @@ if [ "$MODE" = "ticket" ]; then
   # <project>/.claude/skills at install, so a cwd-at-project `claude -p`
   # auto-discovers it. Same wall-clock/budget contract as live mode.
   MODEL="${BUILD_MODEL:-sonnet}"
+  HARNESS="${BUILD_HARNESS:-claude}"
+  PROVIDER="${BUILD_PROVIDER:-}"
   PROMPT="Use the execute-ticket skill to build the ticket at $TICKET_FILE to completion. It is a ratified ticket; build it phase-by-phase and verify each phase on the real system per the project's gate file (.agents/gates.md)."
 
   cd "$PROJECT_DIR"
-  set +e
-  CLAUDE_OUT="$(timeout "$WALL_CLOCK" claude -p \
-    --model "$MODEL" \
-    --dangerously-skip-permissions \
-    --output-format json \
-    "$PROMPT" \
-    2>>"$LOG_FILE")"
-  EXIT=$?
-  set -e
+  spawn_model --harness "$HARNESS" --model "$MODEL" --provider "$PROVIDER" \
+    --prompt "$PROMPT" --log "$LOG_FILE" --timeout "$WALL_CLOCK" \
+    --skip-perms --json
+  CLAUDE_OUT="$SPAWN_RAW"; EXIT="$SPAWN_RC"; TOKENS="$SPAWN_TOKENS"
   echo "[$SVC] execute-ticket exit=$EXIT" >> "$LOG_FILE"
-  TOKENS="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0))' <<<"$CLAUDE_OUT" 2>/dev/null || echo 0)"
-  [[ "$TOKENS" =~ ^[0-9]+$ ]] || TOKENS=0
   jq -r '.result // empty' <<<"$CLAUDE_OUT" >> "$LOG_FILE" 2>/dev/null || true
 
   JOB_DUR=$(( $(date +%s) - JOB_START ))

@@ -63,6 +63,8 @@ done
 # ---------- config (optional — critic works on bare repos too) --------------
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/load-config.sh"
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/spawn.sh"
 CFG_JSON="{}"
 if [ -f "$PROJECT_DIR/.agents/config.toml" ]; then
   CFG_JSON="$(load_config_json "$PROJECT_DIR/.agents/config.toml")" || CFG_JSON="{}"
@@ -321,11 +323,13 @@ DIFF:
 $diff"
 
   # ---- spawn the critic -----------------------------------------------------
-  local model_args=()
-  [ -n "${CRITIC_MODEL:-}" ] && model_args=(--model "$CRITIC_MODEL")
+  # Unset CRITIC_MODEL => no --model (harness default); unset CRITIC_HARNESS =>
+  # claude. spawn_model omits --model when empty, matching the historical
+  # conditional model_args exactly.
   local claude_out claude_rc
-  claude_out="$(claude -p --output-format json "${model_args[@]}" "$prompt" 2>/dev/null)"
-  claude_rc=$?
+  spawn_model --harness "${CRITIC_HARNESS:-claude}" --model "${CRITIC_MODEL:-}" \
+    --provider "${CRITIC_PROVIDER:-}" --prompt "$prompt" --log /dev/null --json
+  claude_out="$SPAWN_RAW"; claude_rc="$SPAWN_RC"
   local spawn_attempts_file="$QUEUE_DIR/critic-spawn-attempts-$session"
   if [ "$claude_rc" -ne 0 ] || [ -z "$claude_out" ]; then
     # Same 3-strike rule as delivery: a persistent spawn failure (bad
@@ -353,10 +357,8 @@ $diff"
   # `claude -p --output-format json` emits one JSON object with the reply
   # in .result and token usage in .usage.{input_tokens,output_tokens}.
   local result_text tokens
-  result_text="$(jq -r '.result // ""' <<<"$claude_out" 2>/dev/null || true)"
-  tokens="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0))' \
-    <<<"$claude_out" 2>/dev/null || echo 0)"
-  [[ "$tokens" =~ ^[0-9]+$ ]] || tokens=0
+  result_text="$SPAWN_TEXT"
+  tokens="$SPAWN_TOKENS"
 
   local findings n_block n_warn n_note
   findings="$(grep -E '^(block|warn|note)\|' <<<"$result_text" || true)"
