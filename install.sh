@@ -302,9 +302,74 @@ run_doctor() {
   return 1
 }
 
+# run_uninstall — remove exactly the installer-owned surface for this project:
+# its crew units/timers (any role, enabled or not) and the shared-skill
+# symlinks that resolve into $QUARTET_DIR/skills. Everything else (.agents/
+# incl. config + prompts + gates.md, data/, tmp/) is deliberately left.
+# Honors --dry-run (prints the identical plan, writes nothing). Invariant:
+# `--uninstall` then a normal install reproduces a fresh install's unit set.
+run_uninstall() {
+  echo "==> uninstall crew for $PROJECT_NAME ($PROJECT_DIR)"
+  [ "$DRY_RUN" = "1" ] && echo "  (dry-run — no changes will be made)"
+
+  # 1. crew units/timers (dedup across roles).
+  local seen=" " u role touched=0
+  for role in $QUARTET_ROLES; do
+    while IFS= read -r u; do
+      [ -z "$u" ] && continue
+      case "$seen" in *" $u "*) continue ;; esac
+      seen+="$u "
+      touched=1
+      if [ "$DRY_RUN" = "1" ]; then
+        echo "  would disable + remove: $u.{service,timer}"
+      else
+        systemctl --user disable --now "$u.timer" >/dev/null 2>&1 || true
+        rm -f "$SYSTEMD_DIR/$u.service" "$SYSTEMD_DIR/$u.timer"
+        echo "  removed: $u.{service,timer}"
+      fi
+    done <<<"$(crew_units_for_role "$role")"
+  done
+  [ "$touched" = "0" ] && echo "  (no crew units found for $PROJECT_NAME)"
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "  would: systemctl --user daemon-reload"
+  else
+    systemctl --user daemon-reload
+  fi
+
+  # 2. shared-skill symlinks — only ones that resolve into $QUARTET_DIR/skills.
+  local qskills; qskills="$(cd "$QUARTET_DIR/skills" 2>/dev/null && pwd -P || true)"
+  local skill link tgt
+  for skill in $GENERIC_SKILLS; do
+    link="$PROJECT_DIR/.claude/skills/$skill"
+    if [ ! -L "$link" ]; then
+      [ -e "$link" ] && echo "  kept (real file/dir, not a symlink): $link"
+      continue
+    fi
+    tgt="$(readlink -f "$link" 2>/dev/null || true)"
+    case "$tgt" in
+      "$qskills"/*)
+        if [ "$DRY_RUN" = "1" ]; then echo "  would remove symlink: $link"
+        else rm -f "$link"; echo "  removed symlink: $link"; fi ;;
+      *) echo "  kept (resolves outside \$QUARTET_DIR/skills): $link -> ${tgt:-broken}" ;;
+    esac
+  done
+
+  # 3. the deliberate leave-behind — NOT installer-owned.
+  echo "  left in place (not installer-owned):"
+  echo "    $PROJECT_DIR/.agents/   (config.toml, prompts, gates.md)"
+  echo "    $PROJECT_DIR/data/      (events, decisions, results)"
+  echo "    $PROJECT_DIR/tmp/"
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "uninstall: DRY RUN — nothing changed"
+  else
+    echo "uninstall: $PROJECT_NAME crew removed (reinstall with: install.sh --project $PROJECT_DIR)"
+  fi
+  return 0
+}
+
 case "$MODE" in
   doctor)    run_doctor; exit $? ;;
-  uninstall) echo "uninstall: implemented in the next build step" >&2; exit 2 ;;
+  uninstall) run_uninstall; exit $? ;;
 esac
 
 # ---------- theme → [names] block -------------------------------------------
