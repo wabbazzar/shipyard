@@ -1,0 +1,31 @@
+# Fixture: a fully current (post-042) config with NO retired keys — the
+# baseline a clean `install.sh --doctor` must exit 0 against. Token-based
+# budgets, canonical section names, explicit [install.timers] so the doctor's
+# expected-role set is unambiguous.
+
+project_name  = "__PROJECT_NAME__"
+project_owner = "fixture-owner"
+branch        = "main"
+
+[paths]
+result_dir   = "tmp"
+worktree_dir = ".worktrees"
+
+[release]
+test_cmd            = "true"
+typecheck           = "true"
+budget_tokens_daily = 1000000
+wall_clock_sec      = 900
+
+[build]
+budget_tokens_daily = 1000000
+wall_clock_sec      = 60
+
+[medic]
+daily_escalation_cap = 5
+
+[install.timers]
+build   = "*-*-* 03:30:00"
+release = "*-*-* 06:00:00"
+medic   = "*-*-* *:0/10:00"
+scribe  = "*-*-* 01:00:00"

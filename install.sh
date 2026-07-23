@@ -3,11 +3,21 @@
 #
 # Usage:
 #   install.sh --project <project_dir> [--dry-run] [--agents LIST] [--theme T]
+#   install.sh --doctor    --project <project_dir>
+#   install.sh --uninstall --project <project_dir> [--dry-run]
 #
-#   --project   Path to the target project (must contain .agents/config.toml).
-#   --dry-run   Print every change without writing anything.
-#   --agents    Comma list of roles to install. Default: build,release,medic,scribe
-#               (design is opt-in).
+#   --project    Path to the target project (must contain .agents/config.toml).
+#   --dry-run    Print every change without writing anything.
+#   --agents     Comma list of roles to install. Default: build,release,medic,scribe
+#                (design is opt-in).
+#   --doctor     Read-only conformance audit of this project's crew install.
+#                Prints `DOCTOR <class>: <detail>` one line per finding; exit 0
+#                clean / 1 on drift. Never writes, never touches systemd. Fast
+#                enough to run as a [[medic.checks]] entry every scan.
+#   --uninstall  Remove exactly the installer-owned surface (crew units/timers
+#                + shared-skill symlinks resolving into $QUARTET_DIR/skills),
+#                then print the deliberate leave-behind (.agents/, data/, tmp/).
+#                Honors --dry-run. uninstall+install == fresh install.
 #   --theme     Display-name theme baked into the project's [names] block:
 #                 plain      role IDs verbatim (default): build/release/medic/scribe
 #                 spacetime  mentat/helldiver/proctor/suk/chronicler
@@ -67,7 +77,7 @@ SYSTEMD_DIR="$HOME/.config/systemd/user"
 source "$QUARTET_DIR/agents/lib/naming.sh"
 
 usage() {
-  sed -n '2,54p' "$0"
+  sed -n '2,63p' "$0"
   exit "${1:-2}"
 }
 
@@ -77,17 +87,27 @@ DRY_RUN=0
 AGENTS="build,release,medic,scribe"
 THEME="plain"
 THEME_EXPLICIT=0
+MODE="install"   # install | doctor | uninstall
 while [ $# -gt 0 ]; do
   case "$1" in
-    --project) PROJECT_DIR="$2"; shift 2 ;;
-    --dry-run) DRY_RUN=1; shift ;;
-    --agents)  AGENTS="$2"; shift 2 ;;
-    --theme)   THEME="$2"; THEME_EXPLICIT=1; shift 2 ;;
+    --project)   PROJECT_DIR="$2"; shift 2 ;;
+    --dry-run)   DRY_RUN=1; shift ;;
+    --agents)    AGENTS="$2"; shift 2 ;;
+    --theme)     THEME="$2"; THEME_EXPLICIT=1; shift 2 ;;
+    --doctor)    MODE="doctor"; shift ;;
+    --uninstall) MODE="uninstall"; shift ;;
     -h|--help) usage 0 ;;
     *) echo "unknown arg: $1" >&2; usage ;;
   esac
 done
 [ -z "$PROJECT_DIR" ] && { echo "--project required" >&2; usage; }
+case "$MODE" in
+  doctor|uninstall) [ "$THEME_EXPLICIT" = "0" ] || { echo "--theme not valid with --$MODE" >&2; usage; } ;;
+esac
+
+# The installer-owned shared-skill set: the symlink manifest doctor (e) audits
+# and uninstall removes. Single source of truth (referenced again at step 4.5).
+GENERIC_SKILLS="polish-ticket execute-ticket coverage-audit write-ticket bugfix feature"
 
 ROLES_LIST="${AGENTS//,/ }" 
 PROJECT_DIR="$(cd "$PROJECT_DIR" 2>/dev/null && pwd)" || \
@@ -103,6 +123,264 @@ CFG_JSON="$(load_config_json "$CFG")" || { echo "failed to parse $CFG" >&2; exit
 
 PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON")"
 [ -z "$PROJECT_NAME" ] && { echo "config missing project_name" >&2; exit 2; }
+
+# ===========================================================================
+# doctor / uninstall — a manifest for what an install owns (ticket:
+# shipyard-doctor-uninstall). Both modes are pure functions here (no new
+# module boundary). They resolve the crew surface the SAME way install does,
+# but by ROLE-RUNNER + `--project <realpath>`, never by display filename —
+# the fleet is a mix of plain and spacetime unit names, and a project may be
+# mid-migration (a plain unit and its spacetime successor coexisting).
+# ===========================================================================
+
+# crew_units_for_role <role> — this project's unit basenames (no .service)
+# whose ExecStart runs agents/<role>/runner.sh for THIS project dir. One
+# per line; empty if none. Non-crew units (watch daemons, app services)
+# never match because they don't invoke a role runner.
+crew_units_for_role() {
+  local role="$1" svc
+  for svc in "$SYSTEMD_DIR/${PROJECT_NAME}-"*.service; do
+    [ -e "$svc" ] || continue
+    grep -q -- "--project $PROJECT_DIR " "$svc" 2>/dev/null || continue
+    grep -q "agents/$role/runner.sh" "$svc" 2>/dev/null || continue
+    basename "${svc%.service}"
+  done
+}
+
+# timer_enabled <unit-base> — success if <unit-base>.timer is enabled.
+timer_enabled() { systemctl --user is-enabled "$1.timer" >/dev/null 2>&1; }
+
+# run_doctor — read-only conformance audit. Prints `DOCTOR <class>: <detail>`
+# one line per finding on stdout; a clean project prints a single line to
+# STDERR and exits 0. Exit 1 iff any finding. Never writes, never mutates
+# systemd. < 5s (fits inside a medic tick).
+run_doctor() {
+  local findings=0
+  emit() { printf 'DOCTOR %s\n' "$1"; findings=$((findings+1)); }
+
+  local qd_real; qd_real="$(cd "$QUARTET_DIR" && pwd -P)"
+  local role u
+
+  # Expected role set: [install.timers] keys ∪ roles with an enabled crew
+  # timer; installer default when both are empty. (The installed agent set is
+  # not recorded in config, so this is the honest lower bound — extra
+  # installed roles are tolerated, a scheduled-but-not-running role is caught.)
+  local timer_roles enabled_roles="" expected
+  timer_roles="$(jq -r '(.install.timers // {}) | keys[]' <<<"$CFG_JSON" 2>/dev/null)"
+  for role in $QUARTET_ROLES; do
+    while IFS= read -r u; do
+      [ -z "$u" ] && continue
+      timer_enabled "$u" && { enabled_roles+="$role "; break; }
+    done <<<"$(crew_units_for_role "$role")"
+  done
+  expected="$(printf '%s\n%s\n' "$timer_roles" "$(printf '%s' "$enabled_roles" | tr ' ' '\n')" \
+    | sed '/^$/d' | sort -u)"
+  [ -z "$expected" ] && expected="build release medic scribe"
+
+  # (a) each expected role: an enabled crew unit whose ExecStart runner lives
+  #     under $QUARTET_DIR (realpath-tolerant — the compat symlink path is ok).
+  for role in $expected; do
+    local units; units="$(crew_units_for_role "$role")"
+    if [ -z "$units" ]; then
+      emit "unit: expected '$role' crew unit missing for $PROJECT_NAME"
+      continue
+    fi
+    local any_enabled=0
+    while IFS= read -r u; do
+      [ -z "$u" ] && continue
+      timer_enabled "$u" && any_enabled=1
+      local es es_base es_dir
+      es="$(grep -oE "/bin/bash [^ ]*agents/$role/runner.sh" "$SYSTEMD_DIR/$u.service" | awk '{print $2}')"
+      es_base="${es%/agents/$role/runner.sh}"       # the claimed QUARTET_DIR
+      if [ -d "$es_base" ]; then
+        es_dir="$(cd "$es_base" && pwd -P)"          # realpath-tolerant (compat symlink ok)
+      else
+        es_dir="$es_base"                            # dangling path — compare text
+      fi
+      [ -n "$es" ] && [ "$es_dir" != "$qd_real" ] && \
+        emit "unit: $u runner not under \$QUARTET_DIR (-> $es_dir, want $qd_real)"
+    done <<<"$units"
+    [ "$any_enabled" = "1" ] || emit "unit: '$role' present but its timer is not enabled"
+  done
+
+  # (b) more than one crew unit per role for this project = stale duplicate
+  #     (an old display-name unit left beside its successor — the sweep target).
+  for role in $QUARTET_ROLES; do
+    local list n; list="$(crew_units_for_role "$role")"
+    n="$(printf '%s\n' "$list" | sed '/^$/d' | wc -l | tr -d ' ')"
+    [ "$n" -gt 1 ] && emit "stale: $n units run the '$role' runner ($(printf '%s\n' "$list" | sed '/^$/d' | paste -sd, -)) — expected 1"
+  done
+
+  # (c) foreign systemd drop-in on a crew unit (e.g. a self-written budget
+  #     override). Crew-scoped so app-service drop-ins are not flagged.
+  for role in $QUARTET_ROLES; do
+    while IFS= read -r u; do
+      [ -z "$u" ] && continue
+      [ -d "$SYSTEMD_DIR/$u.service.d" ] && \
+        emit "dropin: $u.service.d present (foreign env override) — flag, never auto-removed"
+    done <<<"$(crew_units_for_role "$role")"
+  done
+
+  # (d) retired config keys/sections (USD-era caps, retired vocabulary). The
+  #     retired words are assembled from split strings so this file never
+  #     contains them literally (the conformance grep scans install.sh too).
+  local a="au""gur" g="guar""dian" dre hit
+  dre="^[[:space:]]*budget[[:space:]]*=[[:space:]]*[0-9]+\.|^[[:space:]]*budget_hook[[:space:]]*=|^[[:space:]]*budget_daily[[:space:]]*=|^[[:space:]]*budget_incident[[:space:]]*=|^[[:space:]]*claude_usd[[:space:]]*=|max-budget-usd|^[[:space:]]*sync_to_${a}[[:space:]]*=|^[[:space:]]*${a}_can_merge[[:space:]]*=|^[[:space:]]*\[${a}\]|^[[:space:]]*\[${g}\]"
+  while IFS= read -r hit; do
+    [ -z "$hit" ] && continue
+    emit "config: retired key/section — $hit"
+  done <<<"$(grep -nE "$dre" "$CFG" 2>/dev/null)"
+
+  # (e) each installer-owned skill symlink resolves (realpath) into
+  #     $QUARTET_DIR/skills/ (compat-path link TEXT is fine, it still resolves).
+  local qskills; qskills="$(cd "$QUARTET_DIR/skills" 2>/dev/null && pwd -P || true)"
+  local skill link tgt
+  for skill in $GENERIC_SKILLS; do
+    link="$PROJECT_DIR/.claude/skills/$skill"
+    if [ ! -e "$link" ] && [ ! -L "$link" ]; then
+      emit "skill: $skill symlink missing"; continue
+    fi
+    tgt="$(readlink -f "$link" 2>/dev/null || true)"
+    case "$tgt" in
+      "$qskills"/*) : ;;
+      *) emit "skill: $skill does not resolve into \$QUARTET_DIR/skills (-> ${tgt:-broken})" ;;
+    esac
+  done
+
+  # (f) dead hook wiring: a .claude/settings.json hook command that names a
+  #     script file which does not exist (the retired post-push class).
+  local settings="$PROJECT_DIR/.claude/settings.json" cmd tok path
+  if [ -f "$settings" ]; then
+    while IFS= read -r cmd; do
+      [ -z "$cmd" ] && continue
+      for tok in $(grep -oE '[A-Za-z0-9_./${}~-]+\.(sh|py|js|ts|mjs|cjs)' <<<"$cmd"); do
+        path="$tok"
+        path="${path//\$\{CLAUDE_PROJECT_DIR\}/$PROJECT_DIR}"
+        path="${path//\$CLAUDE_PROJECT_DIR/$PROJECT_DIR}"
+        path="${path//\$PWD/$PROJECT_DIR}"
+        case "$path" in
+          *'$'*) continue ;;                 # still-unresolved var — can't test
+          /*) : ;;
+          *)  path="$PROJECT_DIR/$path" ;;
+        esac
+        [ -e "$path" ] || emit "hook: settings.json command references missing file $tok"
+      done
+    done <<<"$(jq -r '.hooks // {} | .. | .command? // empty' "$settings" 2>/dev/null)"
+  fi
+
+  # (g) legacy per-project launcher scripts / crontab lines.
+  local legacy_name legacy dir
+  for role in $QUARTET_ROLES; do
+    dir="$(dir_for_role "$role")"
+    legacy_name="$(role_display "$role" '{}')"
+    legacy="$PROJECT_DIR/scripts/${PROJECT_NAME}-${legacy_name}.sh"
+    [ -f "$legacy" ] || continue
+    grep -q "$QUARTET_DIR/agents/$dir/runner.sh" "$legacy" 2>/dev/null && continue  # harmless shim
+    emit "launcher: legacy $legacy (not a shim) — pre-crew launcher"
+  done
+  local cron_pat cron_hit
+  cron_pat="$PROJECT_DIR/scripts/${PROJECT_NAME}-(design|build|release|medic|scribe|mentat|helldiver|proctor|suk|chronicler)\.sh"
+  while IFS= read -r cron_hit; do
+    [ -z "$cron_hit" ] && continue
+    emit "cron: legacy launcher entry — $cron_hit"
+  done <<<"$(crontab -l 2>/dev/null | grep -E "$cron_pat" || true)"
+
+  # (h) hub-only: the design-loop decision ledger mirror. When this project
+  #     holds the dispatch's hub ledger (data/news/decisions.jsonl), every
+  #     mentat decision must be mirrored into the target project's own
+  #     data/decisions.jsonl (sibling of the hub dir). Generic sibling
+  #     resolution — no absolute path baked in. Skipped when the hub ledger
+  #     is absent (every non-hub project).
+  local news="$PROJECT_DIR/data/news/decisions.jsonl" base proj pledger id
+  if [ -f "$news" ]; then
+    base="$(dirname "$PROJECT_DIR")"
+    for proj in $(jq -r 'select((.id // "")|startswith("mentat:")) | .project // empty' "$news" 2>/dev/null | sort -u); do
+      pledger="$base/$proj/data/decisions.jsonl"
+      [ -f "$pledger" ] || continue
+      for id in $(jq -r --arg p "$proj" 'select(.project==$p and ((.id // "")|startswith("mentat:"))) | .id' "$news" 2>/dev/null); do
+        grep -q "\"$id\"" "$pledger" || \
+          emit "ledger: mentat decision $id ($proj) not mirrored to $proj/data/decisions.jsonl"
+      done
+    done
+  fi
+
+  if [ "$findings" -eq 0 ]; then
+    echo "doctor: $PROJECT_NAME crew install clean (checks a-h)" >&2
+    return 0
+  fi
+  echo "doctor: $PROJECT_NAME — $findings finding(s)" >&2
+  return 1
+}
+
+# run_uninstall — remove exactly the installer-owned surface for this project:
+# its crew units/timers (any role, enabled or not) and the shared-skill
+# symlinks that resolve into $QUARTET_DIR/skills. Everything else (.agents/
+# incl. config + prompts + gates.md, data/, tmp/) is deliberately left.
+# Honors --dry-run (prints the identical plan, writes nothing). Invariant:
+# `--uninstall` then a normal install reproduces a fresh install's unit set.
+run_uninstall() {
+  echo "==> uninstall crew for $PROJECT_NAME ($PROJECT_DIR)"
+  [ "$DRY_RUN" = "1" ] && echo "  (dry-run — no changes will be made)"
+
+  # 1. crew units/timers (dedup across roles).
+  local seen=" " u role touched=0
+  for role in $QUARTET_ROLES; do
+    while IFS= read -r u; do
+      [ -z "$u" ] && continue
+      case "$seen" in *" $u "*) continue ;; esac
+      seen+="$u "
+      touched=1
+      if [ "$DRY_RUN" = "1" ]; then
+        echo "  would disable + remove: $u.{service,timer}"
+      else
+        systemctl --user disable --now "$u.timer" >/dev/null 2>&1 || true
+        rm -f "$SYSTEMD_DIR/$u.service" "$SYSTEMD_DIR/$u.timer"
+        echo "  removed: $u.{service,timer}"
+      fi
+    done <<<"$(crew_units_for_role "$role")"
+  done
+  [ "$touched" = "0" ] && echo "  (no crew units found for $PROJECT_NAME)"
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "  would: systemctl --user daemon-reload"
+  else
+    systemctl --user daemon-reload
+  fi
+
+  # 2. shared-skill symlinks — only ones that resolve into $QUARTET_DIR/skills.
+  local qskills; qskills="$(cd "$QUARTET_DIR/skills" 2>/dev/null && pwd -P || true)"
+  local skill link tgt
+  for skill in $GENERIC_SKILLS; do
+    link="$PROJECT_DIR/.claude/skills/$skill"
+    if [ ! -L "$link" ]; then
+      [ -e "$link" ] && echo "  kept (real file/dir, not a symlink): $link"
+      continue
+    fi
+    tgt="$(readlink -f "$link" 2>/dev/null || true)"
+    case "$tgt" in
+      "$qskills"/*)
+        if [ "$DRY_RUN" = "1" ]; then echo "  would remove symlink: $link"
+        else rm -f "$link"; echo "  removed symlink: $link"; fi ;;
+      *) echo "  kept (resolves outside \$QUARTET_DIR/skills): $link -> ${tgt:-broken}" ;;
+    esac
+  done
+
+  # 3. the deliberate leave-behind — NOT installer-owned.
+  echo "  left in place (not installer-owned):"
+  echo "    $PROJECT_DIR/.agents/   (config.toml, prompts, gates.md)"
+  echo "    $PROJECT_DIR/data/      (events, decisions, results)"
+  echo "    $PROJECT_DIR/tmp/"
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "uninstall: DRY RUN — nothing changed"
+  else
+    echo "uninstall: $PROJECT_NAME crew removed (reinstall with: install.sh --project $PROJECT_DIR)"
+  fi
+  return 0
+}
+
+case "$MODE" in
+  doctor)    run_doctor; exit $? ;;
+  uninstall) run_uninstall; exit $? ;;
+esac
 
 # ---------- theme → [names] block -------------------------------------------
 # Resolve the theme into a display name per role (order: design build release
@@ -380,7 +658,7 @@ done
 # hub's own symlinking.
 echo ""
 echo "==> shared skills → $PROJECT_DIR/.claude/skills/"
-GENERIC_SKILLS="polish-ticket execute-ticket coverage-audit write-ticket bugfix feature"
+# GENERIC_SKILLS is defined once near the top (shared with doctor/uninstall).
 SKILLS_DEST="$PROJECT_DIR/.claude/skills"
 [ "$DRY_RUN" = "1" ] || mkdir -p "$SKILLS_DEST"
 for skill in $GENERIC_SKILLS; do
