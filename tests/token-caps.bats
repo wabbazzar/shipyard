@@ -270,3 +270,42 @@ TOML
   [ "$status" -eq 0 ]
   stub_argv curl | grep -q -- '--resolve example.test:443:127.0.0.1'
 }
+
+# ---------------------------------------------------------------------------
+# 9. [[medic.checks]] subprocesses see an EXPORTED QUARTET_DIR (2026-07-23).
+#    Checks run in a fresh `bash -c`, so an unexported QUARTET_DIR reaches them
+#    empty — breaking `cmd = bash "$QUARTET_DIR/install.sh" --doctor ...`.
+#    This case fails on the real defect (drop the export → qd-seen.txt empty).
+# ---------------------------------------------------------------------------
+
+@test "checks: a [[medic.checks]] cmd sees the exported QUARTET_DIR" {
+  p="$(make_fixture_project tokcheck absent-keys.toml)"
+  fix_trunk "$p"
+  cat >>"$p/.agents/config.toml" <<'TOML'
+
+[[medic.checks]]
+name        = "qd-visible"
+cmd         = "printf '%s' \"$QUARTET_DIR\" > qd-seen.txt"
+timeout_sec = 10
+TOML
+  make_stub_script claude 'exit 0'
+  make_stub_script systemctl 'exit 0'
+  OPS_JSON="$BATS_TEST_TMPDIR/ops.json"
+  jq -n '{cron:[], systemd:[]}' >"$OPS_JSON"
+
+  # Invoke WITHOUT QUARTET_DIR in the environment — exactly like the live unit,
+  # whose baked env carries only NOTIFY/OPS/EVENTS. The runner self-resolves
+  # QUARTET_DIR as a plain var; only the explicit `export` makes it reach the
+  # `bash -c` check subprocess. (Passing it via env, as run_medic_scan does,
+  # would mask the defect — an env var is inherited whether or not re-exported.)
+  run env -u QUARTET_DIR \
+    QUARTET_EVENTS_DIR="$EVENTS_DIR" \
+    QUARTET_NOTIFY_CMD="$NOTIFY_CMD" \
+    QUARTET_OPS_JSON="$OPS_JSON" \
+    QUARTET_SOURCE="test" \
+    bash "$QUARTET_ROOT/agents/medic/runner.sh" --project "$p" --mode scan
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ -f "$p/qd-seen.txt" ]
+  [ "$(cat "$p/qd-seen.txt")" = "$QUARTET_ROOT" ]   # non-empty AND correct
+}
