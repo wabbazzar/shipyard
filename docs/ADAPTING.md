@@ -71,6 +71,25 @@ Rubric and convention lines that only ever produce notes for two weeks are
 removed. **Adaptation includes forgetting** — a critic that flags everything
 teaches nothing.
 
+## The specialist archetype (an installable sixth role)
+
+The five roles are lifecycle janitors — none is a standing **subsystem expert**.
+When a project has a subsystem whose settled decisions keep getting
+re-litigated by fresh-context agents, install the **specialist** archetype
+(`agents/specialist/role.md` + `decision-log.template.md`): a knowledge-bearing
+*reviewer* that reads a living decision log before it answers, guards the
+subsystem's objectives/invariants/rejected-approaches against erosion,
+reproduces "why does X happen" against the real system rather than narrating a
+plausible story, and maintains that log. It **reviews; it does not redesign** —
+building stays behind the same human stamp as every other role.
+
+Reach for it when a decision's rationale lives only in someone's head or a
+stale PR thread, and its loss would cost real rework. It is scaffolded into a
+project by `/shipyard add-specialist <subsystem>`, which instantiates the
+templates for the named subsystem and wires the decision log into the project's
+`write_ticket` context, its gates note, and a **hunk-keyed** release-critic
+block (never a changed-file-membership one — see the critic input contract).
+
 ## The routing rule (stated once)
 
 | The lesson is… | Route it to… |
