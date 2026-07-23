@@ -42,6 +42,7 @@ spawn_model() {
   case "$harness" in
     claude) _spawn_claude ;;
     codex)  _spawn_codex ;;
+    hermes) _spawn_hermes ;;
     *) echo "spawn_model: unknown harness '$harness'" >&2; SPAWN_RC=2; return 2 ;;
   esac
 }
@@ -105,4 +106,42 @@ _spawn_codex() {
     <<<"$SPAWN_RAW" 2>/dev/null || echo 0)"
   [[ "$SPAWN_TOKENS" =~ ^[0-9]+$ ]] || SPAWN_TOKENS=0
   SPAWN_TOKEN_SOURCE="codex"
+}
+
+# --- hermes (Hermes Agent) ---------------------------------------------------
+# `hermes chat -q … -Q` prints ONLY the final reply to stdout; the session id
+# lands on stderr as `session_id: <id>`. hermes emits no per-invocation token
+# count, but its session store does — so we key off that id and read usage from
+# `hermes sessions export` (verified fields: top-level input_tokens/output_tokens).
+# 0-fallback on any failure keeps the daily token gate fed a real number, never
+# a crash. --pass-session-id is what surfaces the id; --yolo/--accept-hooks are
+# the unattended (skip-perms) equivalents.
+_spawn_hermes() {
+  local cmd=(hermes chat -q "$prompt" -Q --pass-session-id)
+  [ -n "$model" ]    && cmd+=(-m "$model")
+  [ -n "$provider" ] && cmd+=(--provider "$provider")
+  [ "$skip_perms" -eq 1 ] && cmd+=(--yolo --accept-hooks)
+
+  local errf; errf="$(mktemp)"
+  SPAWN_RC=0
+  if [ -n "$timeout_val" ]; then
+    SPAWN_RAW="$(timeout "$timeout_val" "${cmd[@]}" 2>"$errf")" || SPAWN_RC=$?
+  else
+    SPAWN_RAW="$("${cmd[@]}" 2>"$errf")" || SPAWN_RC=$?
+  fi
+  SPAWN_TEXT="$SPAWN_RAW"
+  # keep the stderr trail (incl. the session_id line) in the caller's log
+  if [ "$logfile" != "/dev/null" ]; then cat "$errf" >>"$logfile" 2>/dev/null || true; fi
+
+  local sid
+  sid="$(grep -oE 'session_id:[[:space:]]*[A-Za-z0-9._-]+' "$errf" 2>/dev/null \
+    | tail -1 | grep -oE '[A-Za-z0-9._-]+$' || true)"
+  rm -f "$errf"
+  SPAWN_TOKENS=0
+  if [ -n "$sid" ]; then
+    SPAWN_TOKENS="$(hermes sessions export - --session-id "$sid" 2>/dev/null \
+      | jq -r '(.input_tokens // 0) + (.output_tokens // 0)' 2>/dev/null || echo 0)"
+    [[ "$SPAWN_TOKENS" =~ ^[0-9]+$ ]] || SPAWN_TOKENS=0
+  fi
+  SPAWN_TOKEN_SOURCE="hermes-session"
 }

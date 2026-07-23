@@ -316,8 +316,17 @@ merge order + model_providers.)_
   final text ← `-o` file; tokens ← last `turn.completed.usage` (input+output), 0-fallback;
   `SPAWN_TOKEN_SOURCE=codex`. NOT using `--output-schema` (codex#15451). 3 stubbed
   bats cases (composition+usage, 0-fallback, no-provider⇒no-`-c`). GATES: `bats tests/`
-  146 green, leak clean, `bash -n` ok. Commit: <pending>.
-- P3 —
+  146 green, leak clean, `bash -n` ok. Commit: 87d3daf.
+- P3 — DONE: `_spawn_hermes` — `hermes chat -q <prompt> -Q --pass-session-id [-m][--provider][--yolo --accept-hooks]`.
+  METERING FORMAT VERIFIED LIVE (one Kimi-K3/OpenRouter probe, D-11): reply on
+  stdout (⇒ SPAWN_TEXT), `session_id: <id>` on stderr; `hermes sessions export -
+  --session-id <id>` returns a JSON object with top-level `input_tokens`/`output_tokens`
+  (probe read 15050+53=15103). Dispatcher pulls the id off stderr, reads usage,
+  records real tokens (`SPAWN_TOKEN_SOURCE=hermes-session`), 0-fallback on any
+  failure. NOT unmetered — D-3 hole closed. The 0-fallback test caught a real
+  errexit-safety bug (no-match sid grep returned 1); fixed with `|| true`. 3
+  stubbed bats cases (compose+meter, 0-fallback, no-provider). GATES: `bats tests/`
+  149 green, leak clean, `bash -n` ok. Commit: <pending>.
 - P4 —
 - P5 —
 - P6 —
