@@ -160,6 +160,8 @@ COLLECTORS="$SCRIPT_DIR/collectors.sh"
 
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/load-config.sh"
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/spawn.sh"
 CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
 
@@ -326,21 +328,23 @@ RUN CONTEXT (draft <= $AVAILABLE new proposal(s); reply with ONLY a JSON array):
 
 $RUN_CONTEXT"
 
-# --- spawn claude -----------------------------------------------------------
+# --- spawn the model --------------------------------------------------------
+# design has never wrapped in timeout or passed --dangerously-skip-permissions;
+# preserve that exactly (unset harness => claude, byte-identical).
 MODEL="${DESIGN_MODEL:-sonnet}"
-set +e
-CLAUDE_OUT="$(claude -p --model "$MODEL" --output-format json "$PROMPT" 2>>"$LOG_FILE")"
-CLAUDE_RC=$?
-set -e
+HARNESS="${DESIGN_HARNESS:-claude}"
+PROVIDER="${DESIGN_PROVIDER:-}"
+spawn_model --harness "$HARNESS" --model "$MODEL" --provider "$PROVIDER" \
+  --prompt "$PROMPT" --log "$LOG_FILE" --json
+CLAUDE_OUT="$SPAWN_RAW"; CLAUDE_RC="$SPAWN_RC"
 echo "[$SVC] claude exit=$CLAUDE_RC" >> "$LOG_FILE"
 if [ "$CLAUDE_RC" -ne 0 ] || [ -z "$CLAUDE_OUT" ]; then
   echo "[$SVC] claude produced no output; no proposals drafted" >> "$LOG_FILE"
   finish fail reason=claude_failed
 fi
 
-RESULT_TEXT="$(jq -r '.result // ""' <<<"$CLAUDE_OUT" 2>/dev/null || true)"
-TOKENS="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0))' <<<"$CLAUDE_OUT" 2>/dev/null || echo 0)"
-[[ "$TOKENS" =~ ^[0-9]+$ ]] || TOKENS=0
+RESULT_TEXT="$SPAWN_TEXT"
+TOKENS="$SPAWN_TOKENS"
 
 # --- merge proposals into the result file -----------------------------------
 # Parse claude's reply (tolerant of ```json fences), assign a stable id +

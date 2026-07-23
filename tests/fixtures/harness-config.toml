@@ -1,0 +1,28 @@
+# Fixture: harness/model/provider knobs — a [harness] global default plus a
+# per-role override on [build]. design carries NO table, so it must inherit the
+# global default (exercises the fallback precedence in install.sh's env baking).
+
+project_name  = "__PROJECT_NAME__"
+project_owner = "fixture-owner"
+branch        = "main"
+
+[paths]
+result_dir   = "tmp"
+worktree_dir = ".worktrees"
+
+[harness]
+default = "claude"
+model   = "sonnet"
+
+[release]
+test_cmd  = "true"
+typecheck = "true"
+
+[build]
+wall_clock_sec = 60
+harness  = "codex"
+model    = "gpt-5.4"
+provider = "openrouter"
+
+[medic]
+daily_escalation_cap = 5

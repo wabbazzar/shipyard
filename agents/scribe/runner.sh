@@ -57,6 +57,8 @@ fi
 
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/load-config.sh"
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/spawn.sh"
 CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
 
@@ -175,21 +177,17 @@ RUN CONTEXT (write your result to $RESULT_FILE — JSON only, no prose):
 $RUN_CONTEXT"
 
 MODEL="${SCRIBE_MODEL:-sonnet}"
+HARNESS="${SCRIBE_HARNESS:-claude}"
+PROVIDER="${SCRIBE_PROVIDER:-}"
 : > "$RESULT_FILE"
 
 # timeout replaces the retired per-invocation dollar ceiling as the runaway
 # guard; the json envelope gives real token usage for the daily gate.
-set +e
-CLAUDE_OUT="$(timeout "$WALL_CLOCK" claude -p \
-  --model "$MODEL" \
-  --dangerously-skip-permissions \
-  --output-format json \
-  "$PROMPT" \
-  2>>"$LOG_FILE")"
-EXIT=$?
-set -e
+spawn_model --harness "$HARNESS" --model "$MODEL" --provider "$PROVIDER" \
+  --prompt "$PROMPT" --log "$LOG_FILE" --timeout "$WALL_CLOCK" \
+  --skip-perms --json
+CLAUDE_OUT="$SPAWN_RAW"; EXIT="$SPAWN_RC"; TOKENS="$SPAWN_TOKENS"
 echo "[$SVC] claude exit=$EXIT" >> "$LOG_FILE"
-TOKENS="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0))' <<<"$CLAUDE_OUT" 2>/dev/null || echo 0)"
 [[ "$TOKENS" =~ ^[0-9]+$ ]] || TOKENS=0
 # Keep the operator debug trail the text mode used to provide.
 jq -r '.result // empty' <<<"$CLAUDE_OUT" >> "$LOG_FILE" 2>/dev/null || true
