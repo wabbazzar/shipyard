@@ -126,6 +126,58 @@ printf '%s\\n' '{\"type\":\"thread.started\"}'"
 }
 
 # ---------------------------------------------------------------------------
+# hermes (Phase 3): chat -q -Q --pass-session-id; metered via sessions export
+# ---------------------------------------------------------------------------
+
+# A hermes stub: on `chat` log argv, print the reply (stdout) + session_id
+# (stderr, matching the real CLI); on `sessions export` print a usage object
+# with the verified top-level input_tokens/output_tokens fields.
+_argv_hermes() {
+  ARGVLOG="$BATS_TEST_TMPDIR/argv"
+  make_stub_script hermes "if [ \"\$1\" = 'chat' ]; then
+printf '%s\\n' \"\$@\" > '$ARGVLOG'
+printf 'HERMES REPLY\\n'
+printf 'session_id: TESTSID\\n' >&2
+elif [ \"\$1\" = 'sessions' ]; then
+printf '%s' '{\"input_tokens\":15050,\"output_tokens\":53}'
+fi"
+}
+
+@test "spawn(hermes): composes chat -q -Q --pass-session-id ...; meters via sessions export" {
+  _argv_hermes
+  source "$QUARTET_ROOT/agents/lib/spawn.sh"
+  spawn_model --harness hermes --model moonshotai/kimi-k3 --provider openrouter \
+    --prompt "P" --log /dev/null --timeout 900 --skip-perms --json
+  [ "$SPAWN_RC" = "0" ]
+  [ "$SPAWN_TEXT" = "HERMES REPLY" ]
+  [ "$SPAWN_TOKENS" = "15103" ]        # 15050 input + 53 output from sessions export
+  [ "$SPAWN_TOKEN_SOURCE" = "hermes-session" ]
+  [ "$(head -2 "$ARGVLOG" | tr '\n' ' ')" = "chat -q " ]
+  grep -Fxq -- '-Q' "$ARGVLOG"
+  grep -Fxq -- '--pass-session-id' "$ARGVLOG"
+  grep -Fxq -- '-m' "$ARGVLOG"; grep -Fxq 'moonshotai/kimi-k3' "$ARGVLOG"
+  grep -Fxq -- '--provider' "$ARGVLOG"; grep -Fxq 'openrouter' "$ARGVLOG"
+  grep -Fxq -- '--yolo' "$ARGVLOG"; grep -Fxq -- '--accept-hooks' "$ARGVLOG"
+}
+
+@test "spawn(hermes): no session_id on stderr -> 0-token fallback (metered, never crashes)" {
+  make_stub_script hermes "if [ \"\$1\" = 'chat' ]; then printf 'reply\\n'; else printf '%s' '{\"input_tokens\":1,\"output_tokens\":1}'; fi"
+  source "$QUARTET_ROOT/agents/lib/spawn.sh"
+  spawn_model --harness hermes --model m --prompt P --log /dev/null --json
+  [ "$SPAWN_TOKENS" = "0" ]
+  [ "$SPAWN_TEXT" = "reply" ]
+  [ "$SPAWN_TOKEN_SOURCE" = "hermes-session" ]
+}
+
+@test "spawn(hermes): no provider -> no --provider flag" {
+  _argv_hermes
+  source "$QUARTET_ROOT/agents/lib/spawn.sh"
+  spawn_model --harness hermes --model m --prompt P --log /dev/null --json
+  run grep -Fxq -- '--provider' "$ARGVLOG"
+  [ "$status" -ne 0 ]
+}
+
+# ---------------------------------------------------------------------------
 # Errexit-safety + load-bearing exit codes
 # ---------------------------------------------------------------------------
 
