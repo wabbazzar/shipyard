@@ -214,12 +214,22 @@ critique_queue() {
   [[ "$used" =~ ^[0-9]+$ ]] || used=0
   [[ "$BUDGET_TOKENS" =~ ^[0-9]+$ ]] || BUDGET_TOKENS=1000000
   if [ "$used" -ge "$BUDGET_TOKENS" ]; then
-    log "skip: daily token budget reached ($used >= $BUDGET_TOKENS)"
-    emit_event release.critique.skipped source=shoulder reason=budget \
-      tokens_used="$used" budget="$BUDGET_TOKENS"
-    rm -f "$queue" "$QUEUE_DIR/critic-snapshot-$session"
+    # Defer, don't discard: the queue survives so the review happens in the
+    # next budget window instead of being silently lost. The skip event and
+    # log line fire once per session per UTC day — the gate itself is hit on
+    # every poll pass while the budget stays blown.
+    local day marker
+    day="$(date -u +%Y%m%d)"
+    marker="$QUEUE_DIR/critic-budget-skip-$session-$day"
+    if [ ! -e "$marker" ]; then
+      log "skip: daily token budget reached ($used >= $BUDGET_TOKENS); queue deferred"
+      emit_event release.critique.skipped source=shoulder reason=budget \
+        tokens_used="$used" budget="$BUDGET_TOKENS"
+      : >"$marker" 2>/dev/null || true
+    fi
     return 0
   fi
+  rm -f "$QUEUE_DIR/critic-budget-skip-$session-"* 2>/dev/null || true
 
   # Snapshot the queue state being critiqued. Delivery consumes exactly these
   # entries; anything the hook appends while claude is running stays queued.
@@ -246,6 +256,12 @@ critique_queue() {
   queued_files="$(awk '{print $1}' "$queue" 2>/dev/null | sort -u | \
     while IFS= read -r f; do
       [ -n "$f" ] || continue
+      # Absolute paths outside this project were queued by older hooks or a
+      # cross-repo session — reviewing them here applies the wrong project's
+      # conventions and trunk. Their own project's watcher covers them.
+      case "$f" in
+        /*) case "$f" in "$PROJECT_DIR"/*) ;; *) continue ;; esac ;;
+      esac
       git -C "$PROJECT_DIR" check-ignore -q "$f" 2>/dev/null || printf '%s\n' "$f"
     done)"
   changed="$(printf '%s\n%s\n' "$changed" "$queued_files" | grep -v '^$' | sort -u)"
@@ -310,10 +326,28 @@ $diff"
   local claude_out claude_rc
   claude_out="$(claude -p --output-format json "${model_args[@]}" "$prompt" 2>/dev/null)"
   claude_rc=$?
+  local spawn_attempts_file="$QUEUE_DIR/critic-spawn-attempts-$session"
   if [ "$claude_rc" -ne 0 ] || [ -z "$claude_out" ]; then
-    log "critic claude run failed (exit=$claude_rc); queue kept for retry"
+    # Same 3-strike rule as delivery: a persistent spawn failure (bad
+    # CRITIC_MODEL, oversized prompt, missing binary) must not retry every
+    # poll pass forever. Give up loudly with an event so the failure is
+    # visible instead of an infinite silent loop.
+    local sa
+    sa="$(cat "$spawn_attempts_file" 2>/dev/null || echo 0)"
+    [[ "$sa" =~ ^[0-9]+$ ]] || sa=0
+    sa=$((sa + 1))
+    if [ "$sa" -ge 3 ]; then
+      log "critic claude run failed (exit=$claude_rc) after $sa attempts; giving up, queue dropped"
+      emit_event release.critique.spawn_failed source=shoulder \
+        rc="$claude_rc" attempts="$sa" files="$n_files"
+      rm -f "$spawn_attempts_file" "$queue" "$QUEUE_DIR/critic-snapshot-$session"
+    else
+      printf '%s\n' "$sa" >"$spawn_attempts_file"
+      log "critic claude run failed (exit=$claude_rc); queue kept for retry ($sa/3)"
+    fi
     return 0
   fi
+  rm -f "$spawn_attempts_file"
 
   # ---- parse findings + real token usage ------------------------------------
   # `claude -p --output-format json` emits one JSON object with the reply
