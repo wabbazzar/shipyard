@@ -261,6 +261,30 @@ frozen, `repair_proposed`, resolved), `release.critique` +
 (`design`/`build`/`release`/`medic`/`scribe`) alongside the display-named
 `svc`. Build dashboards on it, or just `jq` it.
 
+## Deck publishing
+
+The deck (`docs/index.html` + `styles.css` + generated `shipyard-data.json`) is
+served two ways under `wabbazzar.com`:
+
+- **`/shipyard/`** — GitHub Pages `main:/docs` of this repo; a push to `main`
+  redeploys it automatically.
+- **`/writing/the-shipyard/`** — a copy in the `wabbazzar.github.io` repo, kept a
+  deterministic mirror by a **`pre-push` hook** (`.githooks/pre-push`): when
+  `main` is pushed it materializes the deck from the pushed commit, applies the
+  two destination transforms, and commits + pushes only that repo's
+  `writing/the-shipyard/` paths — so both URLs publish the same bytes together.
+
+The cascade is **off until you point it at the mirror checkout**, so a fresh
+clone never touches anything external:
+
+| knob | effect |
+|---|---|
+| `[deck] mirror_dir` (in `.agents/config.toml`) | path to the `wabbazzar.github.io` checkout; unset ⇒ the hook is a silent no-op |
+| `$DECK_MIRROR_DIR` | env override for the same (e.g. a one-off re-sync) |
+
+Run it by hand with `scripts/sync-deck-mirror.sh [<sha>]` (defaults to `HEAD`);
+exit `0` = pushed, `2` = bad config/guard, `3` = no-op (unset or unchanged).
+
 ## Docs
 
 - [docs/INSTALL.md](docs/INSTALL.md) — the six-layer install model (L0 core → L5 skills), the flow, uninstall
