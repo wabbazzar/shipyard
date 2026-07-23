@@ -242,3 +242,31 @@ printf '%s' '$(usage_envelope)'"
   run jq -e '.budgets.claude_usd' <<<"$output"
   [ "$status" -ne 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# 8. Probe resolve passthrough (hairpin-NAT workaround, 2026-07-23)
+# ---------------------------------------------------------------------------
+
+@test "probes: optional resolve key is passed to curl as --resolve" {
+  p="$(make_fixture_project tokprobe absent-keys.toml)"
+  fix_trunk "$p"
+  cat >>"$p/.agents/config.toml" <<'TOML'
+
+[[medic.probes]]
+name          = "local-site"
+url           = "https://example.test/"
+expect_status = 200
+resolve       = "example.test:443:127.0.0.1"
+TOML
+  make_stub_script curl 'printf "200"'
+  make_stub_script claude 'exit 0'
+  make_stub_script systemctl 'exit 0'
+  OPS_JSON="$BATS_TEST_TMPDIR/ops.json"
+  jq -n '{cron:[], systemd:[]}' >"$OPS_JSON"
+  export OPS_JSON
+
+  run_medic_scan "$p"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  stub_argv curl | grep -q -- '--resolve example.test:443:127.0.0.1'
+}
