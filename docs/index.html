@@ -220,6 +220,26 @@
     }
     .gloss:hover { border-bottom-style: solid; }
     .gloss:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    /* Ledger decisions (D-L3, D-O1, D-U1) — suk's colour, so a citation reads
+       as a different KIND of link than a glossary term. */
+    .decision {
+      font: inherit; color: var(--loop-medic); background: none; border: none; padding: 0;
+      cursor: pointer; border-bottom: 1px dotted var(--loop-medic); line-height: inherit;
+      white-space: nowrap;
+    }
+    .decision:hover { border-bottom-style: solid; }
+    .decision:focus-visible { outline: 2px solid var(--loop-medic); outline-offset: 2px; }
+    .decision-pop { border-color: var(--loop-medic); }
+    .decision-pop h4 { color: var(--loop-medic); display: flex; align-items: center; gap: 0.5rem; }
+    .dec-status {
+      font-size: 0.58rem; text-transform: uppercase; letter-spacing: 0.06em;
+      padding: 0.1rem 0.4rem; border-radius: 999px; border: 1px solid var(--muted);
+      color: var(--muted); font-family: var(--font); white-space: nowrap;
+    }
+    .dec-status[data-s="open"] { border-color: var(--loop-build); color: var(--loop-build); }
+    .dec-status[data-s="superseded"] { border-color: var(--loop-release); color: var(--loop-release); }
+    .dec-status[data-s="closed"] { border-color: var(--loop-design); color: var(--loop-design); }
+    .dec-closeout { margin-top: 0.45rem; padding-left: 0.6rem; border-left: 2px solid var(--loop-medic); }
     .gloss-pop {
       position: fixed; z-index: 200; max-width: min(560px, 92vw);
       background: var(--card, var(--code-bg)); border: 1px solid var(--rule, var(--dot-inactive));
@@ -482,8 +502,11 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
       // Glossary: wrap the first occurrence of each term (longest-first, whole-token,
       // never inside a tag / <code> / <a>) in a clickable .gloss button.
       const glossTerms = Object.keys(data.glossary || {}).sort((a, b) => b.length - a.length);
+      // The decision ledger, keyed by its stable ids — every D-L/D-O/D-U cited
+      // in the prose becomes a clickable target (rendered in suk's colour).
+      const decisions = data.decisions || {};
       function linkGloss(html) {
-        if (!glossTerms.length) return html;
+        if (!glossTerms.length && !Object.keys(decisions).length) return html;
         const parts = [];
         const re = /<[^>]+>/g;
         let last = 0, m;
@@ -514,9 +537,17 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
             const mm = tre.exec(text);
             if (mm) hits.push({ index: mm.index, len: mm[0].length, term, matched: mm[0] });
           }
+          // Decision ids (D-L3, D-O1, D-U1) cite the ledger. Unlike glossary
+          // terms these link on EVERY occurrence — a citation the reader can't
+          // follow where they meet it is the thing this fixes.
+          const decRe = /\bD-[LOU]\d+\b/g;
+          let dm;
+          while ((dm = decRe.exec(text))) {
+            if (decisions[dm[0]]) hits.push({ index: dm.index, len: dm[0].length, decision: dm[0], matched: dm[0] });
+          }
           hits.sort((a, b) => a.index - b.index);
           const kept = []; let end = -1;
-          for (const h of hits) { if (h.index >= end) { kept.push(h); end = h.index + h.len; used.add(h.term); } }
+          for (const h of hits) { if (h.index >= end) { kept.push(h); end = h.index + h.len; if (h.term) used.add(h.term); } }
           let s = text;
           for (let j = kept.length - 1; j >= 0; j--) {
             const h = kept[j];
@@ -524,7 +555,10 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
             // prose, and one of those slots is inside <button class="skill-toggle">.
             // A nested <button> makes the parser close the toggle and reparent
             // the chip and chevron out of the row (tests/deck-render.bats).
-            s = s.slice(0, h.index) + `<span class="gloss" role="button" tabindex="0" data-term="${escAttr(h.term)}">${h.matched}</span>` + s.slice(h.index + h.len);
+            const el = h.decision
+              ? `<span class="decision" role="button" tabindex="0" data-decision="${escAttr(h.decision)}">${h.matched}</span>`
+              : `<span class="gloss" role="button" tabindex="0" data-term="${escAttr(h.term)}">${h.matched}</span>`;
+            s = s.slice(0, h.index) + el + s.slice(h.index + h.len);
           }
           out += s;
         }
@@ -868,7 +902,7 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
            <h3>${esc(c.name)}</h3>
            <div class="was">${esc(c.status)}</div>
            <div class="headline">${esc(c.headline)}</div>
-           <p class="gate-line"><strong>Gate:</strong> ${esc(c.gate)}</p>` +
+           <p class="gate-line"><strong>Gate:</strong> ${linkGloss(esc(c.gate))}</p>` +
           c.skills.map((s, i) =>
             `<div class="skill-item" data-i="${i}">
                <button class="skill-toggle" type="button">
@@ -920,17 +954,32 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
       function closeGloss() { if (glossPop) { glossPop.remove(); glossPop = null; } }
       function openGloss(btn) {
         closeGloss();
-        const term = btn.dataset.term;
-        const g = (data.glossary || {})[term];
-        if (!g) return;
-        const def = typeof g === 'string' ? g : (g.def || '');
-        const ex = (typeof g === 'object' && g.example) ? g.example : '';
-        const src = (typeof g === 'object' && g.source) ? g.source : '';
+        // One popover, two payloads: a glossary term or a ledger decision.
+        const isDecision = !!btn.dataset.decision;
+        let head, body;
+        if (isDecision) {
+          const id = btn.dataset.decision;
+          const d = decisions[id];
+          if (!d) return;
+          head = `<h4>${esc(id)}<span class="dec-status" data-s="${escAttr(d.status || '')}">${esc(d.status || '')}</span></h4>`;
+          body = `<p>${esc(d.text || '')}</p>` +
+            (d.closeout ? `<p class="dec-closeout">${esc(d.closeout)}</p>` : '') +
+            (d.source ? `<div class="gloss-src">${esc(d.source)}</div>` : '');
+        } else {
+          const term = btn.dataset.term;
+          const g = (data.glossary || {})[term];
+          if (!g) return;
+          const def = typeof g === 'string' ? g : (g.def || '');
+          const ex = (typeof g === 'object' && g.example) ? g.example : '';
+          const src = (typeof g === 'object' && g.source) ? g.source : '';
+          head = `<h4>${esc(term)}</h4>`;
+          body = `<p>${esc(def)}</p>` +
+            (ex ? `<pre class="gloss-ex">${esc(ex)}</pre>` : '') +
+            (src ? `<div class="gloss-src">${esc(src)}</div>` : '');
+        }
         glossPop = document.createElement('div');
-        glossPop.className = 'gloss-pop';
-        glossPop.innerHTML = `<h4>${esc(term)}</h4><p>${esc(def)}</p>` +
-          (ex ? `<pre class="gloss-ex">${esc(ex)}</pre>` : '') +
-          (src ? `<div class="gloss-src">${esc(src)}</div>` : '');
+        glossPop.className = isDecision ? 'gloss-pop decision-pop' : 'gloss-pop';
+        glossPop.innerHTML = head + body;
         document.body.appendChild(glossPop);
         const r = btn.getBoundingClientRect();
         const pw = glossPop.offsetWidth, ph = glossPop.offsetHeight;
@@ -943,7 +992,7 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
       }
 
       document.addEventListener('click', (e) => {
-        const gb = e.target.closest('.gloss');
+        const gb = e.target.closest('.gloss, .decision');
         if (gb) { e.stopPropagation(); openGloss(gb); return; }
         if (glossPop && !e.target.closest('.gloss-pop')) closeGloss();
         const sk = e.target.closest('.sk-node');
@@ -961,7 +1010,7 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
       // Keyboard-activate a focused graph node (Enter / Space).
       document.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
-        const gb = e.target.closest && e.target.closest('.gloss');
+        const gb = e.target.closest && e.target.closest('.gloss, .decision');
         if (gb) { e.preventDefault(); e.stopPropagation(); openGloss(gb); return; }
         const sk = e.target.closest && e.target.closest('.sk-node');
         if (sk && sk.dataset.skillLabel) { e.preventDefault(); openSkill(sk.dataset.skillLabel); }
