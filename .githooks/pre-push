@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#
+# pre-push — cascade the deck to the wabbazzar.com "writing" mirror whenever
+# `main` is pushed. The deck served at wabbazzar.com/shipyard/ is main:/docs of
+# this repo; this keeps wabbazzar.com/writing/the-shipyard/ a deterministic copy.
+#
+# Fires ONLY for a real update to refs/heads/main; any other branch is a no-op.
+# It is best-effort: a cascade failure warns but NEVER blocks the shipyard push
+# (the /shipyard/ deck is the primary; the mirror can be re-synced by hand).
+#
+# No-op unless a mirror is configured ([deck] mirror_dir / $DECK_MIRROR_DIR).
+set -uo pipefail
+
+QUARTET_DIR="${QUARTET_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+_zero="0000000000000000000000000000000000000000"
+
+main_sha=""
+while read -r _localref localsha remoteref _remotesha; do
+  if [ "$remoteref" = "refs/heads/main" ] && [ "${localsha:-$_zero}" != "$_zero" ]; then
+    main_sha="$localsha"
+  fi
+done
+
+if [ -n "$main_sha" ]; then
+  if ! "$QUARTET_DIR/scripts/sync-deck-mirror.sh" "$main_sha"; then
+    echo "pre-push: deck mirror cascade did not complete (non-blocking) — re-run: scripts/sync-deck-mirror.sh $main_sha" >&2
+  fi
+fi
+
+exit 0
