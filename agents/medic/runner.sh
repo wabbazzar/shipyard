@@ -152,6 +152,8 @@ fi
 # ---------- config loader ---------------------------------------------------
 source "$QUARTET_DIR/agents/lib/load-config.sh"
 # shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/spawn.sh"
+# shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
 CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
@@ -867,6 +869,8 @@ RUN CONTEXT (write your classified result to $RESULT_FILE — JSON only, no pros
 $RUN_CONTEXT"
 
 MODEL="${MEDIC_MODEL:-sonnet}"
+HARNESS="${MEDIC_HARNESS:-claude}"
+PROVIDER="${MEDIC_PROVIDER:-}"
 
 echo "[medic] invoking claude (model=$MODEL incidents=$INCIDENTS_DETECTED tokens_today=$TOKENS_USED/$BUDGET_TOKENS)" >> "$LOG_FILE"
 
@@ -875,20 +879,12 @@ echo "[medic] invoking claude (model=$MODEL incidents=$INCIDENTS_DETECTED tokens
 
 # timeout replaces the retired per-invocation dollar ceiling as the runaway
 # guard; the json envelope gives real token usage for the daily gate.
-set +e
-CLAUDE_OUT="$(timeout 900 claude -p \
-  --model "$MODEL" \
-  --dangerously-skip-permissions \
-  --output-format json \
-  "$PROMPT" \
-  2>>"$LOG_FILE")"
-CLAUDE_EXIT=$?
-set -e
+spawn_model --harness "$HARNESS" --model "$MODEL" --provider "$PROVIDER" \
+  --prompt "$PROMPT" --log "$LOG_FILE" --timeout 900 --skip-perms --json
+CLAUDE_OUT="$SPAWN_RAW"; CLAUDE_EXIT="$SPAWN_RC"; TOKENS="$SPAWN_TOKENS"
 
-TOKENS="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0))' <<<"$CLAUDE_OUT" 2>/dev/null || echo 0)"
-[[ "$TOKENS" =~ ^[0-9]+$ ]] || TOKENS=0
 # Keep the operator debug trail the text mode used to provide.
-jq -r '.result // empty' <<<"$CLAUDE_OUT" >> "$LOG_FILE" 2>/dev/null || true
+printf '%s\n' "$SPAWN_TEXT" >> "$LOG_FILE" 2>/dev/null || true
 
 if [ ! -s "$RESULT_FILE" ]; then
   echo "[medic] claude did not write result file (exit=$CLAUDE_EXIT)" >> "$LOG_FILE"
