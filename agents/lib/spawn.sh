@@ -41,6 +41,7 @@ spawn_model() {
 
   case "$harness" in
     claude) _spawn_claude ;;
+    codex)  _spawn_codex ;;
     *) echo "spawn_model: unknown harness '$harness'" >&2; SPAWN_RC=2; return 2 ;;
   esac
 }
@@ -72,4 +73,36 @@ _spawn_claude() {
     <<<"$SPAWN_RAW" 2>/dev/null || echo 0)"
   [[ "$SPAWN_TOKENS" =~ ^[0-9]+$ ]] || SPAWN_TOKENS=0
   SPAWN_TOKEN_SOURCE="claude"
+}
+
+# --- codex (OpenAI Codex CLI) ------------------------------------------------
+# `codex exec` runs non-interactively. --json streams JSONL events; the final
+# assistant message goes to a file via -o (stdout is the event stream, not the
+# reply). skip-perms maps to sandboxed-but-unattended. Tokens come from the LAST
+# turn.completed event's cumulative usage (input+output); 0 if none emitted.
+# NB: never use --output-schema to force result.json — it is silently dropped
+# when tools/MCP are active (openai/codex#15451); roles write result.json with
+# codex's own file tools, exactly as under claude.
+_spawn_codex() {
+  local cmd=(codex exec)
+  [ -n "$model" ]    && cmd+=(-m "$model")
+  [ -n "$provider" ] && cmd+=(-c "model_provider=\"$provider\"")
+  [ "$skip_perms" -eq 1 ] && cmd+=(-s workspace-write --dangerously-bypass-approvals-and-sandbox)
+  local last_msg; last_msg="$(mktemp)"
+  cmd+=(-o "$last_msg" --json "$prompt")
+
+  SPAWN_RC=0
+  if [ -n "$timeout_val" ]; then
+    SPAWN_RAW="$(timeout "$timeout_val" "${cmd[@]}" 2>>"$logfile")" || SPAWN_RC=$?
+  else
+    SPAWN_RAW="$("${cmd[@]}" 2>>"$logfile")" || SPAWN_RC=$?
+  fi
+
+  SPAWN_TEXT="$(cat "$last_msg" 2>/dev/null || true)"
+  rm -f "$last_msg"
+  SPAWN_TOKENS="$(jq -rs 'map(select(.type=="turn.completed")) | last
+    | (.usage.input_tokens // 0) + (.usage.output_tokens // 0)' \
+    <<<"$SPAWN_RAW" 2>/dev/null || echo 0)"
+  [[ "$SPAWN_TOKENS" =~ ^[0-9]+$ ]] || SPAWN_TOKENS=0
+  SPAWN_TOKEN_SOURCE="codex"
 }

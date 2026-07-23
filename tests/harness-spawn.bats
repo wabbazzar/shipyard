@@ -74,6 +74,58 @@ THE PROMPT" ]
 }
 
 # ---------------------------------------------------------------------------
+# codex (Phase 2): codex exec -m/-c/-s -o --json; tokens from turn.completed
+# ---------------------------------------------------------------------------
+
+# A codex stub: log argv, write the final message to the -o file, emit a JSONL
+# event stream including a turn.completed.usage event.
+_argv_codex() {
+  ARGVLOG="$BATS_TEST_TMPDIR/argv"
+  make_stub_script codex "printf '%s\\n' \"\$@\" > '$ARGVLOG'
+out=''; while [ \$# -gt 0 ]; do [ \"\$1\" = '-o' ] && out=\"\$2\"; shift; done
+[ -n \"\$out\" ] && printf 'codex final' > \"\$out\"
+printf '%s\\n' '{\"type\":\"thread.started\"}' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":10,\"output_tokens\":25}}'"
+}
+
+@test "spawn(codex): composes exec -m -c -s -o --json; text from -o, tokens from turn.completed" {
+  _argv_codex
+  source "$QUARTET_ROOT/agents/lib/spawn.sh"
+  spawn_model --harness codex --model gpt-5.4 --provider openrouter --prompt "P" \
+    --log /dev/null --timeout 900 --skip-perms --json
+  [ "$SPAWN_RC" = "0" ]
+  [ "$SPAWN_TEXT" = "codex final" ]
+  [ "$SPAWN_TOKENS" = "125" ]          # 100 input + 25 output (cumulative)
+  [ "$SPAWN_TOKEN_SOURCE" = "codex" ]
+  # composed flags (order fixed by the dispatcher; -o path is a mktemp, so we
+  # assert presence per line rather than the whole string):
+  [ "$(head -1 "$ARGVLOG")" = "exec" ]
+  grep -Fxq -- '-m' "$ARGVLOG"; grep -Fxq 'gpt-5.4' "$ARGVLOG"
+  grep -Fxq -- '-c' "$ARGVLOG"; grep -Fxq 'model_provider="openrouter"' "$ARGVLOG"
+  grep -Fxq -- '-s' "$ARGVLOG"; grep -Fxq 'workspace-write' "$ARGVLOG"
+  grep -Fxq -- '--dangerously-bypass-approvals-and-sandbox' "$ARGVLOG"
+  grep -Fxq -- '--json' "$ARGVLOG"
+  [ "$(tail -1 "$ARGVLOG")" = "P" ]    # prompt is the final positional
+}
+
+@test "spawn(codex): no turn.completed event -> 0-token fallback (never crashes)" {
+  make_stub_script codex "out=''; while [ \$# -gt 0 ]; do [ \"\$1\" = '-o' ] && out=\"\$2\"; shift; done
+[ -n \"\$out\" ] && printf 'x' > \"\$out\"
+printf '%s\\n' '{\"type\":\"thread.started\"}'"
+  source "$QUARTET_ROOT/agents/lib/spawn.sh"
+  spawn_model --harness codex --model m --prompt P --log /dev/null --json
+  [ "$SPAWN_TOKENS" = "0" ]
+  [ "$SPAWN_TEXT" = "x" ]
+}
+
+@test "spawn(codex): no provider -> no -c model_provider override" {
+  _argv_codex
+  source "$QUARTET_ROOT/agents/lib/spawn.sh"
+  spawn_model --harness codex --model m --prompt P --log /dev/null --json
+  run grep -Fxq -- '-c' "$ARGVLOG"
+  [ "$status" -ne 0 ]
+}
+
+# ---------------------------------------------------------------------------
 # Errexit-safety + load-bearing exit codes
 # ---------------------------------------------------------------------------
 
