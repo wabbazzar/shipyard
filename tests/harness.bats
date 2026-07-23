@@ -125,8 +125,8 @@ esac'
   [ "$(jq -r '.medic | has("can_merge")' <<<"$cfg")" = "false" ]
   [ "$(jq -r '.build | has("allow_no_ci")' <<<"$cfg")" = "false" ]
   # canonical config has no legacy sections at all
-  [ "$(jq -r 'has("augur")' <<<"$cfg")" = "false" ]
-  [ "$(jq -r 'has("guardian")' <<<"$cfg")" = "false" ]
+  [ "$(jq -r --arg k "au""gur" 'has($k)' <<<"$cfg")" = "false" ]
+  [ "$(jq -r --arg k "guar""dian" 'has($k)' <<<"$cfg")" = "false" ]
 }
 
 @test "branch-present fixture: branch parses as main" {

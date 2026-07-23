@@ -85,7 +85,7 @@ TOML
   ST_EVENTS="$ST_TMP/events"; mkdir -p "$ST_EVENTS"
   TODAY="$(date -u +%Y-%m-%d)"
   printf '%s\n' \
-    '{"ts":"'"$TODAY"'T01:00:00Z","svc":"mentatself-guardian","event":"job.end","status":"fail","role":"release"}' \
+    '{"ts":"'"$TODAY"'T01:00:00Z","svc":"mentatself-release","event":"job.end","status":"fail","role":"release"}' \
     '{"ts":"'"$TODAY"'T02:00:00Z","svc":"mentatself-medic","event":"medic.incident.opened","role":"medic"}' \
     >"$ST_EVENTS/$TODAY.jsonl"
   printf '%s\n' '{"ts":"'"$TODAY"'T00:00:00Z","id":"fyi_1","text":"please add CSV export"}' \

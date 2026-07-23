@@ -33,7 +33,7 @@ failing test here.** The reproduction you capture travels *in* the ticket;
 `execute-ticket` commits the failing test at build time, where it becomes the
 permanent regression test.
 
-**You are the front of the loop for bugs.** A machine ask (a medic/augur
+**You are the front of the loop for bugs.** A machine ask (a medic/build
 incident that names a defect) or a human ask (`/bugfix <desc>`, "X is broken") both
 converge here. You do the reproduce-first intake, then call `write-ticket` with a
 scope — you never open a ticket that isn't backed by a reproduction.

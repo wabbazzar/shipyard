@@ -17,7 +17,7 @@
 #      itself — passing --incident-source medic causes it to refuse.
 #
 # Use --no-escalate for agents whose failures aren't fixable by the
-# medic→augur loop (scribe is the canonical example: doc-gen failures
+# medic→build loop (scribe is the canonical example: doc-gen failures
 # are typically Claude/API issues, not codebase regressions).
 #
 # Do NOT use this from a post-merge mode (where medic invoked the

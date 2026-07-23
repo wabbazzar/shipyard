@@ -25,10 +25,10 @@
 #
 #   2. `systemctl --user daemon-reload` + `enable --now` each timer.
 #
-#   3. Removes ANY crontab line that invokes
-#      <project_dir>/scripts/<project_name>-{guardian,augur,medic,scribe}.sh
-#      — those are pre-quartet legacy launchers, kept around historically
-#      and notorious for racing the new timers. Backs the crontab up first.
+#   3. Removes ANY crontab line that invokes a per-project agent launcher
+#      (<project_dir>/scripts/<project_name>-<role-or-display>.sh) — those
+#      are pre-quartet legacy launchers, kept around historically and
+#      notorious for racing the new timers. Backs the crontab up first.
 #
 #   4. Deletes (via `git rm`, or `rm` if not tracked) any legacy
 #      launcher script at <project_dir>/scripts/<project_name>-<agent>.sh
@@ -235,11 +235,10 @@ for role in $ROLES_LIST; do
 
   # A theme change or rename must never leave two live unit sets for one
   # project+role: sweep any OTHER unit of this project whose ExecStart runs
-  # this role's runner (including the legacy augur/guardian dir aliases).
-  # Plain-name leftovers have fired alongside a spacetime set before.
+  # this role's runner. Plain-name leftovers have fired alongside a
+  # spacetime set before. (The retired display-name dir aliases are gone —
+  # every install is post-rename, so only the role dir itself is swept.)
   role_dirs="$dir"
-  [ "$role" = "build" ]   && role_dirs="$role_dirs augur"
-  [ "$role" = "release" ] && role_dirs="$role_dirs guardian"
   for old_svc in "$SYSTEMD_DIR/${PROJECT_NAME}-"*.service; do
     [ -e "$old_svc" ] || continue
     [ "$old_svc" = "$service_path" ] && continue
@@ -311,13 +310,13 @@ fi
 echo ""
 echo "==> crontab cleanup"
 # Match any line invoking <project_dir>/scripts/<project_name>-<agent>.sh.
-CRON_PATTERN="$PROJECT_DIR/scripts/${PROJECT_NAME}-(guardian|augur|medic|scribe)\.sh"
+CRON_PATTERN="$PROJECT_DIR/scripts/${PROJECT_NAME}-(design|build|release|medic|scribe|mentat|helldiver|proctor|suk|chronicler)\.sh"
 
-# Box-drawing section-header comments (e.g. `# ── Project Guardian ──`)
+# Box-drawing section-header comments (e.g. `# ── Project Release ──`)
 # we leave behind when removing their entries. Match: starts with `# ─`,
 # mentions the project name (case-insensitive) and one of the agent words.
 PROJECT_CAP="$(tr '[:lower:]' '[:upper:]' <<<"${PROJECT_NAME:0:1}")${PROJECT_NAME:1}"
-COMMENT_PATTERN="^# ─.*(${PROJECT_NAME}|${PROJECT_CAP}).*(Guardian|Augur|Medic|Scribe).*─"
+COMMENT_PATTERN="^# ─.*(${PROJECT_NAME}|${PROJECT_CAP}).*(Design|Build|Release|Medic|Scribe|Mentat|Helldiver|Proctor|Suk|Chronicler).*─"
 
 current_crontab="$(crontab -l 2>/dev/null || true)"
 conflicting_lines="$(echo "$current_crontab" | grep -E "$CRON_PATTERN" || true)"
@@ -346,7 +345,7 @@ echo ""
 echo "==> legacy launcher scripts in $PROJECT_DIR/scripts/"
 for role in $ROLES_LIST; do
   dir="$(dir_for_role "$role")"
-  # Pre-quartet launchers are named by the legacy display (guardian/augur/…).
+  # Pre-quartet launchers are named by the role's default display.
   legacy_name="$(role_display "$role" '{}')"
   legacy="$PROJECT_DIR/scripts/${PROJECT_NAME}-${legacy_name}.sh"
   [ -f "$legacy" ] || continue

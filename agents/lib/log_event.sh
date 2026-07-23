@@ -3,7 +3,7 @@
 #
 # Usage:
 #   log_event.sh <svc> <event> [key=value ...]
-#   log_event.sh guardian job.end status=ok duration_s=42
+#   log_event.sh release job.end status=ok duration_s=42
 #
 # Values are written as strings unless they parse as int/float/bool,
 # in which case they're emitted unquoted. Use key='"quoted"' to force a

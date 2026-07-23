@@ -16,7 +16,7 @@
 #
 # Trailer goes through agents/lib/post-run.sh with --no-escalate —
 # scribe failures don't go to medic (doc-gen failures aren't fixable
-# by medic→augur, just notify).
+# by medic→build, just notify).
 
 set -uo pipefail
 

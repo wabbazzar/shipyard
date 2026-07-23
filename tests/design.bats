@@ -39,10 +39,10 @@ plant_telemetry() {
   local p="$1" today
   today="$(date -u +%Y-%m-%d)"
   printf '%s\n' \
-    "{\"ts\":\"${today}T01:00:00Z\",\"svc\":\"$(basename "$p")-guardian\",\"event\":\"job.end\",\"status\":\"fail\",\"role\":\"release\"}" \
-    "{\"ts\":\"${today}T01:30:00Z\",\"svc\":\"$(basename "$p")-guardian\",\"event\":\"job.end\",\"status\":\"ok\",\"role\":\"release\"}" \
+    "{\"ts\":\"${today}T01:00:00Z\",\"svc\":\"$(basename "$p")-release\",\"event\":\"job.end\",\"status\":\"fail\",\"role\":\"release\"}" \
+    "{\"ts\":\"${today}T01:30:00Z\",\"svc\":\"$(basename "$p")-release\",\"event\":\"job.end\",\"status\":\"ok\",\"role\":\"release\"}" \
     "{\"ts\":\"${today}T02:00:00Z\",\"svc\":\"$(basename "$p")-medic\",\"event\":\"medic.incident.opened\",\"role\":\"medic\"}" \
-    "{\"ts\":\"${today}T03:00:00Z\",\"svc\":\"$(basename "$p")-guardian\",\"event\":\"release.critique\",\"block\":2,\"warn\":1,\"note\":0}" \
+    "{\"ts\":\"${today}T03:00:00Z\",\"svc\":\"$(basename "$p")-release\",\"event\":\"release.critique\",\"block\":2,\"warn\":1,\"note\":0}" \
     >> "$(events_file)"
   mkdir -p "$p/data" "$p/data/usage"
   printf '%s\n' '{"ts":"2026-01-01T00:00:00Z","id":"fyi_1","text":"please add CSV export"}' \

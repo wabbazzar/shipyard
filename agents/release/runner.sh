@@ -1,5 +1,5 @@
 #!/bin/bash
-# agents/release/runner.sh — generic release (guardian) wrapper.
+# agents/release/runner.sh — generic release wrapper.
 #
 # Usage:
 #   runner.sh --project DIR --mode {hook|daily}
@@ -8,12 +8,12 @@
 #
 # Reads <project>/.agents/config.toml. Prompt = agents/release/role.md
 # + <project>/.agents/release.md + RUN CONTEXT block. Writes result to
-# <project>/tmp/<project>-guardian-result.json. Trailer via
+# <project>/tmp/<svc>-result.json. Trailer via
 # agents/lib/post-run.sh emits job.end and (on fail) escalates to medic.
 #
 # post-merge mode is deterministic — runs the project's test_cmd +
 # typecheck against the current checkout, no Claude invocation. Used
-# by medic post-augur-merge to validate before retrigger.
+# by medic post-build-merge to validate before retrigger.
 
 set -uo pipefail
 
@@ -62,7 +62,7 @@ CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
 PROJECT_NAME="$(jq -r '.project_name' <<<"$CFG_JSON")"
 
 # Canonical role identity + resolved display name (svc string). Legacy
-# configs (no [names] block) resolve release→"guardian", so the svc/units
+# configs (no [names] block) resolve the display to the role id "release";
 # stay exactly as they are today.
 ROLE="release"
 export QUARTET_ROLE="$ROLE"
@@ -174,7 +174,7 @@ if [ "$TOKENS_USED" -ge "$BUDGET_TOKENS" ]; then
   exit 0
 fi
 
-MODEL="${GUARDIAN_MODEL:-sonnet}"
+MODEL="${RELEASE_MODEL:-sonnet}"
 
 RUN_CONTEXT="$(jq -n \
   --arg mode "$MODE" \
@@ -241,7 +241,7 @@ if [ "$PASS" = "true" ]; then JOB_STATUS="ok"; else JOB_STATUS="fail"; fi
 [ "$JOB_STATUS" = "ok" ] && [ "$EXIT" -ne 0 ] && JOB_STATUS="partial"
 
 # Build category tag from the result fields (project-specific structure
-# but the field names are stable across guardian-style runs).
+# but the field names are stable across release-style runs).
 CATEGORY="$(python3 - "$RESULT_FILE" <<'PY' 2>/dev/null || echo unknown
 import json, sys
 try:
@@ -262,7 +262,7 @@ PY
 
 # Notify the human (Signal) — kept human-readable; the dashboard reads
 # from the events stream, not from the notification body.
-SUMMARY="$(tail -30 "$LOG_FILE" | grep -A20 -i "GUARDIAN RESULT" | head -10 || true)"
+SUMMARY="$(tail -30 "$LOG_FILE" | grep -A20 -i "RELEASE RESULT" | head -10 || true)"
 [ -z "$SUMMARY" ] && SUMMARY="$SVC completed (mode=$MODE, exit=$EXIT). See $LOG_FILE."
 if [ "$PASS" = "true" ]; then
   quartet_notify "$PROJECT_NAME ${DISPLAY^} ($MODE)" "$SUMMARY" || true

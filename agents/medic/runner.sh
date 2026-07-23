@@ -16,7 +16,7 @@
 #              build a single incident from <agent>'s result.json.
 #
 # Recursion guard: medic refuses to run if --incident-source is "medic".
-# The runner only invokes ONE agent ever as a child (augur, in incident
+# The runner only invokes ONE agent ever as a child (build, in incident
 # mode) and never invokes another medic.
 
 set -uo pipefail
@@ -62,7 +62,7 @@ source "$QUARTET_DIR/agents/lib/mentat-proposal.sh"
 # ---------- --self-test: merge → post-merge-fail → revert, both shapes ------
 medic_self_test() {
   # Builds a throwaway origin+clone per commit shape, lands a regression
-  # with that shape, simulates a guardian post-merge failure, and requires
+  # with that shape, simulates a release post-merge failure, and requires
   # medic_revert_merge to actually remove the change from trunk. No
   # network, no LLM — local git only.
   local root rc=0 shape
@@ -197,7 +197,7 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
       can_merge:($cfg.medic.can_merge // false),
       allow_no_ci:($cfg.build.allow_no_ci // false),
       restart_systemd:($cfg.medic.restart_systemd // true),
-      sync_to_augur:($cfg.medic.sync_to_augur // true),
+      sync_to_build:($cfg.medic.sync_to_build // true),
       budgets:{budget_tokens_daily:($cfg.medic.budget_tokens_daily // 1000000),
                daily_escalation_cap:($cfg.medic.daily_escalation_cap // 5),
                build_wall_clock_sec:($cfg.build.wall_clock_sec // 3600)}}'
@@ -288,7 +288,7 @@ detect_post_run() {
   if [ -f "$result_json" ]; then
     # jq exits 0 with EMPTY output on a 0-byte file, so `|| echo null`
     # alone doesn't cover the empty-result case (exactly what a dead
-    # guardian run leaves behind — the case medic post-run exists for).
+    # release run leaves behind — the case medic post-run exists for).
     result_excerpt="$(jq -c '.' "$result_json" 2>/dev/null || echo 'null')"
     [ -z "$result_excerpt" ] && result_excerpt='null'
   fi
@@ -354,13 +354,13 @@ detect_scan_runners() {
     fi
 
     # Deterministic self-failure guard: if the failed unit is *this*
-    # project's own augur or medic, classify as forbidden without
-    # consulting Claude. Augur cannot fix itself (its runtime lives in
-    # forbidden_paths) and medic invoking augur to fix medic is a
+    # project's own build or medic, classify as forbidden without
+    # consulting Claude. Build cannot fix itself (its runtime lives in
+    # forbidden_paths) and medic invoking build to fix medic is a
     # recursion. Without this guard, Claude's classification is
     # non-deterministic — observed in production where the same
     # incident was classified `regression` on tick N (escalating to
-    # augur, which aborted dirty-trunk) and `forbidden` on tick N+1.
+    # build, which aborted dirty-trunk) and `forbidden` on tick N+1.
     # We bake in the right answer.
     if [ "$name" = "$PROJECT_NAME-$BUILD_DISPLAY" ] || [ "$name" = "$SVC" ]; then
       echo "[medic] self-failure $name → auto-classify forbidden, skip Claude" >> "$LOG_FILE"
@@ -382,7 +382,7 @@ detect_scan_runners() {
       log_tail="$(tail -200 "$log_path" 2>/dev/null || true)"
     fi
 
-    # Recent commits in the project (helps augur form a hypothesis).
+    # Recent commits in the project (helps build form a hypothesis).
     local commits='[]'
     if [ -d "$PROJECT_DIR/.git" ]; then
       commits="$(cd "$PROJECT_DIR" && git log -5 --pretty=format:'{"sha":"%h","msg":"%s"}' 2>/dev/null \
@@ -768,8 +768,8 @@ if [ -z "$INCIDENTS_DETECTED" ]; then
   jq -n --arg ts "$(now_iso)" --arg mode "$MODE" '{
     pass: false, mode: $mode, timestamp: $ts,
     incidents_detected: 0, incidents_classified: [],
-    actions_taken: [], augur_invocations: 0,
-    augur_lock_contention: 0, daily_cap_hit: false,
+    actions_taken: [], build_invocations: 0,
+    build_lock_contention: 0, daily_cap_hit: false,
     errors: ["medic runner: incident accumulator corrupted (invalid JSON)"]
   }' > "$RESULT_FILE"
   exit 1
@@ -784,8 +784,8 @@ if [ "$INCIDENTS_DETECTED" -eq 0 ]; then
   jq -n --arg ts "$(now_iso)" --arg mode "$MODE" '{
     pass: true, mode: $mode, timestamp: $ts,
     incidents_detected: 0, incidents_classified: [],
-    actions_taken: [], augur_invocations: 0,
-    augur_lock_contention: 0, daily_cap_hit: false, errors: []
+    actions_taken: [], build_invocations: 0,
+    build_lock_contention: 0, daily_cap_hit: false, errors: []
   }' > "$RESULT_FILE"
   JOB_DUR=$(( $(date +%s) - JOB_START ))
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
@@ -823,8 +823,8 @@ if [ "$TOKENS_USED" -ge "$BUDGET_TOKENS" ]; then
   jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --argjson n "$INCIDENTS_DETECTED" '{
     pass: true, mode: $mode, timestamp: $ts,
     incidents_detected: $n, incidents_classified: [],
-    actions_taken: [], augur_invocations: 0,
-    augur_lock_contention: 0, daily_cap_hit: false,
+    actions_taken: [], build_invocations: 0,
+    build_lock_contention: 0, daily_cap_hit: false,
     errors: ["daily token budget reached; classification skipped"]
   }' > "$RESULT_FILE"
   JOB_DUR=$(( $(date +%s) - JOB_START ))
@@ -889,7 +889,7 @@ if [ ! -s "$RESULT_FILE" ]; then
     pass: false, mode: $mode, timestamp: $ts,
     incidents_detected: '"$INCIDENTS_DETECTED"',
     incidents_classified: [], actions_taken: [],
-    augur_invocations: 0, augur_lock_contention: 0,
+    build_invocations: 0, build_lock_contention: 0,
     daily_cap_hit: false, errors: [$err]
   }' > "$RESULT_FILE"
   quartet_notify "${DISPLAY^} ($PROJECT_NAME) FAILED" \
@@ -904,8 +904,8 @@ N_CLASS="$(jq '.incidents_classified | length' "$RESULT_FILE")"
 echo "[medic] claude classified $N_CLASS incident(s)" >> "$LOG_FILE"
 
 ACTIONS_TAKEN='[]'
-AUGUR_INVOCATIONS=0
-AUGUR_LOCK_CONTENTION=0
+BUILD_INVOCATIONS=0
+BUILD_LOCK_CONTENTION=0
 CAP_HIT=false
 
 # Helper: append an action record into ACTIONS_TAKEN.
@@ -1050,11 +1050,11 @@ while [ "$i" -lt "$N_CLASS" ]; do
       ;;
 
     regression)
-      # D-L15 — incident repair no longer escalates to build/augur (that
+      # D-L15 — incident repair no longer escalates to the build agent (that
       # side-door is retired). Medic writes an IMMEDIATE incident-repair
       # proposal into the design loop's result file (mentat → helldiver via
       # the dispatch), pages once, and lets the owner stamp it. This is a
-      # deterministic write: no augur.lock, no model spend, no merge. The
+      # deterministic write: no build lock, no model spend, no merge. The
       # restart/revert MITIGATION classes above are untouched — suk still
       # restarts/reverts immediately; only the CODE FIX is rerouted.
       if [ "$DAILY_USED" -ge "$DAILY_CAP" ]; then
@@ -1130,15 +1130,15 @@ FINAL="$(jq -n \
   --argjson detected "$INCIDENTS_DETECTED" \
   --slurpfile classified "$RESULT_FILE" \
   --argjson actions "$ACTIONS_TAKEN" \
-  --argjson aug_inv "$AUGUR_INVOCATIONS" \
-  --argjson aug_lock "$AUGUR_LOCK_CONTENTION" \
+  --argjson b_inv "$BUILD_INVOCATIONS" \
+  --argjson b_lock "$BUILD_LOCK_CONTENTION" \
   --argjson cap "$CAP_HIT" \
   '{pass:true, mode:$mode, timestamp:$ts,
     incidents_detected:$detected,
     incidents_classified:$classified[0].incidents_classified,
     actions_taken:$actions,
-    augur_invocations:$aug_inv,
-    augur_lock_contention:$aug_lock,
+    build_invocations:$b_inv,
+    build_lock_contention:$b_lock,
     daily_cap_hit:$cap,
     errors: ($classified[0].errors // [])}')"
 echo "$FINAL" > "$RESULT_FILE"
@@ -1151,8 +1151,8 @@ JOB_STATUS="ok"
 [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
   mode="$MODE" status="$JOB_STATUS" duration_s="$JOB_DUR" \
   incidents="$INCIDENTS_DETECTED" \
-  augur_invocations="$AUGUR_INVOCATIONS" \
+  build_invocations="$BUILD_INVOCATIONS" \
   cap_hit="$CAP_HIT" tokens="$TOKENS" claude_exit="$CLAUDE_EXIT" || true
 
-echo "[medic] done — incidents=$INCIDENTS_DETECTED augur=$AUGUR_INVOCATIONS" >> "$LOG_FILE"
+echo "[medic] done — incidents=$INCIDENTS_DETECTED build=$BUILD_INVOCATIONS" >> "$LOG_FILE"
 exit 0

@@ -37,7 +37,7 @@ BLOCKS="$(grep '^block|' "$FINDINGS_FILE" 2>/dev/null || true)"
 [ -n "$BLOCKS" ] || exit 0
 
 {
-  echo "guardian critic: unaddressed block-severity findings:"
+  echo "release critic: unaddressed block-severity findings:"
   printf '%s\n' "$BLOCKS"
 } >&2
 exit 2

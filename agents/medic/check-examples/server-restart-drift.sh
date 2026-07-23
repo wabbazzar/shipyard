@@ -18,7 +18,7 @@
 # host).
 #
 # Classification cue for your .agents/medic.md: this drift is
-# operational (a missed restart), NEVER `regression` — augur cannot fix
+# operational (a missed restart), NEVER `regression` — build cannot fix
 # it. Map it to `restart` only if the unit is safe to bounce
 # unattended; otherwise `infra` (notify hard, freeze 24h).
 set -euo pipefail

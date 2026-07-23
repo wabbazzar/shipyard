@@ -5,8 +5,8 @@
 #   medic.can_merge — absent (self-merge default under test)
 #   build.allow_no_ci — absent (a repo with zero CI checks must not pass)
 #
-# No [names] block → display names fall back to the legacy map (build→augur,
-# release→guardian), so the svc/units stay as they are today.
+# No [names] block → display names fall back to the role ids (build, release),
+# so the svc/units use the canonical role names.
 #
 # release.test_cmd / typecheck are no-ops so the deterministic post-merge
 # path can run in a test without a toolchain.
