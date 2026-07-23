@@ -101,10 +101,21 @@ printf '%s\\n' '{\"type\":\"thread.started\"}' '{\"type\":\"turn.completed\",\"u
   [ "$(head -1 "$ARGVLOG")" = "exec" ]
   grep -Fxq -- '-m' "$ARGVLOG"; grep -Fxq 'gpt-5.4' "$ARGVLOG"
   grep -Fxq -- '-c' "$ARGVLOG"; grep -Fxq 'model_provider="openrouter"' "$ARGVLOG"
+  # headless: approvals never; skip-perms role -> workspace-write sandbox
+  grep -Fxq 'approval_policy="never"' "$ARGVLOG"
   grep -Fxq -- '-s' "$ARGVLOG"; grep -Fxq 'workspace-write' "$ARGVLOG"
-  grep -Fxq -- '--dangerously-bypass-approvals-and-sandbox' "$ARGVLOG"
   grep -Fxq -- '--json' "$ARGVLOG"
   [ "$(tail -1 "$ARGVLOG")" = "P" ]    # prompt is the final positional
+}
+
+@test "spawn(codex): a non-skip-perms role runs read-only (still approvals=never)" {
+  _argv_codex
+  source "$QUARTET_ROOT/agents/lib/spawn.sh"
+  spawn_model --harness codex --model m --prompt P --log /dev/null --json  # no --skip-perms
+  grep -Fxq 'approval_policy="never"' "$ARGVLOG"
+  grep -Fxq 'read-only' "$ARGVLOG"
+  run grep -Fxq 'workspace-write' "$ARGVLOG"
+  [ "$status" -ne 0 ]
 }
 
 @test "spawn(codex): no turn.completed event -> 0-token fallback (never crashes)" {
@@ -117,11 +128,24 @@ printf '%s\\n' '{\"type\":\"thread.started\"}'"
   [ "$SPAWN_TEXT" = "x" ]
 }
 
-@test "spawn(codex): no provider -> no -c model_provider override" {
+@test "spawn(codex): harness stdin is /dev/null (piped stdin NOT drained/appended)" {
+  # codex exec with a prompt arg also drains piped stdin and errors headless;
+  # the dispatcher must feed it EOF. Stub appends whatever stdin it sees to the
+  # -o file; with the fix in place, that is nothing.
+  make_stub_script codex "out=''; while [ \$# -gt 0 ]; do [ \"\$1\" = '-o' ] && out=\"\$2\"; shift; done
+{ printf 'REPLY:'; cat; } > \"\$out\"
+printf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}'"
+  source "$QUARTET_ROOT/agents/lib/spawn.sh"
+  printf 'INJECT' | { spawn_model --harness codex --model m --prompt P --log /dev/null --json
+    printf '%s' "$SPAWN_TEXT" >"$BATS_TEST_TMPDIR/got"; }
+  [ "$(cat "$BATS_TEST_TMPDIR/got")" = "REPLY:" ]   # NOT "REPLY:INJECT"
+}
+
+@test "spawn(codex): no provider -> no model_provider override (approval_policy -c still present)" {
   _argv_codex
   source "$QUARTET_ROOT/agents/lib/spawn.sh"
   spawn_model --harness codex --model m --prompt P --log /dev/null --json
-  run grep -Fxq -- '-c' "$ARGVLOG"
+  run grep -Fq 'model_provider' "$ARGVLOG"
   [ "$status" -ne 0 ]
 }
 
@@ -189,6 +213,25 @@ fi"
   set +e
   [ "$SPAWN_RC" = "7" ]
   [ "$SPAWN_TOKENS" = "0" ]
+}
+
+@test "spawn: a claude-alias model is dropped for a non-claude harness (footgun guard)" {
+  _argv_codex
+  source "$QUARTET_ROOT/agents/lib/spawn.sh"
+  # harness=codex but model left at the claude default "sonnet" -> must NOT pass
+  # -m sonnet (which codex would reject); falls back to codex's own default.
+  spawn_model --harness codex --model sonnet --prompt P --log /dev/null --json
+  run grep -Fxq 'sonnet' "$ARGVLOG"
+  [ "$status" -ne 0 ]
+  run grep -Fxq -- '-m' "$ARGVLOG"
+  [ "$status" -ne 0 ]
+}
+
+@test "spawn: an explicit non-claude model is respected on a non-claude harness" {
+  _argv_codex
+  source "$QUARTET_ROOT/agents/lib/spawn.sh"
+  spawn_model --harness codex --model gpt-5.6-terra --prompt P --log /dev/null --json
+  grep -Fxq 'gpt-5.6-terra' "$ARGVLOG"
 }
 
 @test "spawn: unknown harness is a config error (exit 2)" {

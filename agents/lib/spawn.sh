@@ -39,6 +39,15 @@ spawn_model() {
   SPAWN_RAW=""; SPAWN_RC=0; SPAWN_TEXT=""; SPAWN_TOKENS=0
   SPAWN_TOKEN_SOURCE="$harness"
 
+  # The runners' historical model default is the claude alias "sonnet" (baked as
+  # ${<ROLE>_MODEL:-sonnet}); it is meaningless to codex/hermes and would hard-
+  # fail them (`codex exec -m sonnet` → invalid model). Drop a claude-family
+  # alias for a non-claude harness so it falls back to that harness's own
+  # configured default. An explicit non-claude model is always respected.
+  if [ "$harness" != "claude" ]; then
+    case "$model" in sonnet|opus|haiku|claude*) model="" ;; esac
+  fi
+
   case "$harness" in
     claude) _spawn_claude ;;
     codex)  _spawn_codex ;;
@@ -88,15 +97,27 @@ _spawn_codex() {
   local cmd=(codex exec)
   [ -n "$model" ]    && cmd+=(-m "$model")
   [ -n "$provider" ] && cmd+=(-c "model_provider=\"$provider\"")
-  [ "$skip_perms" -eq 1 ] && cmd+=(-s workspace-write --dangerously-bypass-approvals-and-sandbox)
+  # Headless: codex exec cannot prompt, so approvals MUST be "never" for EVERY
+  # role (without it codex errors out immediately). The sandbox scales with the
+  # caller's write intent: skip-perms roles may write the workspace; read-mostly
+  # roles (e.g. design) stay read-only.
+  cmd+=(-c 'approval_policy="never"')
+  if [ "$skip_perms" -eq 1 ]; then
+    cmd+=(-s workspace-write)
+  else
+    cmd+=(-s read-only)
+  fi
   local last_msg; last_msg="$(mktemp)"
   cmd+=(-o "$last_msg" --json "$prompt")
 
+  # </dev/null is load-bearing: `codex exec` with a prompt arg ALSO drains any
+  # piped stdin ("Reading additional input from stdin...") and errors in a
+  # headless command-substitution context. Feed it EOF so it uses the arg only.
   SPAWN_RC=0
   if [ -n "$timeout_val" ]; then
-    SPAWN_RAW="$(timeout "$timeout_val" "${cmd[@]}" 2>>"$logfile")" || SPAWN_RC=$?
+    SPAWN_RAW="$(timeout "$timeout_val" "${cmd[@]}" </dev/null 2>>"$logfile")" || SPAWN_RC=$?
   else
-    SPAWN_RAW="$("${cmd[@]}" 2>>"$logfile")" || SPAWN_RC=$?
+    SPAWN_RAW="$("${cmd[@]}" </dev/null 2>>"$logfile")" || SPAWN_RC=$?
   fi
 
   SPAWN_TEXT="$(cat "$last_msg" 2>/dev/null || true)"
@@ -125,9 +146,9 @@ _spawn_hermes() {
   local errf; errf="$(mktemp)"
   SPAWN_RC=0
   if [ -n "$timeout_val" ]; then
-    SPAWN_RAW="$(timeout "$timeout_val" "${cmd[@]}" 2>"$errf")" || SPAWN_RC=$?
+    SPAWN_RAW="$(timeout "$timeout_val" "${cmd[@]}" </dev/null 2>"$errf")" || SPAWN_RC=$?
   else
-    SPAWN_RAW="$("${cmd[@]}" 2>"$errf")" || SPAWN_RC=$?
+    SPAWN_RAW="$("${cmd[@]}" </dev/null 2>"$errf")" || SPAWN_RC=$?
   fi
   SPAWN_TEXT="$SPAWN_RAW"
   # keep the stderr trail (incl. the session_id line) in the caller's log
