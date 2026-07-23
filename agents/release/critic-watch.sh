@@ -187,11 +187,46 @@ critique_queue() {
     changed="$(git -C "$PROJECT_DIR" diff --name-only HEAD 2>/dev/null || true)"
   fi
   # Union with what the hook queued (covers files git can't see yet).
+  # Gitignored queue entries (runtime artifacts under tmp/ etc.) are dropped:
+  # they carry no diff hunks and produced whole critic runs over e.g.
+  # tmp/medic-result.json. critic-queue.sh filters these at enqueue time too;
+  # this catches entries queued before that filter or by older hooks.
   local queued_files
-  queued_files="$(awk '{print $1}' "$queue" 2>/dev/null | sort -u)"
+  queued_files="$(awk '{print $1}' "$queue" 2>/dev/null | sort -u | \
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      git -C "$PROJECT_DIR" check-ignore -q "$f" 2>/dev/null || printf '%s\n' "$f"
+    done)"
   changed="$(printf '%s\n%s\n' "$changed" "$queued_files" | grep -v '^$' | sort -u)"
   local n_files
   n_files="$(printf '%s\n' "$changed" | grep -c . || true)"
+
+  # Untracked queued files never appear in `git diff` — synthesize their
+  # hunks with --no-index so a brand-new file still reaches the critic as
+  # reviewable content, not just a name in the changed list.
+  local qf abs
+  while IFS= read -r qf; do
+    [ -n "$qf" ] || continue
+    case "$qf" in /*) abs="$qf" ;; *) abs="$PROJECT_DIR/$qf" ;; esac
+    [ -f "$abs" ] || continue
+    git -C "$PROJECT_DIR" ls-files --error-unmatch "$qf" >/dev/null 2>&1 && continue
+    diff="$diff
+$(git -C "$PROJECT_DIR" diff --no-index -- /dev/null "$abs" 2>/dev/null || true)"
+  done <<<"$queued_files"
+
+  # No diff hunks -> nothing the rubric can grade. Spawning the critic anyway
+  # yields only "diff body was empty" notes (observed 4x on shredly,
+  # 2026-07-22): tokens spent, owner pinged, zero signal. Drop the queue and
+  # skip. Note this also skips edits that were committed AND pushed to trunk
+  # before the idle window fired — those are post-release, and the shoulder
+  # critic's contract is pre-release review of pending work.
+  if [ -z "$(printf '%s' "$diff" | tr -d '[:space:]')" ]; then
+    log "skip: empty diff (changed files: ${n_files:-0}); queue dropped"
+    emit_event release.critique.skipped source=shoulder reason=empty_diff \
+      files="${n_files:-0}"
+    rm -f "$queue"
+    return 0
+  fi
 
   # ---- project extension (conventions layer) --------------------------------
   local project_ext="" ext_file="$PROJECT_DIR/.agents/release.md"

@@ -27,10 +27,14 @@ run_watch() {
     bash "$QUARTET_ROOT/$WATCH" --project "$project" "$@"
 }
 
-# queue_files <project> <session> <n> — append n distinct entries.
+# queue_files <project> <session> <n> — append n distinct entries, creating
+# each file on disk (untracked) so the watcher has real hunks to grade: an
+# empty-diff queue is skipped without spawning the critic.
 queue_files() {
   local project="$1" session="$2" n="$3" i
+  mkdir -p "$project/src"
   for i in $(seq 1 "$n"); do
+    printf '// stub %02d\n' "$i" > "$project/src/f$(printf '%02d' "$i").ts"
     printf 'src/f%02d.ts %s\n' "$i" "$(date +%s)" \
       >> "$project/tmp/critic-queue-$session"
   done
@@ -121,6 +125,33 @@ critique_events() {
   [ "$status" -eq 0 ]
   [ "$(critique_events | wc -l)" -eq 0 ]
   [ -s "$P/tmp/critic-queue-s1" ]
+}
+
+@test "critic-queue drops gitignored file paths at enqueue time" {
+  P="$(make_fixture_project critq-ign)"
+  printf 'tmp/\n' > "$P/.gitignore"
+  run bash -c "printf '%s' '{\"session_id\":\"s1\",\"tool_input\":{\"file_path\":\"tmp/medic-result.json\"}}' \
+    | CLAUDE_PROJECT_DIR='$P' bash '$QUARTET_ROOT/$QUEUE_HOOK'"
+  [ "$status" -eq 0 ]
+  run bash -c "ls '$P/tmp'/critic-queue-* 2>/dev/null"
+  [ -z "$output" ]
+}
+
+@test "empty diff (queued file gone from disk) skips critic, drops queue" {
+  P="$(make_fixture_project critq-empty)"
+  make_stub claude 0 "$CANNED_CLAUDE_JSON"
+  printf 'src/ghost.ts %s\n' "$(date +%s)" >> "$P/tmp/critic-queue-s1"
+  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  export CRITIC_IDLE_SEC=1 CRITIC_BATCH_FILES=100
+
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ "$(critique_events | wc -l)" -eq 0 ]
+  [ "$(stub_calls claude)" = "0" ]
+  SKIP="$(events_json | jq -c 'select(.event=="release.critique.skipped")')"
+  [ -n "$SKIP" ]
+  [ "$(jq -r '.reason' <<<"$SKIP")" = "empty_diff" ]
+  [ ! -e "$P/tmp/critic-queue-s1" ]
 }
 
 # ---------------------------------------------------------------------------

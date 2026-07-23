@@ -638,7 +638,8 @@ EOF
   make_stub claude 0 '{"type":"result","result":"warn|src/a.ts|no test","usage":{"input_tokens":10,"output_tokens":5}}'
   make_stub claude-note 3
   P="$(make_fixture_project critcache can-merge-true.toml)"
-  mkdir -p "$P/tmp"
+  mkdir -p "$P/tmp" "$P/src"
+  printf '// stub\n' > "$P/src/a.ts"   # real untracked file: empty-diff queues are skipped
   printf 'src/a.ts %s\n' "$(date +%s)" >"$P/tmp/critic-queue-s9"
   touch -d "2 minutes ago" "$P/tmp/critic-queue-s9"
   export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
