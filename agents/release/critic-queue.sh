@@ -26,6 +26,15 @@ SESSION_ID="$(jq -r '.session_id // empty' <<<"$INPUT" 2>/dev/null || true)"
 [ -n "$SESSION_ID" ] || SESSION_ID="default"
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+
+# Gitignored paths (result JSONs, scratch files under tmp/) are runtime
+# artifacts, never release candidates. Queueing them produced critic runs
+# whose only "change" was e.g. tmp/medic-result.json — pure noise, paid
+# for in tokens and a Signal ping. check-ignore failing open (not a repo,
+# git missing) keeps the old behavior.
+if git -C "$PROJECT_DIR" check-ignore -q "$FILE_PATH" 2>/dev/null; then
+  exit 0
+fi
 if [ -d "$PROJECT_DIR/tmp" ]; then
   QUEUE_DIR="$PROJECT_DIR/tmp"
 else
