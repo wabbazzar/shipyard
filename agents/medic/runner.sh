@@ -23,6 +23,9 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QUARTET_DIR="${QUARTET_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+# Exported so [[medic.checks]] subprocesses (run in a fresh `bash -c`) can
+# reference it — e.g. `cmd = bash "$QUARTET_DIR/install.sh" --doctor --project .`
+export QUARTET_DIR
 LOG_EVENT="$QUARTET_DIR/agents/lib/log_event.sh"
 
 export QUARTET_SOURCE="${QUARTET_SOURCE:-system}"
