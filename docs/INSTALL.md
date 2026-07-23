@@ -100,16 +100,50 @@ recon  →  interview  →  write L2–L5  →  bake units  →  verify
    are green now, `list-timers` shows sane next-fires, the six skill
    symlinks resolve.
 
-## Uninstall
+## Doctor — audit what an install owns
 
-Remove the units and delete `.agents/`:
+`install.sh` can report drift in a crew install without changing anything:
 
 ```bash
-systemctl --user disable --now <project>-*.timer
-rm ~/.config/systemd/user/<project>-*.{service,timer}
-systemctl --user daemon-reload
-rm -rf <project>/.agents <project>/.claude/skills/{write-ticket,bugfix,feature,polish-ticket,execute-ticket,coverage-audit}
+install.sh --doctor --project <project_dir>
 ```
 
-The repo keeps nothing it didn't choose — the crew leaves no code behind, only
-the config the operator wrote and can read.
+It rebuilds the expected manifest from the project's own config (the same
+inputs install uses) and checks it against reality, one `DOCTOR <class>:
+<detail>` line per finding (exit 0 clean, 1 on any drift):
+
+| class | catches |
+|-------|---------|
+| a | an expected role's unit missing, its timer disabled, or its ExecStart runner not under `$QUARTET_DIR` |
+| b | a stale duplicate — more than one unit running the same role runner (an old display-name unit left beside its successor) |
+| c | a foreign `<crew-unit>.service.d/` drop-in (e.g. a hand-written env override) — flagged, never removed |
+| d | retired config keys/sections (USD-era budget decimals, retired vocabulary) |
+| e | a shared-skill symlink missing or not resolving into `$QUARTET_DIR/skills` |
+| f | a `.claude/settings.json` hook command naming a script that does not exist (dead wiring) |
+| g | legacy per-project launcher scripts / crontab lines |
+| h | (hub only) a dispatch decision in `data/news/decisions.jsonl` not mirrored into the target project's `data/decisions.jsonl` |
+
+It is strictly read-only (no writes, no `systemctl` mutation) and finishes in
+well under a second, so it runs as a `[[medic.checks]]` entry every scan —
+the next self-written drop-in or dead hook pages within one tick instead of
+surfacing weeks later.
+
+## Uninstall
+
+Remove exactly the installer-owned surface (units/timers + shared-skill
+symlinks); the config you wrote and your data are left in place:
+
+```bash
+install.sh --uninstall --project <project_dir> [--dry-run]
+```
+
+It disables + removes this project's crew units/timers (`daemon-reload`),
+removes the shared skill symlinks that resolve into `$QUARTET_DIR/skills`
+(a real dir or a symlink pointing elsewhere is left untouched), and prints
+the deliberate leave-behind: `.agents/` (config, prompts, gates.md), `data/`,
+`tmp/`. `--dry-run` prints the identical plan without writing.
+
+Reinstall is `install.sh --project <dir>` again — **uninstall + install
+converges to a fresh install's unit set.** The repo keeps nothing it didn't
+choose — the crew leaves no code behind, only the config the operator wrote
+and can read.
