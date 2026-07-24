@@ -878,7 +878,7 @@
       "status": "closed",
       "was": "D-O7",
       "text": "The design crew runs nightly on the same 1M-token cap, and skips drafting when 3 proposals are already undecided.",
-      "closeout": "Shipped. Nightly timers fleet-wide, max_open_proposals default 3, with a skipped event naming the open cap as the reason.",
+      "closeout": "Shipped. Nightly timers fleet-wide, max_open_proposals default 1, with a skipped event naming the open cap as the reason.",
       "source": "closed out 2026-07-23 against the as-built code"
     },
     "D-24": {

@@ -23,7 +23,7 @@
 #   * budget   — sum today's design.* event `tokens` vs
 #                [design] budget_tokens_daily (default 1000000). At/over →
 #                skip + design.proposal.skipped reason=budget.
-#   * open cap — >= [design] max_open_proposals (default 3) UNDECIDED
+#   * open cap — >= [design] max_open_proposals (default 1) UNDECIDED
 #                proposals already open (in the result file, not yet in
 #                <project>/data/decisions.jsonl) → skip drafting +
 #                design.proposal.skipped reason=open_cap.
@@ -178,9 +178,9 @@ SVC="$PROJECT_NAME-$DISPLAY"
 
 RESULT_DIR_REL="$(jq -r '.paths.result_dir // "tmp"' <<<"$CFG_JSON")"
 BUDGET_TOKENS="$(jq -r '.design.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
-MAX_OPEN="$(jq -r '.design.max_open_proposals // 3' <<<"$CFG_JSON")"
+MAX_OPEN="$(jq -r '.design.max_open_proposals // 1' <<<"$CFG_JSON")"
 [[ "$BUDGET_TOKENS" =~ ^[0-9]+$ ]] || BUDGET_TOKENS=1000000
-[[ "$MAX_OPEN" =~ ^[0-9]+$ ]] || MAX_OPEN=3
+[[ "$MAX_OPEN" =~ ^[0-9]+$ ]] || MAX_OPEN=1
 
 EVENTS_DIR="${QUARTET_EVENTS_DIR:-$QUARTET_DIR/data/events}"
 
