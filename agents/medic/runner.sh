@@ -1003,10 +1003,18 @@ while [ "$i" -lt "$N_CLASS" ]; do
         emit medic.incident.resolved "$iid" via="retry"
         push_action "$(jq -n --arg iid "$iid" '{incident_id:$iid, action:"retry", outcome:"resolved"}')"
       else
-        # Promote to notify; don't loop again.
+        # Promote to notify; don't loop again — AND record a cooldown so the
+        # NEXT scan tick doesn't re-notify the same still-failing incident. This
+        # is the sole notify path that historically set no cooldown (the
+        # 2026-07-24 alert storm); every sibling class freezes after notifying.
+        # The id rolls at UTC midnight, so a persistent failure re-alerts once
+        # per day, matching restart's one-per-UTC-day policy.
         quartet_notify "${DISPLAY^} $PROJECT_NAME (transient→stuck)" \
           "Retry didn't clear: $summary"
         push_action "$(jq -n --arg iid "$iid" '{incident_id:$iid, action:"retry", outcome:"still_failing"}')"
+        until_ts="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
+        state_set ".cooldowns[\"$iid\"] = {\"frozen_until\":\"$until_ts\",\"reason\":\"transient_stuck\"}"
+        emit medic.incident.frozen "$iid" frozen_until="$until_ts" reason="transient_stuck"
       fi
       ;;
 
