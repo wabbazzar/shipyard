@@ -1,6 +1,6 @@
 # Transient API-stall storm — retry the stall + cool down the alert
 
-- **Status:** draft (ready for `polish-ticket`; awaiting human stamp)
+- **Status:** built + verified 2026-07-24 (owner-stamped; P1 `e4f8ee5`, P2 `13f2757`, P3 below)
 - **Priority:** high
 - **Type:** bugfix
 - **Estimated Points:** 6 (P1 2 · P2 1 · P3 3)
@@ -320,11 +320,33 @@ Anchors + toolchain proven during polish so a cold agent can trust them:
 
 ## Ledger
 
-_(builder appends: per-phase plan + commit hash + honest notes on anything deferred)_
+- [x] **Phase 1 — spawn_model retry-on-stall + `harness-spawn-retry.bats`** —
+      commit `e4f8ee5`. Added `_run_harness` (shared retry, D-6) and routed
+      claude/codex/hermes through it. All 15 existing `harness-spawn.bats` cases
+      stayed green (byte-identity, hermes session_id, codex `</dev/null`,
+      errexit). `token-caps.bats` test 25 (timeout-guard) failed because it
+      grepped the old literal `timeout "$timeout_val" "${cmd[@]}"`; the guard now
+      lives in `inv+=(timeout "$timeout_val")` — updated the grep to the new
+      token (still fails if the guard is removed; not weakened). 4 new retry
+      cases green. Note: the red-vs-pre-change proof is case 4
+      (`SPAWN_STALL_RETRIES=0` → 1 call, RC=1 = today's fatal single-shot), which
+      is exactly the state the fix flips.
+- [x] **Phase 2 — medic cooldown + `medic-transient-cooldown.bats`** — commit
+      `13f2757`. Added `state_set ".cooldowns[$iid]" reason=transient_stuck` +
+      `emit medic.incident.frozen` after the transient→stuck notify. Red state
+      (`NOTIFYCOUNT=2`, reason `MISSING`) was captured on pre-change code during
+      the `/bugfix` reproduction earlier in the session (recorded in Polish
+      verification) — not re-reverted mid-build because the file is fleet-live
+      and `shipyard-suk` fires every 10 min.
+- [x] **Phase 3 — docs + Traps + full gate sweep** — commit `49370e0` (this).
+      Documented `SPAWN_STALL_RETRIES` / `SPAWN_STALL_BACKOFF` in the README env
+      table (D-7: no install bake). Added both coverage-gap Traps to
+      `.agents/gates.md` (gitignored self-install surface — local to this box,
+      not pushed). Full end-to-end gate re-run green: see below.
 
-- [ ] Phase 1 — spawn_model retry-on-stall + `harness-spawn-retry.bats` — commit: ____
-- [ ] Phase 2 — medic cooldown + two-scan regression test — commit: ____
-- [ ] Phase 3 — Traps notes + docs + full gate sweep — commit: ____
+**Final gate (2026-07-24):** `bats tests/` = **214 pass, 0 fail** (209 baseline
++ 4 retry + 1 cooldown); `leak-check.sh` clean; `check-deck-fresh.sh` clean;
+`bash -n` sweep clean.
 
 ## Run it
 
