@@ -522,6 +522,14 @@
         "kind": "shared"
       },
       {
+        "id": "shipyard",
+        "label": "/shipyard",
+        "roles": [
+          "human"
+        ],
+        "kind": "frontdoor"
+      },
+      {
         "id": "collectors",
         "label": "telemetry collectors",
         "roles": [
@@ -790,6 +798,16 @@
       "def": "The critic's first rubric line: did the change actually do what the task claims, or just satisfy the specific eval the author optimized against?",
       "example": "1. **Goodhart check** — does the change do what the task claims,\n   beyond the specific eval/test the author optimized? A fix that\n   special-cases the failing input is a `block`.",
       "source": "agents/release/critic-role.md:62 — Rubric v1, line 1"
+    },
+    "specialist": {
+      "def": "An optional sixth role archetype: a standing, knowledge-bearing reviewer that guards one subsystem's settled decisions against fresh-context erosion. It reads a living decision log before it answers and reviews changes against it; it reviews, it does not redesign.",
+      "example": "A payments specialist that blocks a change re-introducing a rejected retry strategy, citing the decision-log entry that ruled it out.",
+      "source": "agents/specialist/role.md — installed via /shipyard add-specialist"
+    },
+    "/shipyard": {
+      "def": "The operator's in-project console for an installed crew: `status` (what's wired here + a doctor drift audit), `add-specialist <subsystem>` (scaffold + wire a specialist), and `learn \"<lesson>\"` (route a lesson through the adaptation taxonomy). Deterministic core with load-bearing exit codes 0/2/3.",
+      "example": "shipyard status → lists the installed timers, the project blocks, and any install drift.",
+      "source": "skills/shipyard/shipyard.sh"
     }
   },
   "decisions": {
