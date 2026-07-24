@@ -4,6 +4,7 @@
 # Usage:
 #   install.sh --project <project_dir> [--dry-run] [--agents LIST] [--theme T]
 #   install.sh --doctor    --project <project_dir>
+#   install.sh --relink    --project <project_dir> [--dry-run]
 #   install.sh --uninstall --project <project_dir> [--dry-run]
 #
 #   --project    Path to the target project (must contain .agents/config.toml).
@@ -14,6 +15,10 @@
 #                Prints `DOCTOR <class>: <detail>` one line per finding; exit 0
 #                clean / 1 on drift. Never writes, never touches systemd. Fast
 #                enough to run as a [[medic.checks]] entry every scan.
+#   --relink     Repair mode: recreate ONLY the skill symlinks --doctor flags
+#                as drift (missing/broken/wrong target). Deterministic filesystem
+#                op — touches nothing else (no systemd/config/gate), never
+#                clobbers a real file/dir. Honors --dry-run. Exit 0.
 #   --uninstall  Remove exactly the installer-owned surface (crew units/timers
 #                + shared-skill symlinks resolving into $QUARTET_DIR/skills),
 #                then print the deliberate leave-behind (.agents/, data/, tmp/).
@@ -98,6 +103,7 @@ while [ $# -gt 0 ]; do
     --agents)    AGENTS="$2"; shift 2 ;;
     --theme)     THEME="$2"; THEME_EXPLICIT=1; shift 2 ;;
     --doctor)    MODE="doctor"; shift ;;
+    --relink)    MODE="relink"; shift ;;
     --uninstall) MODE="uninstall"; shift ;;
     --wire-shoulder) WIRE_SHOULDER=1; shift ;;
     -h|--help) usage 0 ;;
@@ -106,7 +112,7 @@ while [ $# -gt 0 ]; do
 done
 [ -z "$PROJECT_DIR" ] && { echo "--project required" >&2; usage; }
 case "$MODE" in
-  doctor|uninstall) [ "$THEME_EXPLICIT" = "0" ] || { echo "--theme not valid with --$MODE" >&2; usage; } ;;
+  doctor|uninstall|relink) [ "$THEME_EXPLICIT" = "0" ] || { echo "--theme not valid with --$MODE" >&2; usage; } ;;
 esac
 
 # The installer-owned shared-skill set: the symlink manifest doctor (e) audits
@@ -401,8 +407,56 @@ run_uninstall() {
   return 0
 }
 
+# run_relink — repair mode: recreate ONLY the installer-owned skill symlinks
+# that --doctor (check e) flags as drift — missing, broken, or resolving
+# outside $QUARTET_DIR/skills. Recreating a symlink is a deterministic,
+# reversible filesystem op, not a code change, so it needs no review. Scope is
+# strict: it touches nothing but $PROJECT_DIR/.claude/skills/<skill> symlinks —
+# no systemd, no config, no gate file — and NEVER clobbers a real (non-symlink)
+# file/dir an operator placed there. Honors --dry-run. Exit 0 even when nothing
+# needed fixing; exit 2 only on a hard error (the source skills dir is gone).
+run_relink() {
+  local qskills
+  qskills="$(cd "$QUARTET_DIR/skills" 2>/dev/null && pwd -P)" \
+    || { echo "relink: \$QUARTET_DIR/skills not found ($QUARTET_DIR/skills)" >&2; return 2; }
+  echo "==> relink shared skills for $PROJECT_NAME → $PROJECT_DIR/.claude/skills/"
+  [ "$DRY_RUN" = "1" ] && echo "  (dry-run — no changes will be made)"
+  [ "$DRY_RUN" = "1" ] || mkdir -p "$PROJECT_DIR/.claude/skills"
+  local skill src dest tgt fixed=0 kept=0
+  for skill in $GENERIC_SKILLS; do
+    src="$QUARTET_DIR/skills/$skill"
+    dest="$PROJECT_DIR/.claude/skills/$skill"
+    if [ ! -d "$src" ]; then
+      echo "  skip $skill: source missing ($src)"; continue
+    fi
+    # A real (non-symlink) file/dir the operator owns — never clobber.
+    if [ -e "$dest" ] && [ ! -L "$dest" ]; then
+      echo "  kept (real file/dir, not a symlink): $dest"; kept=$((kept + 1)); continue
+    fi
+    tgt="$(readlink -f "$dest" 2>/dev/null || true)"
+    case "$tgt" in
+      "$qskills"/*)
+        echo "  ok: $skill"; kept=$((kept + 1)) ;;          # resolves correctly — leave it
+      *)                                                     # missing / broken / wrong target
+        if [ "$DRY_RUN" = "1" ]; then
+          echo "  would relink: $dest -> $src"
+        else
+          ln -sfn "$src" "$dest"; echo "  relinked: $dest -> $src"
+        fi
+        fixed=$((fixed + 1)) ;;
+    esac
+  done
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "relink: DRY RUN — $fixed would be repaired, $kept already ok"
+  else
+    echo "relink: $PROJECT_NAME — $fixed repaired, $kept already ok" >&2
+  fi
+  return 0
+}
+
 case "$MODE" in
   doctor)    run_doctor; exit $? ;;
+  relink)    run_relink; exit $? ;;
   uninstall) run_uninstall; exit $? ;;
 esac
 
