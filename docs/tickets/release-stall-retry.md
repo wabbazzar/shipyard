@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-24
 - **Owner:** wabbazzar
-- **Status:** Polished — ready for `execute-ticket`; queued for a human stamp (not built)
+- **Status:** BUILT (Option A — `stall_retries` default 0) — stamped + shipped 2026-07-24
 - **Type:** bug
 - **Estimated Points:** 5 (P1 3 · P2 2)
 - **Refs:** `agents/release/runner.sh` (batch release/proctor job),
@@ -146,7 +146,28 @@ failing against pre-change `runner.sh` first, then green.
 
 ## Ledger
 
-_(empty — builder appends plan + commit hash per phase)_
+- **P1 — config-gated in-process stall retry** (DONE). Wrapped the `spawn_model`
+  call in `agents/release/runner.sh` in a bounded retry loop keyed on
+  `[release] stall_retries` (default 0, integer-validated, clamped ≤3). Stall
+  predicate refined to **"no `result.json` written"** (`! -s "$RESULT_FILE"`) —
+  the most faithful reading of "stalled before writing result.json" and it
+  guarantees a written verdict (pass OR fail) is never retried (simpler and
+  safer than the `release_incomplete` predicate the plan named; noted here as a
+  deliberate refinement). Emits one `release.stall.retry` event per retry;
+  backoff is `RELEASE_STALL_BACKOFF_SEC` (default 3s, 0 in tests). 4 bats cases
+  in `tests/release-stall-retry.bats`: default=0 → one spawn no retry (regression
+  guard, green on old code); stall→written-pass self-heals (1 retry, job not
+  fail); genuine `pass:false` never retried; persistent stall exhausts (2
+  retries) then fails. The two new-behavior cases are red on the pre-change
+  runner, green after.
+- **P2 — docs** (DONE). README control table documents `[release] stall_retries`
+  (default 0 = off, one extra model run per retry, a written verdict is never
+  retried). Per-project `.agents/gates.md` Traps note is a project-local
+  (gitignored self-install) artifact — left to each install.
+- **Owner decision:** shipped **Option A** (default 0, opt-in). Flipping the
+  fleet default to 1 stays a one-line follow-up (`.release.stall_retries // 0`).
+- Gates: full `bats tests/` 262/0; `leak-check` clean; `bash -n` clean.
+- Commit: see `git log` for `agents/release/runner.sh` + `tests/release-stall-retry.bats`.
 
 ---
 Run it with `execute-ticket` once stamped.

@@ -204,16 +204,39 @@ RUN CONTEXT (write your result to $RESULT_FILE — JSON only, no prose):
 
 $RUN_CONTEXT"
 
-: > "$RESULT_FILE"
+# [release] stall_retries (default 0 = today's behavior exactly): a transient
+# mid-stream stall shows up as the model producing NO result.json. When set,
+# retry the spawn — bounded, short backoff — before letting the job fail, so a
+# one-off network stall self-heals in-process instead of triggering a medic
+# retry storm (proposal shipyard:3b5a75e8). A run that WROTE a verdict (pass
+# OR fail) is a real result and is NEVER retried; only a no-result stall is.
+STALL_RETRIES="$(jq -r '.release.stall_retries // 0' <<<"$CFG_JSON")"
+[[ "$STALL_RETRIES" =~ ^[0-9]+$ ]] || STALL_RETRIES=0
+[ "$STALL_RETRIES" -gt 3 ] && STALL_RETRIES=3   # runaway guard
 
-# timeout replaces the retired per-invocation dollar ceiling as the runaway
-# guard; the json envelope gives real token usage for the daily gate.
-spawn_model --harness "$HARNESS" --model "$MODEL" --provider "$PROVIDER" \
-  --prompt "$PROMPT" --log "$LOG_FILE" --timeout "$WALL_CLOCK" \
-  --skip-perms --json
-CLAUDE_OUT="$SPAWN_RAW"; EXIT="$SPAWN_RC"; TOKENS="$SPAWN_TOKENS"
-# Keep the operator debug trail the text mode used to provide.
-jq -r '.result // empty' <<<"$CLAUDE_OUT" >> "$LOG_FILE" 2>/dev/null || true
+_stall_attempt=0
+while : ; do
+  : > "$RESULT_FILE"
+
+  # timeout replaces the retired per-invocation dollar ceiling as the runaway
+  # guard; the json envelope gives real token usage for the daily gate.
+  spawn_model --harness "$HARNESS" --model "$MODEL" --provider "$PROVIDER" \
+    --prompt "$PROMPT" --log "$LOG_FILE" --timeout "$WALL_CLOCK" \
+    --skip-perms --json
+  CLAUDE_OUT="$SPAWN_RAW"; EXIT="$SPAWN_RC"; TOKENS="$SPAWN_TOKENS"
+  # Keep the operator debug trail the text mode used to provide.
+  jq -r '.result // empty' <<<"$CLAUDE_OUT" >> "$LOG_FILE" 2>/dev/null || true
+
+  # Break on a written verdict (real result) or once retries are exhausted.
+  if [ -s "$RESULT_FILE" ] || [ "$_stall_attempt" -ge "$STALL_RETRIES" ]; then
+    break
+  fi
+  _stall_attempt=$(( _stall_attempt + 1 ))
+  echo "[$SVC] model stalled (no result.json); retry $_stall_attempt/$STALL_RETRIES" >> "$LOG_FILE"
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" release.stall.retry \
+    mode="$MODE" attempt="$_stall_attempt" max="$STALL_RETRIES" || true
+  sleep "${RELEASE_STALL_BACKOFF_SEC:-3}"
+done
 
 # If the Claude run died without writing results (budget cut, timeout,
 # or the session backgrounded a step and exited — real incident),
