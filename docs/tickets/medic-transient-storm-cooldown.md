@@ -189,6 +189,20 @@ the retry/no-retry contract on a transient failure was never pinned. Record in
   `timeout … claude` wrapping on every attempt, so this holds — but the builder
   must re-run `token-caps.bats` explicitly after touching `spawn.sh`.
 
+## Build protocol (orchestrator + honesty)
+
+The builder is the orchestrator: keep the changes small and precise, and
+**re-verify every gate personally** — do not trust a subagent's "green." Because
+the runners execute from this **live working tree** (`QUARTET_DIR` = this
+checkout) and `shipyard-suk.timer` fires **every 10 min**, keep the tree
+runnable between edits: `bash -n` each touched script immediately after editing,
+and never leave a half-written runner on disk.
+
+> Converge honestly or report the precise blocker with the actual evidence —
+> NEVER fake green, weaken a check, or hand-wave "should work". Run the real
+> command, read the real file, curl the real port, and report exact output
+> (exit codes, JSONL lines, HTTP codes), not adjectives.
+
 ## Implementation Plan
 
 Phases are independent and independently committable. P1 (retry) and P2
@@ -378,7 +392,7 @@ P3 depends on both.
 | D-1 | Config-gate the new cooldown? | **No** — fix unconditionally | It restores the `:1006` "don't loop again" intent and matches every sibling path; unset/default is the intended behavior, not a new capability. Veto → gate behind a `[medic] transient_stuck_cooldown_hours` key (0 = today's storm). |
 | D-2 | Freeze duration | **24h** (mirrors forbidden/infra `:987`) | Id rolls at UTC midnight anyway, so effective policy is "once per UTC day," matching `restart`. Veto → set a different window. |
 | D-3 | `reason` label | **`transient_stuck`** | Distinguishes it in `medic-state.json` / `medic.incident.frozen` events from `forbidden`/`restart`/`self_failure`. |
-| D-4 | Default retry count | **`SPAWN_STALL_RETRIES:-2`** (active by default; `=0` = exact old behavior) | House rule wants "unset == today," but a 0 default leaves the storm unfixed. Compromise: the *disable* path (`=0`) is proven byte-identical by a bats case, while the useful default (2) actually fixes it — same pattern as `${ROLE_MODEL:-sonnet}`. **Reviewer call: accept the fleet-wide behavior change, or set default 0 + opt-in per project.** |
-| D-5 | Which roles retry | **All roles** (incl. build/medic) | The stall aborts pre-completion so the retried role usually produced nothing; build's dirty-trunk guard + medic's self-failure guard cover the rare partial-commit case. Veto → read-mostly roles only (release/design/scribe), leaving build/medic single-shot. |
-| D-6 | codex/hermes symmetry | **One `_spawn_with_retry` helper, all three harnesses** | Uniform contract, one implementation to test. Signature list stays claude-centric but the RC≠124 + retry structure is harness-agnostic. Veto → claude-only retry for now. |
-| D-7 | Bake `SPAWN_STALL_RETRIES` into units via `install.sh`? | **No** — internal default only, document env var in README | Avoids a unit re-bake and a required env-table row; the in-`spawn.sh` default already reaches every unit. Veto (if a project must tune it declaratively) → add the bake path *and* the README row (house rule). |
+| D-4 | Default retry count | **LOCKED: `SPAWN_STALL_RETRIES:-2`** (active by default; `=0` = exact old behavior) | Owner-stamped 2026-07-24: accept the fleet-wide behavior change; treat as a bugfix, not a new capability. The `=0` disable path is proven byte-identical by a bats case (satisfies the "unset==today" mandate via the escape hatch), while the default 2 actually fixes it — same pattern as `${ROLE_MODEL:-sonnet}`. |
+| D-5 | Which roles retry | **LOCKED: All roles** (incl. build/medic) | Owner-stamped 2026-07-24. The stall aborts pre-completion so the retried role usually produced nothing; build's dirty-trunk guard + medic's self-failure guard cover the rare partial-commit case. |
+| D-6 | codex/hermes symmetry | **One `_spawn_with_retry` helper, all three harnesses** | Uniform contract, one implementation to test. Signature list stays claude-centric but the RC≠124 + retry structure is harness-agnostic. |
+| D-7 | Bake `SPAWN_STALL_RETRIES` into units via `install.sh`? | **No** — internal default only, document env var in README | Avoids a unit re-bake and a required env-table row; the in-`spawn.sh` default already reaches every unit. |
