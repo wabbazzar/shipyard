@@ -10,6 +10,13 @@ setup() { load helpers; quartet_setup; }
 CODEX_HOOK="agents/release/critic-queue-codex.sh"
 HERMES_HOOK="agents/release/critic-queue-hermes.sh"
 NOTE="agents/release/critic-note.sh"
+STOP_CODEX="agents/release/critic-stop-gate-codex.sh"
+STOP_HERMES="agents/release/critic-stop-gate-hermes.sh"
+
+# seed_block <project> <session> — write a block-severity finding file.
+seed_block() { printf 'block|src/auth.ts|removed the auth check\n' >"$1/tmp/critic-findings-$2"; }
+# stop_payload <project> <session> — session-stop hook JSON.
+stop_payload() { jq -nc --arg cwd "$1" --arg s "$2" '{session_id:$s,cwd:$cwd}'; }
 
 # feed <json> <hook> — pipe a payload into a capture hook, capture status.
 feed() { run bash -c 'printf "%s" "$1" | bash "$2"' _ "$1" "$QUARTET_ROOT/$2"; }
@@ -155,4 +162,40 @@ feed() { run bash -c 'printf "%s" "$1" | bash "$2"' _ "$1" "$QUARTET_ROOT/$2"; }
   [ "$status" -eq 0 ]
   run grep -E "send -t signal" "$SHIM_LOG/hermes.argv"
   [ "$status" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# stop-gate teeth parity (codex SessionEnd, hermes on_session_end)
+# ---------------------------------------------------------------------------
+
+@test "codex stop-gate: disarmed (no CRITIC_BLOCK) exits 0 even with a block finding" {
+  P="$(make_fixture_project sgc)"; seed_block "$P" s1
+  run bash -c 'printf "%s" "$1" | bash "$2"' _ "$(stop_payload "$P" s1)" "$QUARTET_ROOT/$STOP_CODEX"
+  [ "$status" -eq 0 ]
+}
+
+@test "codex stop-gate: armed + block finding exits 2 and names it (via payload .cwd)" {
+  P="$(make_fixture_project sgc2)"; seed_block "$P" s1
+  CRITIC_BLOCK=1 run bash -c 'printf "%s" "$1" | bash "$2"' _ "$(stop_payload "$P" s1)" "$QUARTET_ROOT/$STOP_CODEX"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"removed the auth check"* ]]
+}
+
+@test "codex stop-gate: armed but only warn/note findings exits 0" {
+  P="$(make_fixture_project sgc3)"; printf 'warn|x|y\n' >"$P/tmp/critic-findings-s1"
+  CRITIC_BLOCK=1 run bash -c 'printf "%s" "$1" | bash "$2"' _ "$(stop_payload "$P" s1)" "$QUARTET_ROOT/$STOP_CODEX"
+  [ "$status" -eq 0 ]
+}
+
+@test "hermes stop-gate: disarmed exits 0" {
+  P="$(make_fixture_project sgh)"; seed_block "$P" s1
+  run bash -c 'printf "%s" "$1" | bash "$2"' _ "$(stop_payload "$P" s1)" "$QUARTET_ROOT/$STOP_HERMES"
+  [ "$status" -eq 0 ]
+}
+
+@test "hermes stop-gate: armed + block finding exits 2" {
+  P="$(make_fixture_project sgh2)"; seed_block "$P" s1
+  CRITIC_BLOCK=1 run bash -c 'printf "%s" "$1" | bash "$2"' _ "$(stop_payload "$P" s1)" "$QUARTET_ROOT/$STOP_HERMES"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"removed the auth check"* ]]
 }
