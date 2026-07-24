@@ -19,6 +19,54 @@
 # harness exit never trips a caller's `set -e`. Exit code 2 (bad invocation) is
 # load-bearing: an unknown harness is a config error, not a no-op.
 
+# --- transient-stall retry (ticket: medic-transient-storm-cooldown) ----------
+# A transient upstream/stream error (the claude CLI prints "API Error: Response
+# stalled mid-stream" and exits non-zero) sank whole daily runs. Retry those a
+# bounded number of times across ALL harnesses (D-5). NEVER retry a wrapper
+# timeout (124 = a real runaway, the deliberate guard) or a non-transient
+# failure. Count: ${SPAWN_STALL_RETRIES:-2} (D-4; 0 = pre-fix single-shot,
+# byte-identical). Backoff seconds per attempt: ${SPAWN_STALL_BACKOFF:-5 15}.
+_SPAWN_STALL_RE='Response stalled mid-stream|overloaded_error|Connection error|error 5[0-9][0-9]|(^|[^0-9])(429|529)([^0-9]|$)'
+
+# _run_harness <stdin_mode> <cmd...>   stdin_mode "null" feeds the cmd </dev/null.
+# Sets SPAWN_RAW, SPAWN_RC, and _SPAWN_STDERR (the final attempt's stderr, also
+# appended to $logfile as before). Errexit-safe: callers invoke it as
+# `_run_harness … || true` and then read the globals.
+_run_harness() {
+  local stdin_mode="$1"; shift
+  local max="${SPAWN_STALL_RETRIES:-2}" attempt=0 errf b
+  # shellcheck disable=SC2206  # intentional word-split into a backoff list
+  local -a backoffs=(${SPAWN_STALL_BACKOFF:-5 15})
+  while : ; do
+    errf="$(mktemp)"; SPAWN_RC=0
+    if [ "$stdin_mode" = "null" ]; then
+      SPAWN_RAW="$("$@" </dev/null 2>"$errf")" || SPAWN_RC=$?
+    else
+      SPAWN_RAW="$("$@" 2>"$errf")" || SPAWN_RC=$?
+    fi
+    _SPAWN_STDERR="$(cat "$errf" 2>/dev/null || true)"; rm -f "$errf"
+    if [ "$logfile" != "/dev/null" ] && [ -n "$_SPAWN_STDERR" ]; then
+      printf '%s\n' "$_SPAWN_STDERR" >>"$logfile" 2>/dev/null || true
+    fi
+    # Terminal: success, a real timeout, or retries exhausted.
+    if [ "$SPAWN_RC" -eq 0 ] || [ "$SPAWN_RC" -eq 124 ] || [ "$attempt" -ge "$max" ]; then
+      return "$SPAWN_RC"
+    fi
+    # Retry ONLY a transient-stall signature; any other failure is terminal.
+    if printf '%s' "$_SPAWN_STDERR$SPAWN_RAW" | grep -qEi "$_SPAWN_STALL_RE"; then
+      attempt=$((attempt+1))
+      b="${backoffs[$((attempt-1))]:-15}"
+      if [ "$logfile" != "/dev/null" ]; then
+        echo "[spawn] transient stall (rc=$SPAWN_RC); retry $attempt/$max after ${b}s" \
+          >>"$logfile" 2>/dev/null || true
+      fi
+      if [ "$b" -gt 0 ] 2>/dev/null; then sleep "$b"; fi
+      continue
+    fi
+    return "$SPAWN_RC"
+  done
+}
+
 spawn_model() {
   local harness="claude" model="" provider="" prompt="" logfile="/dev/null"
   local timeout_val="" skip_perms=0 json=0
@@ -69,12 +117,10 @@ _spawn_claude() {
   [ "$json" -eq 1 ] && cmd+=(--output-format json)
   cmd+=("$prompt")
 
-  SPAWN_RC=0
-  if [ -n "$timeout_val" ]; then
-    SPAWN_RAW="$(timeout "$timeout_val" "${cmd[@]}" 2>>"$logfile")" || SPAWN_RC=$?
-  else
-    SPAWN_RAW="$("${cmd[@]}" 2>>"$logfile")" || SPAWN_RC=$?
-  fi
+  local -a inv=()
+  if [ -n "$timeout_val" ]; then inv+=(timeout "$timeout_val"); fi
+  inv+=("${cmd[@]}")
+  _run_harness "" "${inv[@]}" || true
 
   # The --output-format json envelope carries .result and .usage.*; text mode
   # (no --json) leaves these empty, which the jq // fallbacks handle.
@@ -113,12 +159,10 @@ _spawn_codex() {
   # </dev/null is load-bearing: `codex exec` with a prompt arg ALSO drains any
   # piped stdin ("Reading additional input from stdin...") and errors in a
   # headless command-substitution context. Feed it EOF so it uses the arg only.
-  SPAWN_RC=0
-  if [ -n "$timeout_val" ]; then
-    SPAWN_RAW="$(timeout "$timeout_val" "${cmd[@]}" </dev/null 2>>"$logfile")" || SPAWN_RC=$?
-  else
-    SPAWN_RAW="$("${cmd[@]}" </dev/null 2>>"$logfile")" || SPAWN_RC=$?
-  fi
+  local -a inv=()
+  if [ -n "$timeout_val" ]; then inv+=(timeout "$timeout_val"); fi
+  inv+=("${cmd[@]}")
+  _run_harness "null" "${inv[@]}" || true
 
   SPAWN_TEXT="$(cat "$last_msg" 2>/dev/null || true)"
   rm -f "$last_msg"
@@ -143,21 +187,17 @@ _spawn_hermes() {
   [ -n "$provider" ] && cmd+=(--provider "$provider")
   [ "$skip_perms" -eq 1 ] && cmd+=(--yolo --accept-hooks)
 
-  local errf; errf="$(mktemp)"
-  SPAWN_RC=0
-  if [ -n "$timeout_val" ]; then
-    SPAWN_RAW="$(timeout "$timeout_val" "${cmd[@]}" </dev/null 2>"$errf")" || SPAWN_RC=$?
-  else
-    SPAWN_RAW="$("${cmd[@]}" </dev/null 2>"$errf")" || SPAWN_RC=$?
-  fi
+  local -a inv=()
+  if [ -n "$timeout_val" ]; then inv+=(timeout "$timeout_val"); fi
+  inv+=("${cmd[@]}")
+  _run_harness "null" "${inv[@]}" || true
   SPAWN_TEXT="$SPAWN_RAW"
-  # keep the stderr trail (incl. the session_id line) in the caller's log
-  if [ "$logfile" != "/dev/null" ]; then cat "$errf" >>"$logfile" 2>/dev/null || true; fi
+  # _run_harness already appended stderr (incl. the session_id line) to $logfile.
 
   local sid
-  sid="$(grep -oE 'session_id:[[:space:]]*[A-Za-z0-9._-]+' "$errf" 2>/dev/null \
+  sid="$(printf '%s' "$_SPAWN_STDERR" \
+    | grep -oE 'session_id:[[:space:]]*[A-Za-z0-9._-]+' 2>/dev/null \
     | tail -1 | grep -oE '[A-Za-z0-9._-]+$' || true)"
-  rm -f "$errf"
   SPAWN_TOKENS=0
   if [ -n "$sid" ]; then
     SPAWN_TOKENS="$(hermes sessions export - --session-id "$sid" 2>/dev/null \

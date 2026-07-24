@@ -229,8 +229,10 @@ printf '%s' '$(usage_envelope)'"
   [ "$status" -ne 0 ]
 
   # The dispatcher wraps the invocation in `timeout "$timeout_val"` when the
-  # caller requests a timeout (the runaway guard, preserved).
-  run grep -cF 'timeout "$timeout_val" "${cmd[@]}"' "$QUARTET_ROOT/agents/lib/spawn.sh"
+  # caller requests a timeout (the runaway guard, preserved). The stall-retry
+  # refactor moved this into the per-harness `inv` array fed to _run_harness;
+  # the guard token is unchanged and still present on every harness path.
+  run grep -cF 'inv+=(timeout "$timeout_val")' "$QUARTET_ROOT/agents/lib/spawn.sh"
   echo "spawn.sh timeout guard count: $output"
   [ "${output:-0}" -ge 1 ]
 
