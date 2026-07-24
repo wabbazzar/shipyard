@@ -144,6 +144,7 @@ configuration, and it is YOUR job:
 | zero-CI merges | `[build] allow_no_ci` — a repo with no CI checks cannot pass the merge gate vacuously | **false** |
 | forbidden paths | `[build] forbidden_paths` — any edit inside one is refused (`forbidden_path:<path>`); medic never escalates failures there | `[]` |
 | spend / scope caps | every role: `budget_tokens_daily` (summed per project per role from the day's `job.end` events) + per-invocation `wall_clock_sec` timeouts as the hard guard; `[design] max_open_proposals`; `[medic] daily_escalation_cap` | 1M tokens/day |
+| stall self-heal | `[release] stall_retries` — a mid-stream model stall (no `result.json` written) is retried in-process before the job fails, so a one-off stall self-heals instead of forcing a medic retry. A written verdict (pass **or** fail) is never retried. Each retry is one extra model run. | **0** (off) |
 | off switch | `systemctl --user disable --now <project>-<display>.timer` — per crew, instant | — |
 | inspect first | `install.sh --dry-run` prints every unit and crontab change before writing | — |
 
