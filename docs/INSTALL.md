@@ -61,10 +61,10 @@ grades against. Asked for at install time; never inferred.
 ### L5 — skills
 **Where:** `<project>/.claude/skills/` (symlinks into `<harness>/skills/`).
 **What:** `write-ticket`, `bugfix`, `feature`, `polish-ticket`, `execute-ticket`,
-`coverage-audit` — **the same files agents load headless and humans invoke
-in-session.** One implementation, two callers, no agent-only fork. The installer
-symlinks the harness skills so a core upgrade (L0) flows to every project's
-skills at once.
+`coverage-audit`, `shipyard` — **the same files agents load headless and humans
+invoke in-session.** One implementation, two callers, no agent-only fork. The
+installer symlinks the harness skills so a core upgrade (L0) flows to every
+project's skills at once.
 
 The first three are the **front doors** into the design loop. `bugfix`
 (reproduce-and-root-cause first) and `feature` (clarify and set a Definition of
@@ -97,7 +97,7 @@ recon  →  interview  →  write L2–L5  →  bake units  →  verify
    units with L1 env baked in, symlinks the L5 skills, enables the timers,
    removes legacy cron launchers.
 5. **Verify.** `medic --mode scan --dry-run` loads clean, the release gates
-   are green now, `list-timers` shows sane next-fires, the six skill
+   are green now, `list-timers` shows sane next-fires, the seven skill
    symlinks resolve.
 
 ## Doctor — audit what an install owns

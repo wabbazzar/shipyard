@@ -191,7 +191,7 @@ can_merge = false
 Default `--agents` is `build,release,medic,scribe` — design is opt-in. The
 installer bakes the `[names]` theme block into the config, writes
 `~/.config/systemd/user/<project>-<display>.{service,timer}` and enables the
-timers, symlinks the six shared skills into `<project>/.claude/skills/`,
+timers, symlinks the seven shared skills into `<project>/.claude/skills/`,
 drops `skills/gates.md.template` into `.agents/gates.md` (never clobbering an
 existing gate file), removes legacy cron launchers that would race the timers
 (crontab backed up first), and prints next-fire times.
@@ -365,7 +365,7 @@ agents/
 ├── medic/      role.md + runner.sh + check-examples/      [spacetime: suk]
 ├── scribe/     role.md + runner.sh                        [spacetime: chronicler]
 └── lib/        load-config.sh, naming.sh, post-run.sh, log_event.sh, revert-merge.sh
-skills/         the six shared skills + install + gates.md.template
+skills/         the seven shared skills + install + gates.md.template
 install.sh      per-project installer (idempotent; --theme names)
 docs/           INSTALL.md, ADAPTING.md, shoulder-mode.md, deck data
 pack.toml       BopBop pack manifest

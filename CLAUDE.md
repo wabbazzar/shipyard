@@ -33,7 +33,7 @@ agents/<role>/role.md     generic prompt; project appends .agents/<role>.md
 agents/lib/               load-config.sh naming.sh post-run.sh log_event.sh
                           revert-merge.sh detect-trunk.sh mentat-proposal.sh
 agents/release/critic-*   shoulder mode (queue → watch → cold critique)
-skills/                   six shared skills + install skill + gates template
+skills/                   seven shared skills + install skill + gates template
 install.sh                per-project installer / --doctor / --uninstall
 scripts/                  leak-check, deck generator + freshness/render gates
 tests/                    bats suite (138 tests, ~17s)
@@ -43,7 +43,7 @@ docs/                     INSTALL.md, ADAPTING.md, shoulder-mode.md, the deck
 ## Gates — run these before claiming anything works
 
 ```bash
-bats tests/                      # full suite, ~17s, no network/LLM (PATH shims)
+bats tests/                      # full suite, ~23s, no network/LLM (PATH shims)
 bash scripts/leak-check.sh       # no owner/machine-specific data (also a pre-commit hook)
 bash scripts/check-deck-fresh.sh # docs/shipyard-data.json regenerates byte-identical
 bash -n install.sh agents/lib/*.sh agents/*/runner.sh   # syntax
