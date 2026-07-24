@@ -13,9 +13,13 @@
 # If <project>/tmp/ doesn't exist, falls back to
 # /tmp/shipyard-critic-<uid>/<project-basename>/.
 #
-# ALWAYS exits 0, even on malformed input or write errors.
+# The filters + queue format live in critic-queue-lib.sh (shared with the
+# codex/hermes capture hooks). ALWAYS exits 0, even on malformed input.
 
 set -u
+
+# shellcheck source=agents/release/critic-queue-lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/critic-queue-lib.sh"
 
 INPUT="$(cat 2>/dev/null || true)"
 
@@ -23,37 +27,7 @@ FILE_PATH="$(jq -r '.tool_input.file_path // empty' <<<"$INPUT" 2>/dev/null || t
 [ -n "$FILE_PATH" ] || exit 0   # not an Edit/Write payload — nothing to queue
 
 SESSION_ID="$(jq -r '.session_id // empty' <<<"$INPUT" 2>/dev/null || true)"
-[ -n "$SESSION_ID" ] || SESSION_ID="default"
 
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
-
-# Absolute paths outside this project belong to some other repo's critic
-# (a session working across two checkouts edits both); queueing them here
-# gets them critiqued against the WRONG project's conventions and trunk.
-case "$FILE_PATH" in
-  /*)
-    case "$FILE_PATH" in
-      "$PROJECT_DIR"/*) ;;
-      *) exit 0 ;;
-    esac ;;
-esac
-
-# Gitignored paths (result JSONs, scratch files under tmp/) are runtime
-# artifacts, never release candidates. Queueing them produced critic runs
-# whose only "change" was e.g. tmp/medic-result.json — pure noise, paid
-# for in tokens and a Signal ping. check-ignore failing open (not a repo,
-# git missing) keeps the old behavior.
-if git -C "$PROJECT_DIR" check-ignore -q "$FILE_PATH" 2>/dev/null; then
-  exit 0
-fi
-if [ -d "$PROJECT_DIR/tmp" ]; then
-  QUEUE_DIR="$PROJECT_DIR/tmp"
-else
-  QUEUE_DIR="/tmp/shipyard-critic-$(id -u)/$(basename "$PROJECT_DIR")"
-  mkdir -p "$QUEUE_DIR" 2>/dev/null || exit 0
-fi
-
-printf '%s %s\n' "$FILE_PATH" "$(date +%s)" \
-  >> "$QUEUE_DIR/critic-queue-$SESSION_ID" 2>/dev/null || true
+cq_enqueue "$FILE_PATH" "$SESSION_ID" "${CLAUDE_PROJECT_DIR:-$PWD}"
 
 exit 0

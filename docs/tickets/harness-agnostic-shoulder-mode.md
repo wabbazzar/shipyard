@@ -117,13 +117,13 @@ real payloads, not assumptions.
 | O1 | `[notify]` shape | A `[notify]` table with per-harness `cmd`/`target`, baked into `*_NOTE_CMD`. Fallback to reusing the `QUARTET_NOTIFY_CMD` env contract if that proves cleaner during build. |
 | O2 | Env var name for per-harness delivery | Keep the single `CLAUDE_NOTE_CMD` name (already the drain's contract) and let `critic-note.sh` dispatch by harness, rather than minting `CODEX_NOTE_CMD`/`HERMES_NOTE_CMD`. Revisit if a harness needs a distinct command. |
 
-### User-decision class (flag at review — no default invented)
+### User-decision class (resolved — human stamped 2026-07-24)
 - **D0 reverses a documented design principle** (`install.sh` refusing to own
-  `.claude/settings.json`). The opt-in default keeps today's behavior, so **no
-  phase is blocked** — but the reviewer should confirm they want install to be
-  *able* to edit `~/.codex/config.toml` / `~/.hermes/config.yaml` at all, even
-  behind a flag. Writing to a home-level harness config is an **ask-first**
-  action at build time (Boundaries).
+  `.claude/settings.json`). **STAMPED: the operator approved install being able
+  to edit `~/.codex/config.toml` / `~/.hermes/config.yaml` behind the opt-in.**
+  The opt-in default still keeps today's no-touch behavior; writing to a
+  home-level harness config remains an **ask-first** action at build time, but
+  the capability itself is authorized.
 
 ## Orchestration protocol
 
@@ -295,8 +295,88 @@ the exact commands from `.agents/gates.md`.
 
 ## Ledger
 
-_(builder appends per phase: plan → commit hash → honest notes, incl. the P0
-pinned payload field names and the two Phase-5 live-run evidence blocks.)_
+### P0 — payloads pinned (2026-07-24, real captures)
+Method: hermes via isolated `HERMES_HOME` + `hermes hooks test post_tool_call`
+(synthetic, no model); codex via isolated `CODEX_HOME` (auth copied) + a real
+`codex exec --sandbox workspace-write` with an inline `[[hooks.PostToolUse]]`
+dump hook. Both reproduced.
+
+**codex** — event `PostToolUse`; edit tool is **`apply_patch`**, and
+`tool_input` carries a **V4A patch string** in `.tool_input.command`, NOT a
+`file_path`. Captured:
+```json
+{ "session_id":"019f95…", "cwd":"/tmp/tmp.Wp0…", "hook_event_name":"PostToolUse",
+  "tool_name":"apply_patch",
+  "tool_input":{"command":"*** Begin Patch\n*** Add File: hello.txt\n+hi\n*** End Patch"} }
+```
+→ session=`.session_id`, project=`.cwd`, files = parse
+`^\*\*\* (Add|Update|Delete) File: (.+)$` from `.tool_input.command`
+(multi-file; paths relative to `.cwd`). Also read `.tool_input.file_path` if a
+future non-patch tool sets it. Config: inline TOML
+`[[hooks.PostToolUse]]` + nested `[[hooks.PostToolUse.hooks]]` (type/command);
+`config.toml parse ok`. Hook trust: `--dangerously-bypass-hook-trust` for
+automation.
+
+**hermes** — event `post_tool_call`; edit tools `write_file|patch|edit_file`.
+Captured (synthetic):
+```json
+{ "hook_event_name":"post_tool_call", "tool_name":"write_file",
+  "tool_input":{...}, "session_id":"test-session", "cwd":"/home/…/shipyard",
+  "extra":{"task_id":"…","tool_call_id":"…"} }
+```
+→ session=`.session_id`, project=`.cwd`, file=`.tool_input.path` (write_file &
+patch-replace schema, `tools/file_tools.py:1956,1988`). Config: `~/.hermes/config.yaml`
+`hooks:\n  post_tool_call:\n    - matcher: "write_file|patch|edit_file"\n      command: …`;
+first-use consent → `~/.hermes/shell-hooks-allowlist.json` or `HERMES_ACCEPT_HOOKS=1`.
+Session-end analog for teeth: `on_session_end` / `subagent_stop`.
+
+**Shared normalization:** all three → append `"<abs-file> <epoch>"` to
+`<project>/tmp/critic-queue-<session>` via a shared enqueue (relative paths made
+absolute against the harness's project dir), so `critic-watch.sh` drain is
+untouched.
+
+### P1 — codex capture + generic delivery (74384d7)
+`critic-queue-lib.sh` (shared `cq_enqueue` + `cq_under_project` lexical `..`
+fence — a test caught a real path-traversal escape), `critic-queue.sh`
+refactored onto it (21 claude cases stay green), `critic-queue-codex.sh`,
+`critic-note.sh`. 10 bats (fail-first shown).
+
+### P2 — hermes capture (0e41224)
+`critic-queue-hermes.sh` (`.tool_input.path` + V4A `.tool_input.patch`);
+`cq_v4a_paths` factored into the lib, codex reuses it; `hermes send` delivery
+branch. 5 bats.
+
+### P3 — opt-in installable wiring + doctor (9798c29)
+`agents/lib/shoulder-wire.sh` (additive, idempotent per-harness merge; hermes
+refuses rc2 rather than corrupt an existing `hooks:`); `install.sh
+--wire-shoulder` / `[shoulder] auto_wire` writes the hook + `.agents/shoulder.env`
+from `[notify]`; `--doctor` drift check. 9 bats incl. **unset-invariance**
+(a claude-only install stays byte-identical) + additive-merge.
+
+### P4 — stop-gate teeth parity (62522e3)
+`critic-stop-gate-lib.sh` (shared `csg_gate`), claude gate refactored onto it,
+`critic-stop-gate-codex.sh` / `-hermes.sh`. 5 bats across all three states.
+Scope note: the stop hook's *config-wiring* is a documented manual step (the
+capture hook is what `--wire-shoulder` registers); whether a harness honors a
+stop-hook exit 2 is a live property.
+
+### P5 — LIVE e2e (both harnesses) + docs (this commit)
+Run on this box 2026-07-24, recorded in `.agents/gates.md` Traps:
+- **codex** live: `codex exec --sandbox workspace-write` (isolated `CODEX_HOME`,
+  inline `[[hooks.PostToolUse]]` → real `critic-queue-codex.sh`) created
+  `src/widget.ts` → queue got `src/widget.ts <epoch>`.
+- **hermes** live: `hermes chat --yolo --accept-hooks` (isolated `HERMES_HOME`,
+  `hooks: post_tool_call:` → real `critic-queue-hermes.sh`) created
+  `src/gadget.ts` → queue got `src/gadget.ts <epoch>`.
+- **full chain**: `critic-watch.sh --once` on the codex queue → real critique
+  (`release.critique files=1 tokens=17`) → delivered via shipped
+  `critic-note.sh --harness codex` (owner-alert fallback fired).
+Docs: `README.md` (harness-agnostic shoulder para + env-table rows) and
+`docs/shoulder-mode.md` (Harness support table + opt-in wiring).
+
+**Final gate sweep:** see the P5 commit. Not merged (`can_merge=false`,
+merge-is-live) — branch `feat/harness-agnostic-shoulder-mode` awaits a human
+stamp.
 
 ---
 Run it: `execute-ticket docs/tickets/harness-agnostic-shoulder-mode.md`
