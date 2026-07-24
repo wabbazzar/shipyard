@@ -58,6 +58,8 @@ fi
 source "$QUARTET_DIR/agents/lib/load-config.sh"
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/spawn.sh"
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/release-verdict.sh"
 CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
 
@@ -237,6 +239,25 @@ if [ "$PASS" = "true" ]; then JOB_STATUS="ok"; else JOB_STATUS="fail"; fi
 # A nonzero claude exit with a usable result is a PARTIAL run — never ok.
 [ "$JOB_STATUS" = "ok" ] && [ "$EXIT" -ne 0 ] && JOB_STATUS="partial"
 
+# An unfinished run (wall-clock timeout / SIGKILL, or the caller's
+# "run-in-progress" sentinel left as the verdict) is NOT a failed check.
+# JOB_STATUS/escalation are deliberately unchanged — only the human alarm and
+# the dashboard's dispatch-item minting key off this flag (see release-verdict.sh).
+INCOMPLETE=0
+if [ "$PASS" != "true" ] && release_incomplete "$EXIT" "$RESULT_FILE"; then
+  INCOMPLETE=1
+  # Stamp the result so the hub's guardianItems skips minting a false
+  # "proctor failed" dispatch item from an unfinished run.
+  if [ -s "$RESULT_FILE" ]; then
+    _iv_tmp="$(mktemp)"
+    if jq '. + {incomplete: true}' "$RESULT_FILE" > "$_iv_tmp" 2>/dev/null; then
+      mv "$_iv_tmp" "$RESULT_FILE"
+    else
+      rm -f "$_iv_tmp"
+    fi
+  fi
+fi
+
 # Build category tag from the result fields (project-specific structure
 # but the field names are stable across release-style runs).
 CATEGORY="$(python3 - "$RESULT_FILE" <<'PY' 2>/dev/null || echo unknown
@@ -261,11 +282,7 @@ PY
 # from the events stream, not from the notification body.
 SUMMARY="$(tail -30 "$LOG_FILE" | grep -A20 -i "RELEASE RESULT" | head -10 || true)"
 [ -z "$SUMMARY" ] && SUMMARY="$SVC completed (mode=$MODE, exit=$EXIT). See $LOG_FILE."
-if [ "$PASS" = "true" ]; then
-  quartet_notify "$PROJECT_NAME ${DISPLAY^} ($MODE)" "$SUMMARY" || true
-else
-  quartet_notify "$PROJECT_NAME ${DISPLAY^} FAILED ($MODE)" "$SUMMARY" || true
-fi
+quartet_notify "$(release_notify_title "$PROJECT_NAME" "${DISPLAY^}" "$MODE" "$PASS" "$INCOMPLETE")" "$SUMMARY" || true
 
 JOB_DUR=$(( $(date +%s) - JOB_START ))
 
