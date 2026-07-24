@@ -43,8 +43,11 @@ GENERIC_SKILLS="$(grep -m1 -oE 'GENERIC_SKILLS="[^"]*"' "$QUARTET_DIR/install.sh
 [ -n "$GENERIC_SKILLS" ] || { echo "reconcile-skills: GENERIC_SKILLS not found" >&2; exit 2; }
 
 # discover_projects — unique --project dirs from the installed crew units.
+# Units live where install.sh writes them: $HOME/.config/systemd/user (install.sh
+# hardcodes this and does NOT honor XDG_CONFIG_HOME, so neither may we — else a
+# machine with XDG_CONFIG_HOME set would scan the wrong dir and find nothing).
 discover_projects() {
-  local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  local unit_dir="$HOME/.config/systemd/user"
   [ -d "$unit_dir" ] || return 0
   grep -hoE -- '--project[ =][^ ]+' "$unit_dir"/*.service 2>/dev/null \
     | sed -E 's/^--project[ =]//' | sort -u
