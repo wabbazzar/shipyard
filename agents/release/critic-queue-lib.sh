@@ -79,3 +79,11 @@ cq_under_project() {
     *)           return 1 ;;
   esac
 }
+
+# cq_v4a_paths — read a V4A patch on stdin, echo one touched path per line.
+# codex `apply_patch` and hermes `patch` (mode=patch) both use this format:
+#   *** Add File: <path> / *** Update File: <path> / *** Delete File: <path>
+cq_v4a_paths() {
+  grep -oE '^\*\*\* (Add|Update|Delete) File: .+$' \
+    | sed -E 's/^\*\*\* (Add|Update|Delete) File: //'
+}

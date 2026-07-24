@@ -105,3 +105,54 @@ feed() { run bash -c 'printf "%s" "$1" | bash "$2"' _ "$1" "$QUARTET_ROOT/$2"; }
   run bash "$QUARTET_ROOT/$NOTE" --harness codex
   [ "$status" -eq 2 ]
 }
+
+# ---------------------------------------------------------------------------
+# hermes capture (post_tool_call → tool_input.path or a V4A patch)
+# ---------------------------------------------------------------------------
+
+@test "hermes write_file queues tool_input.path and exits 0" {
+  P="$(make_fixture_project hms)"
+  json="$(jq -nc --arg cwd "$P" \
+    '{hook_event_name:"post_tool_call",tool_name:"write_file",session_id:"h1",cwd:$cwd,tool_input:{path:"src/a.ts"}}')"
+  feed "$json" "$HERMES_HOOK"
+  [ "$status" -eq 0 ]
+  grep -qE '^src/a\.ts [0-9]+$' "$P/tmp/critic-queue-h1"
+}
+
+@test "hermes patch(mode=patch) queues every V4A path" {
+  P="$(make_fixture_project hms-patch)"
+  patch="$(printf '*** Begin Patch\n*** Update File: src/x.ts\n+a\n*** Add File: src/y.ts\n+b\n*** End Patch')"
+  json="$(jq -nc --arg cwd "$P" --arg p "$patch" \
+    '{hook_event_name:"post_tool_call",tool_name:"patch",session_id:"h2",cwd:$cwd,tool_input:{mode:"patch",patch:$p}}')"
+  feed "$json" "$HERMES_HOOK"
+  [ "$status" -eq 0 ]
+  grep -qE '^src/x\.ts [0-9]+$' "$P/tmp/critic-queue-h2"
+  grep -qE '^src/y\.ts [0-9]+$' "$P/tmp/critic-queue-h2"
+}
+
+@test "hermes exits 0 on garbage stdin and queues nothing" {
+  P="$(make_fixture_project hms-garbage)"
+  feed 'not json {{{[' "$HERMES_HOOK"
+  [ "$status" -eq 0 ]
+  run bash -c "ls '$P/tmp'/critic-queue-* 2>/dev/null"
+  [ -z "$output" ]
+}
+
+@test "hermes drops a path escaping the project" {
+  P="$(make_fixture_project hms-escape)"
+  json="$(jq -nc --arg cwd "$P" \
+    '{tool_name:"write_file",session_id:"h3",cwd:$cwd,tool_input:{path:"../evil.ts"}}')"
+  feed "$json" "$HERMES_HOOK"
+  [ "$status" -eq 0 ]
+  run bash -c "ls '$P/tmp'/critic-queue-* 2>/dev/null"
+  [ -z "$output" ]
+}
+
+@test "critic-note hermes branch sends via 'hermes send' to the configured target" {
+  make_stub hermes 0
+  CRITIC_NOTE_TARGET="signal" \
+    run bash "$QUARTET_ROOT/$NOTE" --harness hermes h1 "1 block across 2 files"
+  [ "$status" -eq 0 ]
+  run grep -E "send -t signal" "$SHIM_LOG/hermes.argv"
+  [ "$status" -eq 0 ]
+}
