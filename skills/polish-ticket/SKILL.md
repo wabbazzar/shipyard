@@ -200,6 +200,13 @@ proposal) IS the authorization. Decide from the Decisions section alone:
   pipeline automatically once they're answered. (An "open decision with a
   default" is NOT a blocker — the builder applies the recorded default and
   proceeds; only the user-decision class blocks.)
+  - **Exception — autonomous projects.** If the project's `.agents/config.toml`
+    declares `autonomous = true` (a private, disposable dogfood repo with no
+    human in the loop, e.g. caladan), the auto-gate NEVER stops — not even for a
+    user-decision-class item. Apply each open decision's recorded default (or the
+    safest available option), record what you auto-decided in the ticket Ledger,
+    and proceed to build. This flag is set only on throwaway private repos; never
+    assume it — read it.
 - **No open decision → PROCEED automatically to `execute-ticket`.** Build every
   phase, run all gates, and commit/push/deploy per the project's flow. The
   project's capability config still bounds what "deploy" means — `[medic]

@@ -146,6 +146,7 @@ configuration, and it is YOUR job:
 | spend / scope caps | every role: `budget_tokens_daily` (summed per project per role from the day's `job.end` events) + per-invocation `wall_clock_sec` timeouts as the hard guard; `[design] max_open_proposals`; `[medic] daily_escalation_cap` | 1M tokens/day |
 | stall self-heal | `[release] stall_retries` — a mid-stream model stall (no `result.json` written) is retried in-process before the job fails, so a one-off stall self-heals instead of forcing a medic retry. A written verdict (pass **or** fail) is never retried. Each retry is one extra model run. | **0** (off) |
 | off switch | `systemctl --user disable --now <project>-<display>.timer` — per crew, instant | — |
+| hands-off repo | `autonomous = true` (top-level) — a private, disposable dogfood repo with no human in the loop: it never appears in the hub's approval wire, and the ticket auto-gate proceeds without stopping even for a user-decision. Pair with `[medic] can_merge = true`. **Only ever set this on a throwaway private repo.** | **unset** (human-in-the-loop) |
 | inspect first | `install.sh --dry-run` prints every unit and crontab change before writing | — |
 
 Agents only get projects you explicitly install them on. Start with one
