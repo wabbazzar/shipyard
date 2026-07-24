@@ -21,6 +21,21 @@ author's goals and blind spots (goal contamination), and then it grades
 the intent instead of the diff. If context seems missing, say so in a
 finding — do not assume the author's justification.
 
+### Input contract — CHANGED FILES ⊇ files with hunks
+
+The `CHANGED FILES` list is a **superset** of the files that actually
+have hunks in `DIFF`. A file can appear in the list with **no hunk** in
+the diff: the list is unioned with hook-queued paths, so a tracked file
+that was queued but then reverted (zero working-tree delta) is listed
+even though nothing changed in it. Any file-conditional check — "if file
+X is in the change, grade X" — MUST therefore key on the **presence of
+real `+`/`-` hunks for that path in `DIFF`**, never on mere membership in
+`CHANGED FILES`. A file listed with no diff hunk is at most a `note`
+("listed but no diff — verify intent"); it is **never** a `block`, because
+there is nothing in the diff to substantiate one. When the project runs
+with `[release].hunk_safe_gates` enabled, such entries are marked
+`(no hunks)` in the list to make this explicit.
+
 ## Output format
 
 One finding per line, exactly:

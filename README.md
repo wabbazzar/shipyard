@@ -88,11 +88,35 @@ stamp unless the operator says "and build it."
 
 ## Skills-parity
 
-The installer symlinks six skills — `write-ticket`, `bugfix`,
-`feature`, `polish-ticket`, `execute-ticket`, `coverage-audit` — from this
-repo's `skills/` into `<project>/.claude/skills/`. Headless agents and
+The installer symlinks seven skills — `write-ticket`, `bugfix`,
+`feature`, `polish-ticket`, `execute-ticket`, `coverage-audit`, `shipyard` —
+from this repo's `skills/` into `<project>/.claude/skills/`. Headless agents and
 in-session humans load the **identical files**: one implementation, two
 callers, no agent-only fork. A core upgrade flows to every project at once.
+
+**`/shipyard`** is the operator's in-project console for the install itself
+(`skills/shipyard/shipyard.sh` is its deterministic core, with load-bearing exit
+codes `0`/`2`/`3`):
+
+- `shipyard status` — read-only report of the units/timers installed here, where
+  each `.agents/<role>.md` block lives, and an `install.sh --doctor` drift audit
+  (exit `3` when nothing is installed).
+- `shipyard add-specialist <subsystem>` — scaffold the **specialist** archetype
+  (below) for one subsystem and wire it into the project's `write_ticket`
+  context, a gates note, and a hunk-keyed release-critic block.
+- `shipyard learn "<lesson>"` — route a lesson through the `docs/ADAPTING.md`
+  taxonomy (`--to project|generic|install`, else a keyword heuristic) to a
+  project note or a `docs/tickets/` stub for review.
+
+### The specialist archetype (an installable sixth role)
+
+Beyond the five lifecycle roles, a project can install a **specialist**
+(`agents/specialist/`): a standing, knowledge-bearing *reviewer* for one
+subsystem that reads a living decision log before it answers, guards that
+subsystem's settled decisions and invariants against fresh-context erosion, and
+reproduces "why does X happen" against the real system rather than narrating a
+plausible story. It reviews; it does not redesign. Scaffold it with
+`/shipyard add-specialist`. See `docs/ADAPTING.md`.
 
 ## North star
 
@@ -237,6 +261,13 @@ headers, secrets-in-commits grep over the last 24h (reported redacted).
 Enable with a `[release.security]` block (`audit_dirs`, optional
 `header_probe_url`); omit it and the sweep is skipped. Details in
 `agents/release/role.md`.
+
+The shoulder-mode critic's `CHANGED FILES` list is a *superset* of the files
+that actually have diff hunks (it unions in hook-queued paths), so a
+file-conditional critic check keyed on list membership can misfire on a file
+with no delta. Set `[release] hunk_safe_gates = true` to mark no-hunk entries
+`(no hunks)` in the prompt so a check can key on real hunks; unset (the default)
+leaves the prompt byte-identical. See `agents/release/critic-role.md`.
 
 ## Notifications & environment knobs
 
