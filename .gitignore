@@ -2,3 +2,15 @@ data/
 *.log
 tmp/
 __pycache__/
+# Self-install footprint (this public repo hosts its own crew). ALL of it is
+# machine-specific and would trip scripts/leak-check.sh if committed:
+#   .agents/  — this box's config.toml (absolute project_dir) + role prompts
+#               that cite the hub event-stream path (/home/…); a stranger
+#               cloning shipyard must NOT inherit it. Runners read it from the
+#               live checkout via --project, so nightly self-improvement works
+#               without it being tracked.
+#   .claude/  — installer-created skill symlinks with absolute targets.
+#   .worktrees/ — build's scratch checkouts.
+.agents/
+.claude/
+.worktrees/
