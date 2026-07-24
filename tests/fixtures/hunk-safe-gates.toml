@@ -1,0 +1,24 @@
+# Fixture: [release].hunk_safe_gates = true — the opt-in that makes the shoulder
+# critic mark CHANGED FILES entries with no diff hunk as "(no hunks)". Everything
+# else mirrors absent-keys.toml so the critic path runs on a bare fixture.
+
+project_name  = "__PROJECT_NAME__"
+project_owner = "fixture-owner"
+
+[paths]
+result_dir   = "tmp"
+worktree_dir = ".worktrees"
+
+[release]
+test_cmd        = "true"
+typecheck       = "true"
+budget_hook     = 0.10
+budget_daily    = 0.10
+hunk_safe_gates = true
+
+[build]
+budget         = 0.10
+wall_clock_sec = 60
+
+[medic]
+daily_escalation_cap = 5

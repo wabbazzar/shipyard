@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-23
 - **Owner:** wabbazzar
-- **Status:** Polished — ready for `execute-ticket` (behind the human stamp)
+- **Status:** Built — all six phases green on `feat/crew-extension-kit`; awaiting human PR stamp (merge-is-live, `can_merge=false`)
 - **Type:** feature (P1 is a bugfix)
 - **Estimated Points:** 21 (P1 3 · P2 5 · P3 3 · P4 5 · P5 3 · P6 2)
 - **Refs:** motivated by a downstream install where an operator hand-built a
@@ -390,29 +390,31 @@ that closes its gap, **shown red against pre-change code first** (house rule):
 
 ## Acceptance Criteria / Definition of Done
 
-- [ ] **P1** — `critic-role.md` documents the CHANGED-FILES-⊇-DIFF contract; with
+- [x] **P1** — `critic-role.md` documents the CHANGED-FILES-⊇-DIFF contract; with
       the new flag OFF the critic prompt is byte-identical to today; with it ON a
-      tracked zero-delta file is annotated/pruned so a check can key on hunks; a
-      listed-but-no-hunk file can no longer produce a substantiated `block`.
-- [ ] **P2** — `agents/specialist/role.md` + `decision-log.template.md` exist,
+      tracked zero-delta file is annotated (`(no hunks)`) so a check can key on
+      hunks; a listed-but-no-hunk file can no longer produce a substantiated
+      `block`. (`a8d61eb`)
+- [x] **P2** — `agents/specialist/role.md` + `decision-log.template.md` exist,
       carry the required section anchors, are placeholder-only, and are documented
-      in ADAPTING.md.
-- [ ] **P3** — `/shipyard` (status) reports installed units/timers + project-block
+      in ADAPTING.md. (`4dfbdfc`)
+- [x] **P3** — `/shipyard` (status) reports installed units/timers + project-block
       locations + `--doctor`; `shipyard` is in `GENERIC_SKILLS` and links on
-      install; `docs/shipyard-data.json` regenerated; exit `3` when nothing is
-      installed.
-- [ ] **P4** — `/shipyard add-specialist <subsystem>` scaffolds the agent + a
+      install; `docs/shipyard-data.json` regenerated (no-op — frontdoor is
+      deck-neutral); exit `3` when nothing is installed. (`358eacf`)
+- [x] **P4** — `/shipyard add-specialist <subsystem>` scaffolds the agent + a
       decision-log doc AND performs the three wirings (write_ticket context, gates
-      note, hunk-keyed release block); missing arg ⇒ exit `2`; every model call is
-      timeout+token-capped.
-- [ ] **P5** — `/shipyard learn "<lesson>"` routes to the correct one of
+      note, hunk-keyed release block); missing arg ⇒ exit `2`; no uncapped model
+      call (drafting is deterministic — token-caps vacuously held). (`dd1f640`)
+- [x] **P5** — `/shipyard learn "<lesson>"` routes to the correct one of
       project-specific / generic / install-time per the ADAPTING taxonomy; empty
-      ⇒ exit `2`; model call token-capped.
-- [ ] Every new behavior sits behind a config key whose unset value reproduces
-      today's behavior, each proven by a `bats` case shown red-first.
-- [ ] `bats tests/`, `leak-check.sh`, `check-deck-fresh.sh` all green; no
+      ⇒ exit `2`; no uncapped model call (routing is deterministic). (`a5b92c8`)
+- [x] Every new behavior sits behind a config key / opt-in whose unset value
+      reproduces today's behavior, each proven by a `bats` case shown red-first
+      (P1 flag byte-identity; specialist/skill are additive, off until invoked).
+- [x] `bats tests/` (195), `leak-check.sh`, `check-deck-fresh.sh` all green; no
       owner/machine-specific data in any tracked file; README + ADAPTING updated;
-      `install.sh --doctor` clean.
+      `install.sh --doctor` clean on a fresh install (doctor.bats case 1).
 
 ## Dependencies
 
@@ -472,12 +474,12 @@ gate that could not be made green by legitimate means.)_
 
 | Phase | Plan / commit | Notes |
 |---|---|---|
-| P1 | | |
-| P2 | | |
-| P3 | | |
-| P4 | | |
-| P5 | | |
-| P6 | | |
+| P1 | `[release].hunk_safe_gates` flag + `_annotate_no_hunk` in critic-watch.sh; input-contract note in critic-role.md; red-first `hunk-safe-gates.bats` + fixture. **`a8d61eb`** | Green. Flag-OFF byte-identity pinned; flag-ON marks phantom only. Red-first verified (test 1 fails on pre-change code via `git stash`). Note: critic-role.md's own note contains "(no hunks)", so assertions key on filename+marker, not the bare marker. |
+| P2 | `agents/specialist/{role.md,decision-log.template.md}` (placeholder-only archetype); ADAPTING.md section; red-first `specialist-archetype.bats`. | Green. 4 anchors asserted; red-first verified (files moved aside → all fail). No skill/frontmatter touched ⇒ deck stays fresh without regen. |
+| P3 | `skills/shipyard/{SKILL.md,shipyard.sh}` (status fully; add-specialist/learn routed to exit 2 for now); `shipyard` added to `GENERIC_SKILLS`; red-first `shipyard-status.bats`. | Green (6 cases red-first). Live-verified against the real self-hosted shipyard crew: status→0 lists 5 timers+blocks+doctor; bare→3; unknown→2. Deck regen was a **no-op**: `roles:[human]` frontdoor contributes nothing to crew/graph, so `gen-deck-data.py` produced no JSON diff (check-deck-fresh clean). Live doctor flags "shipyard symlink missing" for shipyard's own gitignored self-install — correct drift, resolved by a reinstall (not this ticket's job). |
+| P4 | `cmd_add_specialist` in shipyard.sh: scaffolds `.claude/agents/<sub>-specialist.md` (archetype embedded) + `docs/<sub>-decisions.md` (from template) and wires all three surfaces (gates note, hunk-keyed release block, `[write_ticket].context_files` via idempotent python line-editor handling both section-create and array-insert). Red-first `shipyard-add-specialist.bats` (7 cases). | Green. **Decision: no model call** — the log is instantiated deterministically from the template (the specialist role fills it over time), so token-caps holds vacuously; a test guards that no bare claude/codex/hermes call exists in the skill. Missing-arg/bad-slug ⇒ 2; idempotent rerun ⇒ 0, no dup. Smoke-tested both TOML paths live. Fixed an inverted `if !` conditional found in smoke-test. |
+| P5 | `cmd_learn` in shipyard.sh: routes a lesson via `--to project\|generic\|install` (else keyword heuristic) to `.agents/<role>.md` note / `docs/tickets/learned-*.md` stub / `docs/tickets/installer-question-*.md` stub. Red-first `shipyard-learn.bats` (8 cases). | Green. **No model call** (deterministic routing per Decision 4: generic → docs/tickets stub, not a direct core edit). Empty/ambiguous/bad-flag ⇒ 2 (honest ambiguity beats mis-route). Smoke-tested all three routes + heuristic live. |
+| P6 | README: seven-skill list + `/shipyard` console + specialist archetype + `[release].hunk_safe_gates`. ADAPTING: `/shipyard learn` cross-reference. Deck regen (no-op). Full battery. | Green. `bats tests/` 195, `leak-check` clean, `check-deck-fresh` clean, full `bash -n`+`py_compile` sweep OK. `doctor: clean install exits 0 with no findings` confirms the fixture install (now incl. the shipyard symlink) is doctor-clean. **No new unit env knob introduced** (`hunk_safe_gates` is a runtime config key, not baked into units) — so no install.sh env-baking/README env-table row was needed. **Honest note:** P2's `role.md` shipped the word "guardian" (retired vocabulary), which failed `token-caps.bats` case "no retired display names" — red since `4dfbdfc`. Earlier phases used `tail` on the bats output and missed a mid-suite failure; the P6 sweep grepping `^not ok` caught it. Fixed by renaming to "subsystem-steward". Lesson: assert on `grep -c 'not ok'`, never `tail`. |
 
 **Roll-up DoD:** all six phases committed on `feat/crew-extension-kit` (worktree
 clean, `git status` empty); `bats tests/` + `leak-check.sh` +
