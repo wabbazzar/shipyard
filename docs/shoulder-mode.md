@@ -221,30 +221,56 @@ Counts and token spend land in the event stream, so a critique that can't be
 delivered is still on record, and the daily cap is computed from the crew's own
 telemetry rather than a separate meter.
 
+## Harness support
+
+Capture, delivery, and the stop gate work whether the authoring session runs
+**claude, codex, or hermes**; the critique spawn was already harness-agnostic
+(`spawn_model`). Only the *capture hook* differs per harness, because each
+reads its own payload — but all three normalize to the **same** queue file
+(`<project>/tmp/critic-queue-<session>`, `"<file> <epoch>"` per line), so
+`critic-watch.sh` drains them identically.
+
+| harness | hook event | capture script | file path in payload | native config |
+|---|---|---|---|---|
+| claude | `PostToolUse` | `critic-queue.sh` | `.tool_input.file_path` | `.claude/settings.json` |
+| codex  | `PostToolUse` | `critic-queue-codex.sh` | V4A patch in `.tool_input.command` (multi-file) | `~/.codex/config.toml` `[[hooks.PostToolUse]]` |
+| hermes | `post_tool_call` | `critic-queue-hermes.sh` | `.tool_input.path` (+ V4A `.tool_input.patch`) | `~/.hermes/config.yaml` `hooks:` |
+
+Delivery is the generic, shipped `agents/release/critic-note.sh` (`--harness
+<h>`): it tries a configured session-injector (`$CRITIC_NOTE_DELIVER_CMD`, exit
+code passed through), then a harness-native channel (hermes: `hermes send -t
+$CRITIC_NOTE_TARGET`), then `$QUARTET_NOTIFY_CMD` as an owner alert, then
+log-and-skip. The stop gate ships per harness too (`critic-stop-gate{,-codex,-hermes}.sh`),
+disarmed unless `CRITIC_BLOCK=1`.
+
 ## Wiring it up
 
-Shoulder mode is wired **per project, not by `install.sh`** (it touches
-`.claude/settings.json`, which the installer refuses to own):
+**Opt-in via the installer (recommended).** `install.sh --wire-shoulder
+--project <dir>` (or set `[shoulder] auto_wire = true`) additively registers
+the capture hook in the authoring harness's native config — the harness is
+`[shoulder] harness` else `[harness].default` else `claude` — and writes
+`<project>/.agents/shoulder.env` from the `[notify]` block so the watch service
+gets `CLAUDE_NOTE_CMD` / `CRITIC_NOTE_*` without hand-wiring. **With the opt-in
+unset, `install.sh` touches no harness config** — the installer still refuses to
+own those files by default. `install.sh --doctor` reports wiring drift once a
+project has opted in. Re-running is idempotent; an existing unrelated hook is
+never clobbered (an existing hermes `hooks:` block is surfaced for a manual
+merge rather than corrupted).
 
-1. Merge a hook into `<project>/.claude/settings.json` — additively; other
-   hooks in the file must survive:
+**Manual (claude shown; codex/hermes use the native configs in the table
+above).** Merge a hook additively — other hooks must survive:
 
-   ```json
-   {
-     "PostToolUse": [
-       { "matcher": "Edit|Write|MultiEdit",
-         "hooks": [ { "type": "command",
-                      "command": "<shipyard>/agents/release/critic-queue.sh" } ] }
-     ]
-   }
-   ```
+```json
+{ "PostToolUse": [
+    { "matcher": "Edit|Write|MultiEdit",
+      "hooks": [ { "type": "command",
+                   "command": "<shipyard>/agents/release/critic-queue.sh" } ] } ] }
+```
 
-   Hooks load at **session start** — sessions already running when you add
-   this are not watched until they restart.
-
-2. Keep `critic-watch.sh --project <dir>` running. A long-lived user service
-   works well; give it `CLAUDE_NOTE_CMD` and, if the project's events live
-   elsewhere, `QUARTET_EVENTS_DIR`.
+Hooks load at **session start** — sessions already running when you add this
+are not watched until they restart. Then keep `critic-watch.sh --project <dir>`
+running (a long-lived user service works); source `.agents/shoulder.env` (or
+give it `CLAUDE_NOTE_CMD` and, if events live elsewhere, `QUARTET_EVENTS_DIR`).
 
 3. Optionally add the `Stop` hook for `critic-stop-gate.sh` — inert until a
    session exports `CRITIC_BLOCK=1`.
