@@ -335,8 +335,48 @@ Session-end analog for teeth: `on_session_end` / `subagent_stop`.
 absolute against the harness's project dir), so `critic-watch.sh` drain is
 untouched.
 
-_(builder appends P1–P5: plan → commit hash → notes, incl. the two Phase-5
-live-run evidence blocks.)_
+### P1 — codex capture + generic delivery (74384d7)
+`critic-queue-lib.sh` (shared `cq_enqueue` + `cq_under_project` lexical `..`
+fence — a test caught a real path-traversal escape), `critic-queue.sh`
+refactored onto it (21 claude cases stay green), `critic-queue-codex.sh`,
+`critic-note.sh`. 10 bats (fail-first shown).
+
+### P2 — hermes capture (0e41224)
+`critic-queue-hermes.sh` (`.tool_input.path` + V4A `.tool_input.patch`);
+`cq_v4a_paths` factored into the lib, codex reuses it; `hermes send` delivery
+branch. 5 bats.
+
+### P3 — opt-in installable wiring + doctor (9798c29)
+`agents/lib/shoulder-wire.sh` (additive, idempotent per-harness merge; hermes
+refuses rc2 rather than corrupt an existing `hooks:`); `install.sh
+--wire-shoulder` / `[shoulder] auto_wire` writes the hook + `.agents/shoulder.env`
+from `[notify]`; `--doctor` drift check. 9 bats incl. **unset-invariance**
+(a claude-only install stays byte-identical) + additive-merge.
+
+### P4 — stop-gate teeth parity (62522e3)
+`critic-stop-gate-lib.sh` (shared `csg_gate`), claude gate refactored onto it,
+`critic-stop-gate-codex.sh` / `-hermes.sh`. 5 bats across all three states.
+Scope note: the stop hook's *config-wiring* is a documented manual step (the
+capture hook is what `--wire-shoulder` registers); whether a harness honors a
+stop-hook exit 2 is a live property.
+
+### P5 — LIVE e2e (both harnesses) + docs (this commit)
+Run on this box 2026-07-24, recorded in `.agents/gates.md` Traps:
+- **codex** live: `codex exec --sandbox workspace-write` (isolated `CODEX_HOME`,
+  inline `[[hooks.PostToolUse]]` → real `critic-queue-codex.sh`) created
+  `src/widget.ts` → queue got `src/widget.ts <epoch>`.
+- **hermes** live: `hermes chat --yolo --accept-hooks` (isolated `HERMES_HOME`,
+  `hooks: post_tool_call:` → real `critic-queue-hermes.sh`) created
+  `src/gadget.ts` → queue got `src/gadget.ts <epoch>`.
+- **full chain**: `critic-watch.sh --once` on the codex queue → real critique
+  (`release.critique files=1 tokens=17`) → delivered via shipped
+  `critic-note.sh --harness codex` (owner-alert fallback fired).
+Docs: `README.md` (harness-agnostic shoulder para + env-table rows) and
+`docs/shoulder-mode.md` (Harness support table + opt-in wiring).
+
+**Final gate sweep:** see the P5 commit. Not merged (`can_merge=false`,
+merge-is-live) — branch `feat/harness-agnostic-shoulder-mode` awaits a human
+stamp.
 
 ---
 Run it: `execute-ticket docs/tickets/harness-agnostic-shoulder-mode.md`

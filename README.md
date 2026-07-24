@@ -48,19 +48,24 @@ and delivers findings into the live session as notes, never hard stops. The
 **daily battery** runs the project's tests, typecheck, and every configured
 audit, fixes what it safely can, and reports.
 
-Shoulder mode is wired per project, not by the installer: merge a
-`PostToolUse` hook (matcher `Edit|Write|MultiEdit`) into
-`<project>/.claude/settings.json` running `agents/release/critic-queue.sh` —
-it appends each edited file to a per-session queue and always exits 0 — and
-keep `critic-watch.sh --project <dir>` running (a long-lived user service
-works; it polls every 30s and fires at 5 min idle or 8 queued files).
-Delivery is `$CLAUDE_NOTE_CMD <session> <message>`; exit 2/3 means
-not-delivered and keeps the queue, and the critique is **cached across
-retries** — a failed delivery never re-spends the model. Spend is capped by
-`[release] budget_tokens_daily` (default 1M/day), counted from the project's
-own `release.critique` events. Full mechanics — the hook, the queue, the
-debounce arithmetic, diff assembly, delivery exit codes, the opt-in stop gate —
-are in [docs/shoulder-mode.md](docs/shoulder-mode.md).
+Capture, critique, delivery, and the opt-in stop gate all work whether the
+authoring session runs **claude, codex, or hermes**: each harness fires a
+post-edit hook (`agents/release/critic-queue{,-codex,-hermes}.sh`) that appends
+the edited file to the *same* per-session queue, and `critic-watch.sh --project
+<dir>` (a long-lived user service; polls every 30s, fires at 5 min idle or 8
+queued files) drains it unchanged. Wiring is **opt-in** — the installer never
+touches a harness config unless you ask: `install.sh --wire-shoulder` (or
+`[shoulder] auto_wire = true`) additively registers the capture hook in the
+authoring harness's native config and writes `.agents/shoulder.env` from the
+`[notify]` block so `$CLAUDE_NOTE_CMD` points at the shipped, generic
+`agents/release/critic-note.sh` (no hand-wiring). `install.sh --doctor` reports
+wiring drift once a project has opted in. Delivery is `$CLAUDE_NOTE_CMD
+<session> <message>`; exit 2/3 means not-delivered and keeps the queue, and the
+critique is **cached across retries** — a failed delivery never re-spends the
+model. Spend is capped by `[release] budget_tokens_daily` (default 1M/day).
+Full mechanics — the per-harness hooks, the queue, debounce arithmetic, diff
+assembly, delivery exit codes, the opt-in stop gate — are in
+[docs/shoulder-mode.md](docs/shoulder-mode.md).
 
 Two crews sit outside the loop:
 
@@ -283,8 +288,19 @@ time** (user services don't inherit your shell env), so set them when running
 | `QUARTET_SCRIBE_PRE_HOOK` | optional executable run before each scribe pass |
 | `SPAWN_STALL_RETRIES` | how many times `spawn_model` retries a transient upstream stream stall (claude CLI `Response stalled mid-stream`, overloaded/429/5xx) before giving up — **default `2`**, all roles/harnesses. A wrapper timeout (RC 124) and non-transient failures are never retried. Set `0` for the pre-2026-07 single-shot behavior. |
 | `SPAWN_STALL_BACKOFF` | space-separated seconds between those retries — **default `5 15`** (attempts beyond the list reuse the last value). |
+| `CLAUDE_NOTE_CMD` | shoulder-mode delivery command `(session, message)`; unset ⇒ log-and-skip. `--wire-shoulder` bakes it to `agents/release/critic-note.sh --harness <h>`. |
+| `CRITIC_NOTE_HARNESS` | which authoring harness `critic-note.sh` delivers for (`claude`·`codex`·`hermes`); default `claude`. |
+| `CRITIC_NOTE_DELIVER_CMD` | optional session-injector `critic-note.sh` calls first; its exit code passes through (0 delivered · 2/3 keep queue · other=broken). |
+| `CRITIC_NOTE_TARGET` | hermes delivery target for `hermes send -t <target>` (e.g. a Signal/Slack channel). |
+| `CRITIC_BLOCK` | per authoring session: `1` arms the opt-in stop gate; unset ⇒ disarmed (crew headless runs never set it). |
 
-The last two carry **built-in defaults inside `agents/lib/spawn.sh`**, so unlike
+Shoulder-mode wiring is **opt-in** and additive — `install.sh --wire-shoulder`
+(or `[shoulder] auto_wire = true`, `[shoulder] harness = <h>`) registers the
+capture hook in the authoring harness's native config and writes
+`.agents/shoulder.env` from the `[notify]` block (`target`, `cmd`); with the
+opt-in unset the installer touches no harness config, exactly as before.
+
+The two `SPAWN_*` rows carry **built-in defaults inside `agents/lib/spawn.sh`**, so unlike
 the rows above they need no `install.sh` bake to take effect; set them in a
 unit's env only to tune or disable per project.
 
