@@ -281,6 +281,12 @@ time** (user services don't inherit your shell env), so set them when running
 | `QUARTET_EVENTS_DIR` | where the JSONL event stream lands (default `data/events/` in this repo) |
 | `QUARTET_OPS_JSON` | optional systemd/cron state snapshot for medic's scan |
 | `QUARTET_SCRIBE_PRE_HOOK` | optional executable run before each scribe pass |
+| `SPAWN_STALL_RETRIES` | how many times `spawn_model` retries a transient upstream stream stall (claude CLI `Response stalled mid-stream`, overloaded/429/5xx) before giving up — **default `2`**, all roles/harnesses. A wrapper timeout (RC 124) and non-transient failures are never retried. Set `0` for the pre-2026-07 single-shot behavior. |
+| `SPAWN_STALL_BACKOFF` | space-separated seconds between those retries — **default `5 15`** (attempts beyond the list reuse the last value). |
+
+The last two carry **built-in defaults inside `agents/lib/spawn.sh`**, so unlike
+the rows above they need no `install.sh` bake to take effect; set them in a
+unit's env only to tune or disable per project.
 
 ### Per-role harness / model / provider
 
