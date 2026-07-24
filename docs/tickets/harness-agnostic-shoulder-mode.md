@@ -117,13 +117,13 @@ real payloads, not assumptions.
 | O1 | `[notify]` shape | A `[notify]` table with per-harness `cmd`/`target`, baked into `*_NOTE_CMD`. Fallback to reusing the `QUARTET_NOTIFY_CMD` env contract if that proves cleaner during build. |
 | O2 | Env var name for per-harness delivery | Keep the single `CLAUDE_NOTE_CMD` name (already the drain's contract) and let `critic-note.sh` dispatch by harness, rather than minting `CODEX_NOTE_CMD`/`HERMES_NOTE_CMD`. Revisit if a harness needs a distinct command. |
 
-### User-decision class (flag at review — no default invented)
+### User-decision class (resolved — human stamped 2026-07-24)
 - **D0 reverses a documented design principle** (`install.sh` refusing to own
-  `.claude/settings.json`). The opt-in default keeps today's behavior, so **no
-  phase is blocked** — but the reviewer should confirm they want install to be
-  *able* to edit `~/.codex/config.toml` / `~/.hermes/config.yaml` at all, even
-  behind a flag. Writing to a home-level harness config is an **ask-first**
-  action at build time (Boundaries).
+  `.claude/settings.json`). **STAMPED: the operator approved install being able
+  to edit `~/.codex/config.toml` / `~/.hermes/config.yaml` behind the opt-in.**
+  The opt-in default still keeps today's no-touch behavior; writing to a
+  home-level harness config remains an **ask-first** action at build time, but
+  the capability itself is authorized.
 
 ## Orchestration protocol
 
