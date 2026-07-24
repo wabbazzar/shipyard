@@ -128,6 +128,24 @@ well under a second, so it runs as a `[[medic.checks]]` entry every scan —
 the next self-written drop-in or dead hook pages within one tick instead of
 surfacing weeks later.
 
+## Repair (relink)
+
+Doctor is read-only, so a missing skill symlink (class `e`) otherwise waits for
+a manual reinstall. Recreating a symlink is a deterministic, reversible
+filesystem op — not a code change — so `--relink` repairs exactly that drift
+class and nothing else:
+
+```bash
+install.sh --relink --project <project_dir> [--dry-run]
+```
+
+It recreates only the installer-owned skill symlinks that resolve wrong
+(missing, broken, or pointing outside `$QUARTET_DIR/skills`), leaves correct
+ones untouched, and **never** clobbers a real file/dir an operator placed
+there. It touches nothing else — no `systemctl`, no config, no gate file — and
+exits 0 even when nothing needed fixing. `--dry-run` prints the plan without
+writing.
+
 ## Uninstall
 
 Remove exactly the installer-owned surface (units/timers + shared-skill
