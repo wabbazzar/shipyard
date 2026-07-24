@@ -9,9 +9,11 @@ description: >
   surface assumptions and verify them one probe at a time, wait for the human
   to confirm the open ones, then lock a concrete Objective, a checklist
   Definition of Done, and Boundaries — and only then calls write-ticket with a
-  feature scope (acceptance = the DoD is met). It STOPS at the human gate: the
-  ticket is queued for a stamp unless the user explicitly says "and build it".
-  It does NOT build the feature — that is execute-ticket, behind the gate.
+  feature scope (acceptance = the DoD is met), then runs polish-ticket, which
+  **auto-gates**: with no open decision it proceeds to execute-ticket
+  automatically (build + commit/push/deploy); an open user-decision-class item
+  stops for an answer. `/feature` itself does NOT build the feature — that is
+  execute-ticket's job (which the auto-gate invokes).
   Callable headless by the design crew after an ask enters the loop, and
   interactively by a human operator — identical file, no forks.
 ---
@@ -128,15 +130,21 @@ interrogation (conventions, next id, real code to `path:line`, phased plan) and
 emits the ticket file; it will not repeat the clarify step you already did —
 take care to pass the scope so it doesn't.
 
-## Step 4 — Stop at the human gate
+## Step 4 — Auto-gate: proceed unless there's an open decision
 
-`/feature` **writes and routes** a ticket; it does not build the feature. After
-`write-ticket` emits the draft, run it through `polish-ticket` if that is the
-project's flow, then **STOP** — the ticket is queued/surfaced for a stamp,
-exactly as a stamped design proposal would be. Do **not** proceed to
-`execute-ticket`. The one exception: the user explicitly said **"and build
-it"** in the same breath — only then does the build run, and it runs through
-`execute-ticket`, not by you editing app code here.
+`/feature` **writes, routes, and (via the auto-gate) drives to build**; it never
+edits app code itself. After `write-ticket` emits the draft, run it through
+`polish-ticket`, whose auto-gate (see its Output) then decides — invoking
+`/feature` is the authorization, so there is no separate stamp:
+
+- **No open decision → proceeds automatically** to `execute-ticket`: build every
+  phase, run the gates, commit/push/deploy per the project's flow (bounded by its
+  capability config — `can_merge` etc. unchanged).
+- **An open user-decision-class item → STOPS**, surfaces exactly that with
+  `AskUserQuestion`, and resumes once answered.
+
+The build always runs through `execute-ticket`, never by you editing app code in
+this step.
 
 ## Adaptation Contract
 
@@ -180,6 +188,6 @@ it"** in the same breath — only then does the build run, and it runs through
   review before writing UI acceptance criteria is out of scope for v1 — note the
   surface is UI-shaped, don't run it inline.
 - **Building the feature.** Editing app code, running the change, implementing
-  it — that's `execute-ticket`, behind the human gate. A `/feature` slice that
+  it — that's `execute-ticket`, behind the auto-gate. A `/feature` slice that
   starts editing app code has overreached; it writes and routes a ticket and
   stops.

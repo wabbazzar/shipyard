@@ -180,21 +180,42 @@ clean), all gates green, live system healthy, background processes cleaned up.
   apply to *every* project instead become an edit to §C/§D here, shipped as a
   core PR.
 
-## Output
+## Output — hardened ticket, then the auto-gate
 
 Rewrite `docs/tickets/<name>.md` in place (or create it) as the hardened
 ticket: Goal → Context/pointers → Decisions → Phases (each: slice plan,
 verification surface with exact commands, observable DoD) → Ledger (empty) →
 a one-line pointer to run it with `execute-ticket`. Commit it (worktree
-hygiene). Then report what you hardened and any user-decision questions that
-must be answered before it's buildable (use AskUserQuestion if they block
-everything).
+hygiene).
+
+Then **auto-gate** on the ticket's Decisions. The pipeline does NOT stop for a
+separate human stamp — the command invocation (or the already-approved dispatch
+proposal) IS the authorization. Decide from the Decisions section alone:
+
+- **Any open decision → STOP.** If even one **user-decision-class** item (§F —
+  spending money; anything outward-facing/public; destructive or hard-to-reverse
+  changes; changing the behavior of live automation the owner deliberately
+  configured; a genuine design fork where a wrong guess burns large work) is
+  unresolved, surface exactly those with `AskUserQuestion` and wait. Resume the
+  pipeline automatically once they're answered. (An "open decision with a
+  default" is NOT a blocker — the builder applies the recorded default and
+  proceeds; only the user-decision class blocks.)
+- **No open decision → PROCEED automatically to `execute-ticket`.** Build every
+  phase, run all gates, and commit/push/deploy per the project's flow. The
+  project's capability config still bounds what "deploy" means — `[medic]
+  can_merge`, PR-vs-merge, `allow_no_ci`, `forbidden_paths` are unchanged and
+  the auto-gate never overrides them (with `can_merge=false` the build pushes a
+  branch + opens a PR rather than self-merging).
+
+Report what you hardened, then either the build result or the exact open
+decision(s) that blocked.
 
 ## Notes
 
 - Polishing is done when someone who has never seen this project could build
   the ticket correctly without asking anything except the surfaced Decisions.
-- Don't build it here. If you find yourself editing scripts/units/app code
-  beyond toolchain-verification (§C2), stop — that's execute-ticket's job.
+- Don't edit app code in the polish step itself (beyond toolchain-verification,
+  §C2) — the actual build is `execute-ticket`'s job, which the auto-gate invokes
+  for you when there is no open decision.
 - Stay discovery-first: point at "the project's gate file / config / timers"
   via the discovery steps rather than baking in today's specifics.

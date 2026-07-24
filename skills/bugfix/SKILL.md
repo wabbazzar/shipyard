@@ -11,10 +11,11 @@ description: >
   signature), pins the violated observable contract, falsifies rival causes with
   evidence, and names the coverage gap that let the bug through. It then calls
   write-ticket with a bug scope whose acceptance is "the captured repro passes
-  AND the named coverage gap is closed," runs polish-ticket, and STOPS at the
-  human gate (ticket queued for a stamp) unless the user explicitly says "and
-  build it." It WRITES AND ROUTES a ticket; it does NOT fix the bug and does NOT
-  commit the failing test — that is execute-ticket, behind the human gate.
+  AND the named coverage gap is closed," then runs polish-ticket, which
+  **auto-gates**: with no open decision it proceeds to execute-ticket
+  automatically (build + commit/push/deploy); an open user-decision-class item
+  stops for an answer. `/bugfix` itself does NOT fix the bug and does NOT commit
+  the failing test — that is execute-ticket's job (which the auto-gate invokes).
   Callable headless by the design crew and interactively by a human — identical
   file, no forks.
 ---
@@ -27,7 +28,7 @@ front door to the ticket pipeline: it does the intent-specific intake that
 coverage gap** — and only then converts what it learned into a bug scope that
 `write-ticket` accepts. It establishes **that the bug is real and where it lives**;
 `write-ticket` establishes **what and why** as a ticket; `polish-ticket` hardens
-**how to build it safely**; `execute-ticket` builds it (behind the human gate).
+**how to build it safely**; `execute-ticket` builds it (behind the auto-gate).
 Keep those jobs distinct: **do not fix the bug here, and do not commit the
 failing test here.** The reproduction you capture travels *in* the ticket;
 `execute-ticket` commits the failing test at build time, where it becomes the
@@ -128,14 +129,22 @@ Because you already did the reproduce-first intake, `write-ticket` must **not**
 repeat it — it takes your scope as given. After it emits the draft, run
 **`polish-ticket`** to harden the verification surface and phasing.
 
-### 7 — Stop at the human gate (do NOT auto-build)
+### 7 — Auto-gate: proceed unless there's an open decision
 
-`/bugfix` runs **intake → write-ticket → polish-ticket and STOPS.** The polished
-ticket is queued/surfaced for a human stamp, exactly as a stamped design
-proposal would be. **Unless the user explicitly said "and build it,"** do not
-call `execute-ticket`, do not edit app code, do not commit the failing test.
-Report: the reproduction you captured, the root cause, the ticket path, and that
-it is queued for a stamp.
+`/bugfix` runs **intake → write-ticket → polish-ticket → auto-gate.** Whether
+the build then runs is decided by polish-ticket's auto-gate (see its Output), not
+by a separate stamp — invoking `/bugfix` is the authorization:
+
+- **No open decision → proceeds automatically** to `execute-ticket`, which
+  commits the failing test at build time, runs the gates, and
+  commits/pushes/deploys per the project's flow (bounded by its capability
+  config — `can_merge` etc. are unchanged).
+- **An open user-decision-class item → STOPS**, surfaces exactly that with
+  `AskUserQuestion`, and resumes once answered.
+
+`/bugfix` itself never edits app code or commits the failing test — that is
+`execute-ticket`'s job. Report the reproduction you captured, the root cause,
+the ticket path, and either the build result or the open decision that blocked.
 
 ## Adaptation Contract
 
@@ -169,7 +178,7 @@ it is queued for a stamp.
   what version, with what data, before giving up. "Couldn't reproduce on my
   machine" is a hypothesis to test, not a closing condition.
 - **Overreaching into the fix.** Editing app code, running the fix, or
-  committing the failing test — that's `execute-ticket`, behind the human gate.
+  committing the failing test — that's `execute-ticket`, behind the auto-gate.
   A `/bugfix` slice that starts editing application code has overreached; `/bugfix`
   writes and routes a ticket, it does not build one.
 - **Baking a project's specifics into this file.** Ticket dir, type enum, test
