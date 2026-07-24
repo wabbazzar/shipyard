@@ -142,9 +142,11 @@ project's worktree hygiene.
 
 Say the ticket is a **draft ready for `polish-ticket`** — you established scope
 and acceptance; polish-ticket hardens the verification surface and phasing for
-autonomous build. Unless the user said "and build it," stop at the human gate:
-the ticket is queued/surfaced for a stamp, exactly as a stamped design proposal
-would be. `/bugfix` and `/feature` respect the same gate.
+autonomous build, then **auto-gates**: with no open decision it proceeds to
+`execute-ticket` automatically (build + commit/push/deploy); an open
+user-decision-class item stops for an answer (see polish-ticket's Output).
+`write-ticket` itself never builds — hand off to polish-ticket. `/bugfix` and
+`/feature` ride the same auto-gate.
 
 ## Adaptation Contract
 
@@ -171,7 +173,7 @@ would be. `/bugfix` and `/feature` respect the same gate.
   or the anti-cheating orchestration brief is `polish-ticket`'s job. Stop at
   scope + acceptance; hand off.
 - **Building here.** Editing app code, running the fix, implementing the
-  feature — that's `execute-ticket`, behind the human gate. A ticket-writer that
+  feature — that's `execute-ticket`, behind the auto-gate. A ticket-writer that
   starts coding has overreached.
 - **Inventing a phase taxonomy.** Most projects have none. Omit `Phase:` unless
   the config declares one.
