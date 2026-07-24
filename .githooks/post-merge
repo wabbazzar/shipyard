@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Post-merge: after any merge/pull into this shipyard checkout, relink the
+# generic skills across every installed project. Adding a skill to
+# GENERIC_SKILLS is what puts the fleet into crew-install-drift ("doctor: skill
+# symlink missing"); this heals it the moment the change lands, so the drift
+# never has a window to alarm. Safe + idempotent (reconcile only creates or
+# refreshes symlinks — never removes, never clobbers a real dir, never touches
+# units or config) and NON-FATAL (a hook must never break a merge).
+#
+# Enabled with the repo's other hooks via `git config core.hooksPath .githooks`.
+set -uo pipefail
+repo="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$repo" ] && [ -x "$repo/scripts/reconcile-skills.sh" ] || exit 0
+"$repo/scripts/reconcile-skills.sh" --all >/dev/null 2>&1 || true
+exit 0
