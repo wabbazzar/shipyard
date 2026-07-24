@@ -66,7 +66,7 @@ plant_telemetry() {
   [ "$(echo "$output" | jq -r '.role')" = "design" ]
   [ "$(echo "$output" | jq -r '.display')" = "mentat" ]
   [ "$(echo "$output" | jq -r '.budget_tokens_daily')" = "1000000" ]
-  [ "$(echo "$output" | jq -r '.max_open_proposals')" = "3" ]
+  [ "$(echo "$output" | jq -r '.max_open_proposals')" = "1" ]
 }
 
 @test "--check-config writes no events and no result file" {
@@ -122,6 +122,9 @@ plant_telemetry() {
 
 @test "drafting writes a valid result file and 2 design.proposal.opened events (role:design)" {
   P="$(make_fixture_project mentdraft names-spacetime.toml)"
+  # pin the cap so this exercises multi-proposal drafting independent of the
+  # fleet default (now 1) — the default itself is asserted by --check-config.
+  printf '\n[design]\nmax_open_proposals = 3\n' >>"$P/.agents/config.toml"
   plant_telemetry "$P"
   make_stub claude 0 "$(canned_claude_json "$CANNED_PROPOSALS")"
 
@@ -166,6 +169,8 @@ JSON
 
 @test "one decided proposal frees a slot below the cap: drafting proceeds" {
   P="$(make_fixture_project mentcapd names-spacetime.toml)"
+  # cap pinned to 3 so "one decided frees a slot" is meaningful (fleet default is 1).
+  printf '\n[design]\nmax_open_proposals = 3\n' >>"$P/.agents/config.toml"
   plant_telemetry "$P"
   make_stub claude 0 "$(canned_claude_json "$CANNED_PROPOSALS")"
   mkdir -p "$P/tmp" "$P/data"
