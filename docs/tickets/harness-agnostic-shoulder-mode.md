@@ -295,8 +295,48 @@ the exact commands from `.agents/gates.md`.
 
 ## Ledger
 
-_(builder appends per phase: plan → commit hash → honest notes, incl. the P0
-pinned payload field names and the two Phase-5 live-run evidence blocks.)_
+### P0 — payloads pinned (2026-07-24, real captures)
+Method: hermes via isolated `HERMES_HOME` + `hermes hooks test post_tool_call`
+(synthetic, no model); codex via isolated `CODEX_HOME` (auth copied) + a real
+`codex exec --sandbox workspace-write` with an inline `[[hooks.PostToolUse]]`
+dump hook. Both reproduced.
+
+**codex** — event `PostToolUse`; edit tool is **`apply_patch`**, and
+`tool_input` carries a **V4A patch string** in `.tool_input.command`, NOT a
+`file_path`. Captured:
+```json
+{ "session_id":"019f95…", "cwd":"/tmp/tmp.Wp0…", "hook_event_name":"PostToolUse",
+  "tool_name":"apply_patch",
+  "tool_input":{"command":"*** Begin Patch\n*** Add File: hello.txt\n+hi\n*** End Patch"} }
+```
+→ session=`.session_id`, project=`.cwd`, files = parse
+`^\*\*\* (Add|Update|Delete) File: (.+)$` from `.tool_input.command`
+(multi-file; paths relative to `.cwd`). Also read `.tool_input.file_path` if a
+future non-patch tool sets it. Config: inline TOML
+`[[hooks.PostToolUse]]` + nested `[[hooks.PostToolUse.hooks]]` (type/command);
+`config.toml parse ok`. Hook trust: `--dangerously-bypass-hook-trust` for
+automation.
+
+**hermes** — event `post_tool_call`; edit tools `write_file|patch|edit_file`.
+Captured (synthetic):
+```json
+{ "hook_event_name":"post_tool_call", "tool_name":"write_file",
+  "tool_input":{...}, "session_id":"test-session", "cwd":"/home/…/shipyard",
+  "extra":{"task_id":"…","tool_call_id":"…"} }
+```
+→ session=`.session_id`, project=`.cwd`, file=`.tool_input.path` (write_file &
+patch-replace schema, `tools/file_tools.py:1956,1988`). Config: `~/.hermes/config.yaml`
+`hooks:\n  post_tool_call:\n    - matcher: "write_file|patch|edit_file"\n      command: …`;
+first-use consent → `~/.hermes/shell-hooks-allowlist.json` or `HERMES_ACCEPT_HOOKS=1`.
+Session-end analog for teeth: `on_session_end` / `subagent_stop`.
+
+**Shared normalization:** all three → append `"<abs-file> <epoch>"` to
+`<project>/tmp/critic-queue-<session>` via a shared enqueue (relative paths made
+absolute against the harness's project dir), so `critic-watch.sh` drain is
+untouched.
+
+_(builder appends P1–P5: plan → commit hash → notes, incl. the two Phase-5
+live-run evidence blocks.)_
 
 ---
 Run it: `execute-ticket docs/tickets/harness-agnostic-shoulder-mode.md`
