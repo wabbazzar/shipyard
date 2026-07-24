@@ -40,12 +40,9 @@ FP="$(jq -r '.tool_input.file_path // empty' <<<"$INPUT" 2>/dev/null || true)"
 # apply_patch: pull every path from the V4A header lines.
 CMD="$(jq -r '.tool_input.command // empty' <<<"$INPUT" 2>/dev/null || true)"
 if [ -n "$CMD" ]; then
-  # Lines look like: "*** Add File: path", "*** Update File: path",
-  # "*** Delete File: path". Strip the marker, trim, queue each.
   while IFS= read -r path; do
     [ -n "$path" ] && _queue_one "$path"
-  done < <(grep -oE '^\*\*\* (Add|Update|Delete) File: .+$' <<<"$CMD" \
-             | sed -E 's/^\*\*\* (Add|Update|Delete) File: //')
+  done < <(printf '%s' "$CMD" | cq_v4a_paths)
 fi
 
 exit 0
