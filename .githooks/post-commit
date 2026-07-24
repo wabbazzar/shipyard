@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Post-commit: if a commit changed the skill set — install.sh (where
+# GENERIC_SKILLS lives) or anything under skills/ — relink the generic skills
+# across every installed project. This covers the direct-commit-to-main path
+# (the post-merge hook covers the merge/pull path); together they mean a newly
+# added skill never leaves the fleet in crew-install-drift ("doctor: skill
+# symlink missing").
+#
+# Gated on the changed files so it does NOT run on every unrelated commit (the
+# crew commits constantly). Safe + idempotent (reconcile only creates/refreshes
+# symlinks, never removes or clobbers, never touches units/config) and NON-FATAL
+# — reconcile writes nothing to git, so there is no commit loop.
+set -uo pipefail
+repo="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$repo" ] && [ -x "$repo/scripts/reconcile-skills.sh" ] || exit 0
+# --root so a repo's very first commit (no parent) still reports its files.
+changed="$(git -C "$repo" diff-tree --no-commit-id --name-only -r --root HEAD 2>/dev/null || true)"
+printf '%s\n' "$changed" | grep -qE '(^|/)install\.sh$|^skills/' || exit 0
+"$repo/scripts/reconcile-skills.sh" --all >/dev/null 2>&1 || true
+exit 0
