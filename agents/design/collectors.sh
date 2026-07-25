@@ -115,11 +115,24 @@ collect_signals() {
     }' 2>/dev/null || echo '{}')"
 
   # --- (3) fyi-requests.jsonl -----------------------------------------------
-  local fyi_file="$project_dir/data/fyi-requests.jsonl" fyi_summary
+  # A request already turned into a proposal (OPEN *or* decided — both persist
+  # in the result file) must NOT be re-surfaced, or mentat re-proposes shipped
+  # work every run (overseer 2026-07-25: caladan re-proposed already-merged
+  # fyi_2/fyi_3). Drop any request whose id or ts is already cited by an
+  # existing proposal's `signal_ids` or `evidence`.
+  local fyi_file="$project_dir/data/fyi-requests.jsonl" fyi_summary cited="" rf
   if [ -f "$fyi_file" ]; then
-    fyi_summary="$(jq -R 'fromjson?' <"$fyi_file" 2>/dev/null | jq -s '
-      { count: length,
-        examples: [.[] | {ts: (.ts // null), text: (.text // "")}] | (reverse | .[0:5]) }' \
+    for rf in "$project_dir"/tmp/*-mentat-result.json; do
+      [ -e "$rf" ] || continue
+      cited="$cited $(jq -r '(.proposals // [])[]
+        | ((.signal_ids // []) | join(" ")) + " " + (.evidence // "")' "$rf" 2>/dev/null || true)"
+    done
+    fyi_summary="$(jq -R 'fromjson?' <"$fyi_file" 2>/dev/null | jq -s --arg cited "$cited" '
+      [ .[] | . as $f | select(
+          ((($f.id // "") != "" and ($cited | contains($f.id)))
+           or (($f.ts // "") != "" and ($cited | contains($f.ts)))) | not) ] as $open
+      | { count: ($open | length),
+          examples: ([$open[] | {id:(.id // null), ts:(.ts // null), text:(.text // "")}] | reverse | .[0:5]) }' \
       2>/dev/null || echo '{"count":0,"examples":[]}')"
   else
     fyi_summary='{"count":0,"examples":[]}'

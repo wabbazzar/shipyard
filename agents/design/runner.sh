@@ -16,7 +16,10 @@
 # + RUN CONTEXT (the collector summary + config). Result file:
 # <project>/tmp/<project>-mentat-result.json, schema:
 #   {ts, project, proposals:[{id,type,title,rationale,evidence,
-#                             suggested_scope,severity,status:"open"}]}
+#                             suggested_scope,severity,status:"open",
+#                             signal_ids:[<source signal ids, e.g. fyi ids>]}]}
+# signal_ids marks which source signals a proposal handled; collectors.sh drops
+# those signals next run so mentat never re-proposes already-addressed work.
 # id = mentat:<project>:<8 hex of sha256(ts+title)>.
 #
 # Gates, in order, before any model spend:
@@ -402,12 +405,17 @@ for p in proposals:
         sev = "med"
     pid = "mentat:%s:%s" % (
         project, hashlib.sha256((ts + title).encode()).hexdigest()[:8])
+    # signal_ids: the source-signal ids (e.g. fyi-request ids) this proposal
+    # addresses. Persisted so collectors.sh drops those signals next run and
+    # mentat stops re-proposing already-handled work.
+    sig = [str(s).strip() for s in (p.get("signal_ids") or [])
+           if isinstance(s, (str, int)) and str(s).strip()][:8]
     obj = {
         "id": pid, "type": ptype, "title": title,
         "rationale": str(p.get("rationale", "")),
         "evidence": str(p.get("evidence", "")),
         "suggested_scope": str(p.get("suggested_scope", "")),
-        "severity": sev, "status": "open",
+        "severity": sev, "status": "open", "signal_ids": sig,
     }
     added.append(obj)
     existing_titles.add(title)
