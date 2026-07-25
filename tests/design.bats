@@ -41,7 +41,10 @@ plant_telemetry() {
   printf '%s\n' \
     "{\"ts\":\"${today}T01:00:00Z\",\"svc\":\"$(basename "$p")-release\",\"event\":\"job.end\",\"status\":\"fail\",\"role\":\"release\"}" \
     "{\"ts\":\"${today}T01:30:00Z\",\"svc\":\"$(basename "$p")-release\",\"event\":\"job.end\",\"status\":\"ok\",\"role\":\"release\"}" \
-    "{\"ts\":\"${today}T02:00:00Z\",\"svc\":\"$(basename "$p")-medic\",\"event\":\"medic.incident.opened\",\"role\":\"medic\"}" \
+    "{\"ts\":\"${today}T02:00:00Z\",\"svc\":\"$(basename "$p")-medic\",\"event\":\"medic.incident.detected\",\"incident_id\":\"inc_aaa\",\"role\":\"medic\"}" \
+    "{\"ts\":\"${today}T02:00:01Z\",\"svc\":\"$(basename "$p")-medic\",\"event\":\"medic.incident.classified\",\"incident_id\":\"inc_aaa\",\"role\":\"medic\"}" \
+    "{\"ts\":\"${today}T02:00:02Z\",\"svc\":\"$(basename "$p")-medic\",\"event\":\"medic.incident\",\"incident_id\":\"inc_aaa\",\"role\":\"medic\"}" \
+    "{\"ts\":\"${today}T02:00:03Z\",\"svc\":\"$(basename "$p")-medic\",\"event\":\"medic.incident.frozen\",\"incident_id\":\"inc_aaa\",\"role\":\"medic\"}" \
     "{\"ts\":\"${today}T03:00:00Z\",\"svc\":\"$(basename "$p")-release\",\"event\":\"release.critique\",\"block\":2,\"warn\":1,\"note\":0}" \
     >> "$(events_file)"
   mkdir -p "$p/data" "$p/data/usage"
