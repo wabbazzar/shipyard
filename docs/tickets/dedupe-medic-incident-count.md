@@ -1,6 +1,6 @@
 # Dedupe collectors.sh medic_incidents by incident, not by lifecycle event
 
-- **Status:** polished — ready for `execute-ticket` (auto-gate: no user-decision-class item open → proceeds automatically)
+- **Status:** built + verified 2026-07-25 (commit `73d7ab7`) — owner-approved via Daily Dispatch
 - **Priority:** medium
 - **Type:** bugfix
 - **Estimated Points:** 2 (single phase)
@@ -169,10 +169,23 @@ Run from repo root `~/code/shipyard`:
 
 ## Ledger
 
-_(builder appends: per-phase plan + commit hash, the observed red value, honest
-notes on anything deferred)_
-
-- [ ] **Phase 1 — dedupe count + regression** — commit `____`.
+- [x] **Phase 1 — dedupe count + regression** — commit `73d7ab7` (2026-07-25).
+      Test-first: extended `plant_telemetry` (`design.bats:44-47`) to emit 4
+      lifecycle events (`detected`/`classified`/`incident`/`frozen`) sharing
+      `incident_id":"inc_aaa"`, replacing the single id-less `medic.incident.opened`
+      event. **Red proof on unpatched `collectors.sh`:** `design.bats` test 4
+      failed — `.sources.events.medic_incidents` read **4** (per-event count),
+      expected 1. Then fixed `collectors.sh:97-102` to count distinct non-null
+      `incident_id`s (D-1 default) → test 4 green at **1**. D-2 default taken:
+      reused the existing `design.bats:101` assertion (no new `@test`), so the
+      suite count is unchanged. **Out-of-scope left untouched:** `runner.sh`'s
+      multi-event emission, the tmp-file `.sources.medic_incidents.count` object
+      (the `--self-test`, test 11, asserts *that* object — still green), and
+      `medic_incident_examples`.
+- **Final gate (2026-07-25, this box):** `bats tests/` = **273 pass, 0 fail**
+      (unchanged); `leak-check.sh` clean; `check-deck-fresh.sh` in sync;
+      `bash -n` sweep (install.sh + agents/lib/*.sh + agents/*/runner.sh +
+      collectors.sh) clean. Tree clean.
 
 ## Run it
 
