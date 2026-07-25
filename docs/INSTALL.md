@@ -122,6 +122,7 @@ inputs install uses) and checks it against reality, one `DOCTOR <class>:
 | f | a `.claude/settings.json` hook command naming a script that does not exist (dead wiring) |
 | g | legacy per-project launcher scripts / crontab lines |
 | h | (hub only) a dispatch decision in `data/news/decisions.jsonl` not mirrored into the target project's `data/decisions.jsonl` |
+| i | (opt-in only — flagged only once a project has enabled shoulder mode) the capture hook not wired into the authoring harness's native config, or `.agents/shoulder.env` missing; fix with `install.sh --wire-shoulder` |
 
 It is strictly read-only (no writes, no `systemctl` mutation) and finishes in
 well under a second, so it runs as a `[[medic.checks]]` entry every scan —
