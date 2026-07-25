@@ -123,6 +123,24 @@ reproduces "why does X happen" against the real system rather than narrating a
 plausible story. It reviews; it does not redesign. Scaffold it with
 `/shipyard add-specialist`. See `docs/ADAPTING.md`.
 
+## Dogfood overseer
+
+Autonomous repos (`autonomous = true`) run the crew hands-off and never surface
+in the approval wire — so nothing normally checks whether that crew is producing
+*good* work. The **overseer** (`agents/overseer/runner.sh`) is a fleet-level
+meta-QA timer (`shipyard-overseer.timer`, not a crew role): on an interval it
+walks every autonomous repo under `CODE_ROOT`, hands each crew's recent outputs
+(every role's result JSON, the feedback signals, the north star, recent git) to
+an LLM judge, and asks *is this crew producing correct, coherent work?* It flags
+a hallucinated proposal, a false-green proctor verdict, a claimed-but-absent
+build/merge, an inappropriate medic action, or a role that stopped running.
+
+It **notifies only when something is wrong** — a healthy sweep is silent (an
+`overseer.assessed status=ok` event only), so it adds no noise. It reads and
+judges; it never writes code or touches a repo. Verdict → `<repo>/tmp/overseer-result.json`.
+Run one on demand: `agents/overseer/runner.sh --project <dir>` (exit 3 if the
+repo isn't autonomous); `--check-config` lists the repos it would assess.
+
 ## North star
 
 Each project hands mentat a one-line compass: `[design] north_star` in
@@ -288,6 +306,9 @@ time** (user services don't inherit your shell env), so set them when running
 | `QUARTET_EVENTS_DIR` | where the JSONL event stream lands (default `data/events/` in this repo) |
 | `QUARTET_OPS_JSON` | optional systemd/cron state snapshot for medic's scan |
 | `QUARTET_SCRIBE_PRE_HOOK` | optional executable run before each scribe pass |
+| `CODE_ROOT` | root the dogfood overseer scans for `autonomous = true` repos (default `~/code`) |
+| `OVERSEER_MODEL` | model the overseer's QA judge uses (default `sonnet`) |
+| `OVERSEER_WALL_CLOCK` | per-repo wall-clock cap for the overseer's judge call, seconds (default `600`) |
 | `SPAWN_STALL_RETRIES` | how many times `spawn_model` retries a transient upstream stream stall (claude CLI `Response stalled mid-stream`, overloaded/429/5xx) before giving up — **default `2`**, all roles/harnesses. A wrapper timeout (RC 124) and non-transient failures are never retried. Set `0` for the pre-2026-07 single-shot behavior. |
 | `SPAWN_STALL_BACKOFF` | space-separated seconds between those retries — **default `5 15`** (attempts beyond the list reuse the last value). |
 | `CLAUDE_NOTE_CMD` | shoulder-mode delivery command `(session, message)`; unset ⇒ log-and-skip. `--wire-shoulder` bakes it to `agents/release/critic-note.sh --harness <h>`. |
