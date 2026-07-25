@@ -205,6 +205,7 @@ headless runs never set it, so they are unaffected.
 | `CLAUDE_NOTE_CMD` | env | unset ⇒ log-and-skip delivery |
 | `CRITIC_BLOCK` | env, per session | unset ⇒ stop gate disarmed |
 | `budget_tokens_daily` | `.agents/config.toml` `[release]` | 1,000,000 tokens/day |
+| `hunk_safe_gates` | `.agents/config.toml` `[release]` | `false` — CHANGED FILES block is byte-identical to the raw changed list; `true` marks entries with no diff hunk `(no hunks)` so a file-conditional check can key on real hunks (see critic-role.md "Input contract") |
 | conventions + project rubric | `<project>/.agents/release.md` | — |
 | events dir | `QUARTET_EVENTS_DIR`, else `<project>/data/events` | — |
 
