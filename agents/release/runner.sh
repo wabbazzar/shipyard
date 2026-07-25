@@ -281,6 +281,29 @@ if [ "$PASS" != "true" ] && release_incomplete "$EXIT" "$RESULT_FILE"; then
   fi
 fi
 
+# ---- false-green guard ([release] verify_gate; unset = today's behavior) ----
+# In hook/daily mode the MODEL self-reports its verdict; a careless or
+# hallucinating run can write pass:true with check numbers that never ran
+# (overseer 2026-07-25: caladan's proctor reported vitest/typecheck JS numbers
+# in a pure-Python repo). When verify_gate is set, actually run the project's
+# typecheck + test_cmd and OVERRIDE a claimed pass to fail if either really
+# fails — so a false green can't reach medic or the dispatch. post-merge already
+# runs the gate deterministically, so it is exempt.
+VERIFY_GATE="$(jq -r '.release.verify_gate // false' <<<"$CFG_JSON")"
+if [ "$VERIFY_GATE" = "true" ] && [ "$PASS" = "true" ] && [ "$INCOMPLETE" -eq 0 ] && [ "$MODE" != "post-merge" ]; then
+  echo "[$SVC] verify_gate: reconciling model pass against the real gate" >> "$LOG_FILE"
+  eval "$TYPECHECK_CMD" >> "$LOG_FILE" 2>&1; VG_TC=$?
+  eval "$TEST_CMD"      >> "$LOG_FILE" 2>&1; VG_TS=$?
+  if [ "$VG_TC" -ne 0 ] || [ "$VG_TS" -ne 0 ]; then
+    echo "[$SVC] FALSE GREEN caught: model reported pass but real gate failed (tsc=$VG_TC test=$VG_TS)" >> "$LOG_FILE"
+    PASS="false"; JOB_STATUS="fail"
+    _fg_tmp="$(mktemp)"
+    if jq --arg e "false-green caught: model reported pass:true but the real gate failed (typecheck rc=$VG_TC, test rc=$VG_TS)" \
+         '. + {pass:false, false_green_caught:true, errors:((.errors // []) + [$e])}' \
+         "$RESULT_FILE" > "$_fg_tmp" 2>/dev/null; then mv "$_fg_tmp" "$RESULT_FILE"; else rm -f "$_fg_tmp"; fi
+  fi
+fi
+
 # Build category tag from the result fields (project-specific structure
 # but the field names are stable across release-style runs).
 CATEGORY="$(python3 - "$RESULT_FILE" <<'PY' 2>/dev/null || echo unknown
