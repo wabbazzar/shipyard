@@ -105,6 +105,31 @@ plant_telemetry() {
   [ "$(echo "$output" | jq -r '.sources.usage.by_action.view')" = "2" ]
 }
 
+@test "collectors drop fyi-requests an existing proposal already addresses (no re-proposal)" {
+  # Regression for the overseer finding (2026-07-25): mentat re-proposed
+  # already-handled fyi_2/fyi_3. A request whose id is cited by an existing
+  # proposal (signal_ids OR evidence) must NOT be re-surfaced; a fresh one still is.
+  P="$(make_fixture_project mentddup names-spacetime.toml)"
+  mkdir -p "$P/data" "$P/tmp"
+  printf '%s\n' \
+    '{"ts":"2026-01-01T00:00:00Z","id":"fyi_1","text":"add CSV export"}' \
+    '{"ts":"2026-01-02T00:00:00Z","id":"fyi_2","text":"support multi-city"}' \
+    > "$P/data/fyi-requests.jsonl"
+  # fyi_1 addressed via signal_ids, evidence cites its text; fyi_2 untouched.
+  cat > "$P/tmp/mentddup-mentat-result.json" <<'JSON'
+{"ts":"2026-01-03T00:00:00Z","project":"mentddup","proposals":[
+  {"id":"mentat:mentddup:aaaa1111","type":"feature","title":"Add CSV export",
+   "evidence":"fyi-requests.jsonl: add CSV export","signal_ids":["fyi_1"],
+   "severity":"low","status":"open"}]}
+JSON
+  run bash -c "QUARTET_DIR='$QUARTET_ROOT' QUARTET_EVENTS_DIR='$EVENTS_DIR' \
+    bash '$QUARTET_ROOT/$COLLECTORS' --project '$P' --json"
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '.sources.fyi.count')" = "1" ]                       # only fyi_2 survives
+  [ "$(echo "$output" | jq -r '[.sources.fyi.examples[].id] | index("fyi_1")')" = "null" ]
+  [ "$(echo "$output" | jq -r '[.sources.fyi.examples[].id] | index("fyi_2")')" != "null" ]
+}
+
 @test "collectors write nothing to the project" {
   P="$(make_fixture_project mentcolro names-spacetime.toml)"
   plant_telemetry "$P"

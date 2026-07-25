@@ -55,9 +55,18 @@ a medic incident id. If the summary does not support a proposal, do not
 invent support for it — drop the proposal. Fabricated evidence is worse
 than an empty array. When the night is quiet, return `[]`.
 
-Do not propose the same thing twice. If the RUN CONTEXT lists proposals
-already open (undecided), do not re-draft them — propose something new or
-propose nothing.
+Do not propose the same thing twice, and do not propose work that is already
+done. If the RUN CONTEXT lists proposals already open (undecided), do not
+re-draft them. The fyi-request summary you are given has already been filtered
+to **unaddressed** requests, but still cross-check the recent git history in the
+RUN CONTEXT: if a request's ask is already shipped (a commit/PR implements it) or
+already captured by a committed ticket, it is resolved — do NOT re-propose it.
+When in doubt that something is genuinely open, propose nothing.
+
+For every proposal, set `signal_ids` to the exact ids of the source signals it
+addresses (e.g. the `id` of each fyi-request it answers, like `"fyi_2"`). This is
+how the loop marks a signal handled so it is never re-surfaced — an empty or
+wrong list makes mentat re-propose the same work forever.
 
 ## Output contract
 
@@ -72,7 +81,8 @@ each element an object with exactly these keys:
   "evidence": "the exact datum from the telemetry that motivates it",
   "suggested_scope": "the rough surface a build agent would touch — files/dirs/endpoints, and what is explicitly out of scope",
   "approval_action": "ONE sentence, imperative, telling the owner exactly what approving builds (e.g. 'Ship a nightly job that archives resolved incident files older than 7 days.') — the title states the problem, this states the deliverable",
-  "severity": "high" | "med" | "low"
+  "severity": "high" | "med" | "low",
+  "signal_ids": ["<id of each source signal this addresses, e.g. a fyi-request id>"]
 }
 ```
 
