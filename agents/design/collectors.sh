@@ -94,8 +94,14 @@ collect_signals() {
     {
       job_ok:  [.[] | select(.event=="job.end" and (.status=="ok"))]      | length,
       job_fail:[.[] | select(.event=="job.end" and (.status=="fail" or .status=="abort"))] | length,
-      medic_incidents: [.[] | select((.event // "") | startswith("medic."))
-                             | select((.event // "") | contains("incident"))] | length,
+      # Count DISTINCT incidents, not lifecycle events: the medic runner emits
+      # up to 4-5 medic.*incident* events (detected/classified/incident/frozen)
+      # per single incident, all sharing one incident_id. Dedupe by incident_id
+      # (present on every current-format medic incident event); ignore any
+      # event lacking one (mentat:shipyard:5e938498).
+      medic_incidents: ([.[] | select((.event // "") | startswith("medic."))
+                              | select((.event // "") | contains("incident"))
+                              | .incident_id | select(. != null)] | unique | length),
       # Verbatim examples (mentat:aurora:d23e2f48): prefer the consolidated
       # medic.incident events (probe + http_status + restart_action), fall
       # back to any medic.*incident* event for pre-upgrade windows.
