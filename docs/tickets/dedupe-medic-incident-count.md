@@ -1,6 +1,6 @@
 # Dedupe collectors.sh medic_incidents by incident, not by lifecycle event
 
-- **Status:** draft — ready for `polish-ticket`
+- **Status:** polished — ready for `execute-ticket` (auto-gate: no user-decision-class item open → proceeds automatically)
 - **Priority:** medium
 - **Type:** bugfix
 - **Estimated Points:** 2 (single phase)
@@ -79,11 +79,33 @@ The fixture never plants two-or-more lifecycle events for one incident.
   - Every other count in `events_summary` (`job_ok`, `job_fail`,
     `release_findings`, `examples`).
 
+## Build & merge protocol (orchestrator + honesty + fleet-live)
+
+- **Builder is the orchestrator.** This is a one-expression change — keep it in
+  the orchestrator, don't fan out. Re-verify every gate personally.
+  > Converge honestly or report the precise blocker with the actual evidence —
+  > NEVER fake green, weaken a check, or hand-wave "should work". Run the real
+  > command, read the real file, report exact output (exit codes, the JSON the
+  > collector emits), not adjectives.
+- **Fleet-live trap (gates.md "Fleet-live edits").** `agents/design/collectors.sh`
+  is executed by **every** installed project's design (mentat) role on the next
+  timer fire, and the runners read this **live working tree** (`QUARTET_DIR` =
+  this checkout), so the edit is live **the moment it hits disk**, commit or not.
+  Mitigation: the change is a single jq expression on a **read-only** telemetry
+  path (can only lower an inflated count, no mutation, no config key); `bash -n`
+  it immediately after editing and never leave a half-written expression on disk.
+  Mentats fire daily (~10:00 UTC), so the edit→verify window is wide, but keep
+  the file runnable at every save.
+- **Merge:** interactive build at the owner's explicit dispatch approval — with
+  all gates green, commit to `main` and push (the repo's own convention;
+  `can_merge=false` binds only the **autonomous** harness, never a human-run
+  build). Trunk is `main`.
+
 ## Implementation Plan
 
 Single phase — a one-expression consumer-side fix plus its regression test.
-Disjoint from any runner; `collectors.sh` is read-only telemetry, so no unit
-re-bake and no fleet-live mutation risk.
+`collectors.sh` is read-only telemetry, so no unit re-bake and no *mutation*
+risk — but it **is** a fleet-live path (see Build protocol).
 
 ### Phase 1 — dedupe the count + regression test (2 pts)
 - Rewrite `collectors.sh:97-98` to the distinct-`incident_id` count above.
@@ -108,8 +130,10 @@ re-bake and no fleet-live mutation risk.
   upgraded `plant_telemetry`, assert `medic_incidents == 1` from ≥4 planted
   lifecycle events of one incident. Hermetic (planted files, PATH shim; no
   network/model). Must fail red (`= 4`) on pre-change code.
-- **Full suite:** `bats tests/` (baseline **273 `@test` blocks across 31 files**;
-  confirm current green count at build time — CLAUDE.md's "138" is stale).
+- **Full suite:** `bats tests/` — **measured baseline 273 pass / 0 fail (2026-07-25,
+  this box)**; `bats tests/ 2>&1 | grep -cE '^ok '` = 273. Must stay 273 (the
+  regression reuses the existing `design.bats:4` assertion, adding no new `@test`).
+  CLAUDE.md's "138" is stale.
 - **Leak firewall:** `bash scripts/leak-check.sh`.
 - **Deck freshness:** `bash scripts/check-deck-fresh.sh` (expected: unchanged).
 - **Syntax:** `bash -n agents/design/collectors.sh`.
@@ -129,6 +153,31 @@ re-bake and no fleet-live mutation risk.
       untouched.
 - [ ] `bats tests/` green; `leak-check.sh`, `check-deck-fresh.sh`, and
       `bash -n agents/design/collectors.sh` all green; worktree clean.
+
+## Verification surface (exact commands)
+
+Run from repo root `~/code/shipyard`:
+- `bash -n agents/design/collectors.sh` → exit 0 (run immediately after the edit).
+- Red proof first: with the `plant_telemetry` change applied but
+  `collectors.sh` **un**patched, `bats tests/design.bats` → test 4 FAILS
+  (`medic_incidents` reads `4`, not `1`). Record the observed red value.
+- After the fix: `bats tests/design.bats` → 11/11 ok (test 4 green at `1`).
+- `bats tests/` → **273 pass, 0 fail** (unchanged count).
+- `bash scripts/leak-check.sh` → `leak-check: clean`.
+- `bash scripts/check-deck-fresh.sh` → clean/unchanged (no skill frontmatter
+  touched).
+
+## Ledger
+
+_(builder appends: per-phase plan + commit hash, the observed red value, honest
+notes on anything deferred)_
+
+- [ ] **Phase 1 — dedupe count + regression** — commit `____`.
+
+## Run it
+
+`execute-ticket docs/tickets/dedupe-medic-incident-count.md` — invoked
+automatically by the auto-gate (no user-decision-class item open).
 
 ## Dependencies
 
