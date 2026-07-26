@@ -88,8 +88,13 @@ Humans enter the same loop through two front-door skills: **`/bugfix`**
 (reproduce-and-root-cause first — a failing test, reliable steps, or a
 captured signature; no ticket until the defect is pinned) and **`/feature`**
 (clarify first — verify assumptions, lock an Objective and a checklist
-Definition of Done). Both hand `write-ticket` a scope and stop at the human
-stamp unless the operator says "and build it."
+Definition of Done). Both hand `write-ticket` a scope, then `polish-ticket`
+**auto-gates**: no open decision → it drives straight through `execute-ticket`
+(build, commit/push/deploy, bounded by the project's `can_merge`/`allow_no_ci`/
+`forbidden_paths`); any open user-decision-class item (spend, outward-facing,
+destructive, live-automation behavior, design fork) → stop and surface it via
+`AskUserQuestion`. An `autonomous = true` project skips even that stop,
+applying each decision's recorded default instead.
 
 ## Skills-parity
 

@@ -36,7 +36,7 @@ agents/release/critic-*   shoulder mode (queue → watch → cold critique)
 skills/                   seven shared skills + install skill + gates template
 install.sh                per-project installer / --doctor / --uninstall
 scripts/                  leak-check, deck generator + freshness/render gates
-tests/                    bats suite (138 tests, ~17s)
+tests/                    bats suite (273 tests, ~23s)
 docs/                     INSTALL.md, ADAPTING.md, shoulder-mode.md, the deck
 ```
 
