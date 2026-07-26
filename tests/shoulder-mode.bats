@@ -209,6 +209,30 @@ critique_events() {
   [ "$(jq -r '.attempts' <<<"$EV")" = "3" ]
 }
 
+@test "claude spawn failure surfaces stderr in the log and the spawn_failed event" {
+  # Regression: a bopthere-proctor-watch spawn failed twice in one day with
+  # rc=126 and nothing beyond that opaque exit code was ever recorded --
+  # _run_harness captures stderr into $_SPAWN_STDERR but critic-watch dropped
+  # it on the floor, so the actual cause (bad binary, missing perms, ...)
+  # was unrecoverable after the fact.
+  P="$(make_fixture_project critspawnerr)"
+  make_stub_script claude 'echo "env: EACCES: permission denied, exec claude" >&2
+exit 126'
+  queue_files "$P" s1 2
+  export CRITIC_IDLE_SEC=1
+
+  for i in 1 2 3; do
+    touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+    run run_watch "$P" --session s1 --once
+    [ "$status" -eq 0 ]
+  done
+
+  echo "$output" | grep -q "EACCES"
+  EV="$(events_json | jq -c 'select(.event=="release.critique.spawn_failed")')"
+  [ -n "$EV" ]
+  jq -r '.stderr' <<<"$EV" | grep -q "EACCES"
+}
+
 # ---------------------------------------------------------------------------
 # (d) severity parser + delivery
 # ---------------------------------------------------------------------------

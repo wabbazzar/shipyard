@@ -368,18 +368,24 @@ $diff"
     # CRITIC_MODEL, oversized prompt, missing binary) must not retry every
     # poll pass forever. Give up loudly with an event so the failure is
     # visible instead of an infinite silent loop.
-    local sa
+    #
+    # _SPAWN_STDERR (set by _run_harness) is the only clue to *why* a spawn
+    # failed (bad binary, EACCES, oversized prompt, ...). Surface it -- a
+    # bare "exit=126" with nothing else is unrecoverable after the fact
+    # (observed 2026-07-26, bopthere-proctor-watch, rc=126, no other trace).
+    local sa err_line
     sa="$(cat "$spawn_attempts_file" 2>/dev/null || echo 0)"
     [[ "$sa" =~ ^[0-9]+$ ]] || sa=0
     sa=$((sa + 1))
+    err_line="$(printf '%s' "${_SPAWN_STDERR:-}" | tr '\n' ' ' | cut -c1-300)"
     if [ "$sa" -ge 3 ]; then
-      log "critic claude run failed (exit=$claude_rc) after $sa attempts; giving up, queue dropped"
+      log "critic claude run failed (exit=$claude_rc) after $sa attempts; giving up, queue dropped: $err_line"
       emit_event release.critique.spawn_failed source=shoulder \
-        rc="$claude_rc" attempts="$sa" files="$n_files"
+        rc="$claude_rc" attempts="$sa" files="$n_files" stderr="$err_line"
       rm -f "$spawn_attempts_file" "$queue" "$QUEUE_DIR/critic-snapshot-$session"
     else
       printf '%s\n' "$sa" >"$spawn_attempts_file"
-      log "critic claude run failed (exit=$claude_rc); queue kept for retry ($sa/3)"
+      log "critic claude run failed (exit=$claude_rc); queue kept for retry ($sa/3): $err_line"
     fi
     return 0
   fi
