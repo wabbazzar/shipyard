@@ -98,6 +98,36 @@ n_assessed() { events_json | jq -c 'select(.event=="overseer.assessed")' | wc -l
   [ ! -f "$ROOT/beta/tmp/overseer-result.json" ]
 }
 
+@test "the judge's git context carries ISO commit dates + co-author trailers (temporal correlation)" {
+  # Regression: the overseer once handed the judge a bare `git log --oneline`
+  # (no dates, no author attribution). The judge then could not line a result
+  # file's timestamp up against the commit that corroborates it, and fired
+  # false "out of sync with git" findings (overseer 2026-07-26: caladan
+  # chronicler-result flagged as unsupported when a co-authored scribe commit
+  # 47s later actually corroborated it). The context must give dates + trailers.
+  P="$(make_repo alpha true)"
+  # a chronicler result whose ts a real scribe commit will corroborate
+  printf '{"pass":true,"mode":"daily","timestamp":"2026-07-23T20:43:42Z","slugs_changed":["alpha"]}\n' \
+    >"$P/tmp/alpha-scribe-result.json"
+  git -C "$P" init -q
+  git -C "$P" config user.email dev@example.com
+  git -C "$P" config user.name dev
+  git -C "$P" add -A
+  TZ=UTC GIT_AUTHOR_DATE="2026-07-23T20:44:29 +0000" \
+    GIT_COMMITTER_DATE="2026-07-23T20:44:29 +0000" \
+    git -C "$P" commit -q --no-gpg-sign -m "scribe: nightly refresh (1 file(s))
+
+Co-authored-by: alpha-chronicler <noreply@anthropic.com>"
+  stub_judge '{"healthy":true,"summary":"ok","findings":[]}'
+  run run_overseer --project "$P"
+  [ "$status" -eq 0 ]
+  # the prompt handed to the judge (claude's last argv) must carry the UTC ISO
+  # commit date so a result ts can be correlated to its commit...
+  stub_argv claude | grep -q "2026-07-23T20:44:29+00:00"
+  # ...and the Co-authored-by trailer so a scribe/build commit ties to its role.
+  stub_argv claude | grep -q "alpha-chronicler"
+}
+
 @test "judge returns no usable verdict → status=error and the owner is notified" {
   P="$(make_repo alpha true)"
   stub_judge 'not json at all'
