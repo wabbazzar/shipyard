@@ -55,8 +55,11 @@ Definition of Done first) do the intent-specific intake and hand `write-ticket`
 a scope. `write-ticket → polish-ticket → execute-ticket` is the one road, and a
 stamped mentat proposal drafts into a ticket through the identical
 `write-ticket` file the human front doors use — the machine path and the human
-path converge, no agent-only fork. Each front door stops at the human stamp
-unless the operator says "and build it."
+path converge, no agent-only fork. `polish-ticket`'s **auto-gate** then
+decides: no open decision → it drives straight through `execute-ticket`; an
+open user-decision-class item (spend, outward-facing, destructive,
+live-automation behavior, design fork) → stop and surface it via
+`AskUserQuestion`. An `autonomous = true` project skips even that stop.
 
 ### 4. Agent → agent
 Agents correct each other through the same reviewable surfaces humans use:
