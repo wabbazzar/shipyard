@@ -123,7 +123,12 @@ Co-authored-by: alpha-chronicler <noreply@anthropic.com>"
   [ "$status" -eq 0 ]
   # the prompt handed to the judge (claude's last argv) must carry the UTC ISO
   # commit date so a result ts can be correlated to its commit...
-  stub_argv claude | grep -q "2026-07-23T20:44:29+00:00"
+  stub_argv claude | grep -q "2026-07-23T20:44:29Z"
+  # ...in a git-version-STABLE spelling. `--date=iso-strict-local` is not one:
+  # git <=2.43 renders a zero offset as "+00:00" and git >=2.54 renders it as
+  # "Z", so this assertion passed locally and failed in CI for days. The runner
+  # pins an explicit strftime format instead; keep it that way.
+  ! grep -q 'iso-strict-local' "$QUARTET_ROOT/agents/overseer/runner.sh"
   # ...and the Co-authored-by trailer so a scribe/build commit ties to its role.
   stub_argv claude | grep -q "alpha-chronicler"
 }
