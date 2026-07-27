@@ -1,0 +1,83 @@
+#!/usr/bin/env bats
+#
+# delegation-contract.bats — the Delegation Plan contract across the pipeline
+# skills (docs/tickets/delegation-plan-pipeline.md).
+#
+# These are GUARD tests: they assert the contract's load-bearing clauses are
+# present and haven't been silently dropped by a later prose edit. They cannot
+# prove the behavior works — that is Phase 7's job, measured with
+# scripts/delegation-report.py against the recorded baseline. Their value is
+# that removing a clause turns red instead of going unnoticed.
+#
+# Coverage grows one phase at a time — a case is added only when the clause it
+# asserts has landed, so the suite is never red at a phase boundary:
+#   * execute-ticket — delegation as the DEFAULT, the exception list, the
+#     return-shape contract, the no-exploratory-Read rule, the `builder:`
+#     Ledger trace, and (guard) that verify-before-commit survived the edit;
+#   * write-ticket   — a per-phase `Delegation:` line in the emitted template;
+#   * polish-ticket  — hardening intent into briefs + the `builder:` Ledger field;
+#   * feature/bugfix — investigation sweeps delegated, repro rule intact.
+#
+# No network, no model, no filesystem writes — pure content assertions against
+# the skill files in this repo.
+
+setup() {
+  load helpers
+  quartet_setup
+  SKILLS="$QUARTET_ROOT/skills"
+}
+
+# has <file> <extended-regex> — case-insensitive, whole-file
+has() {
+  grep -qiE "$2" "$1"
+}
+
+# ---------------------------------------------------------------------------
+# execute-ticket
+# ---------------------------------------------------------------------------
+
+@test "execute-ticket: delegation is the DEFAULT, not an option" {
+  f="$SKILLS/execute-ticket/SKILL.md"
+  has "$f" 'delegat.*(is the )?DEFAULT|DEFAULT, not an option'
+}
+
+@test "execute-ticket: names the inline exception list" {
+  f="$SKILLS/execute-ticket/SKILL.md"
+  has "$f" 'exception'
+  has "$f" 'single-file edit'
+}
+
+@test "execute-ticket: imposes the bounded return-shape contract on subagents" {
+  f="$SKILLS/execute-ticket/SKILL.md"
+  has "$f" '40 lines'
+  has "$f" 'exit codes'
+}
+
+@test "execute-ticket: forbids exploratory Read" {
+  f="$SKILLS/execute-ticket/SKILL.md"
+  has "$f" 'never Read to explore|not a Read|Ask for the answer, not the file'
+}
+
+@test "execute-ticket: requires a builder: line in the Ledger" {
+  f="$SKILLS/execute-ticket/SKILL.md"
+  has "$f" 'builder:'
+  has "$f" 'inline.*no stated reason is a defect|no recorded reason is a defect'
+}
+
+@test "execute-ticket: verify-before-commit survived the delegation edit" {
+  # Guard: delegation must never become a laundering path for unverified work.
+  f="$SKILLS/execute-ticket/SKILL.md"
+  has "$f" 'VERIFY-BEFORE-COMMIT'
+  # Phrase, not sentence: the source hard-wraps, so a regex spanning the
+  # "Never / trust a subagent" line break can never match.
+  has "$f" "trust a subagent"
+}
+
+@test "execute-ticket: keeps the verbatim anti-cheating clause" {
+  f="$SKILLS/execute-ticket/SKILL.md"
+  has "$f" 'NEVER fake'
+}
+
+# Phases 3-6 append their cases here as they land (write-ticket,
+# polish-ticket, feature/bugfix, gate file) — see
+# docs/tickets/delegation-plan-pipeline.md.

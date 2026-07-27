@@ -536,6 +536,37 @@ Gate: `py_compile` OK · `bats tests/delegation-report.bats` 11/11 ·
 `leak-check` clean (with new files `git add -N`'d — see Traps) ·
 `check-deck-fresh` in sync.
 
+Commit: `2baeaa2`
+
+### Phase 2 — `execute-ticket`: delegation as the default, with a trace
+
+builder: inline (exception 1 — single-file prose edit in a file already read;
+matches the ticket's stated `Delegation:` line for this phase)
+
+`skills/execute-ticket/SKILL.md` §2.2 rewritten: delegation is now the DEFAULT
+with a 4-item exception list, a mandatory `builder:` Ledger trace, the
+never-Read-to-explore rule, and the ≤40-line return-shape contract. §2.6 carries
+the `builder:` line into the commit step; Non-negotiables gain "Delegate by
+default". §2.5 verify-before-commit is untouched, and the new text explicitly
+states delegation moves the work, never the verification.
+
+`tests/delegation-contract.bats` added — 7 cases (5 contract + 2 guards).
+**Shown failing first:** against pre-change `SKILL.md`, cases 1–5 report
+`not ok`; guards 6–7 pass pre-change, as guards must.
+
+**Two self-caught test defects:**
+1. Guard 6 (`verify-before-commit survived`) failed pre-change when it should
+   have passed — its regex spanned the source's hard line-wrap between "Never"
+   and "trust a subagent's". Narrowed to a phrase that cannot straddle the
+   break. A guard that fails pre-change isn't guarding anything.
+2. The file was first written with **all** phases' anchors, leaving the suite
+   red (10 failures) until Phase 6 — a phase boundary with a red gate, which
+   this skill forbids. Trimmed to the phases that have landed; Phases 3–6 append
+   their own cases. The ticket said to do it this way and the first pass didn't.
+
+Gate: `bats tests/` **292 passing, 0 failures** · `leak-check` clean ·
+`check-deck-fresh` in sync (deck byte-identical, as L1 requires).
+
 Commit: _(this commit)_
 
 ---

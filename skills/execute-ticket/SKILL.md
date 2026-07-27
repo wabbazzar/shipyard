@@ -72,9 +72,35 @@ it.
 
 1. **Plan the slice + write it to the ticket Ledger** before working
    (anti-drift after any compaction).
-2. **Delegate heavy/wide work** (research sweeps, per-file edits, data
-   verification, independent adversarial QA) to subagents with a TIGHT,
-   self-contained brief. Hand every subagent this clause verbatim:
+2. **Delegate the slice — this is the DEFAULT, not an option.** Your context is
+   the scarcest resource in the run: an orchestrator that builds inline re-reads
+   its own swollen history on every turn, and the re-reading, not the work, ends
+   up being what the run costs. Build each slice through a subagent with a
+   TIGHT, self-contained brief **unless** it falls under one of these
+   exceptions:
+   1. a single-file edit in a file you have already read;
+   2. a gate command whose output you must read yourself to satisfy
+      verify-before-commit (§5);
+   3. a change under ~30 lines;
+   4. an operating constraint that forbids subagents — record it verbatim.
+
+   **Record which, in the Ledger, every phase:** `builder: subagent (<N>
+   agents)` or `builder: inline (<reason>)`. An `inline` with no recorded reason
+   is a defect, not a judgment call — the whole point of the trace is that
+   skipping delegation has to be a visible choice.
+
+   Two rules follow from it:
+   - **Never Read to explore.** If answering a question would take more than two
+     `Read`s, or any `Read` of a file over ~500 lines, that is a subagent brief,
+     not a Read. Ask for the answer, not the file.
+   - **Bound what comes back.** Every brief states the return shape: ≤40 lines —
+     files changed; commands run + exit codes; evidence lines (JSONL, HTTP
+     codes, test counts); blockers. Longer evidence goes in the ticket Ledger,
+     not your context.
+
+   Delegating never delegates the verification: §5 stands unchanged, and you
+   re-run the phase's gate yourself before every commit. Hand every subagent
+   this clause verbatim:
    > Converge honestly or report the precise blocker with the actual
    > evidence — NEVER fake a green result, weaken a check, or hand-wave
    > "should work". Run the real command, read the real file, curl the real
@@ -112,7 +138,8 @@ it.
 6. **Commit** with explicit `git add <files>` (never `-A`), a concise
    imperative message per the project's conventions + the Co-Authored-By
    trailer, **in the repo the change lives in** — then update the Ledger with
-   the commit hash and an honest note. `git status` clean in every touched
+   the commit hash, the phase's `builder:` line (§2.2), and an honest note.
+   `git status` clean in every touched
    repo before moving on. The system must be healthy at every phase boundary —
    no stopped services, no half-baked units, no orphaned processes.
 
@@ -179,8 +206,11 @@ outputs, not adjectives), decisions made, anything NOT verified.
 - **Observable** — a change isn't done until the real system shows it:
   the script's output, the unit's event line, the rendered view, the port's
   response. Code inspection is never sufficient.
+- **Delegate by default** — build each slice through a subagent unless it hits
+  a listed exception (§2.2), and record `builder:` in the Ledger either way. An
+  inline phase with no recorded reason is a defect.
 - **Verify-before-commit** — re-run the gate yourself; never trust a
-  subagent's green.
+  subagent's green. Delegation moves the work, never the verification.
 - **Never cheat the gate** — no weakened checks, no disabled units to dodge
   failures, no committing past a red gate. Green honestly or report.
 - **The system stays healthy at every phase boundary** — and background
