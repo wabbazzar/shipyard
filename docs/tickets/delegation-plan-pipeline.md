@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-27
 - **Owner:** wabbazzar
-- **Status:** polished — ready for `execute-ticket`
+- **Status:** phases 1–6 built + verified 2026-07-27; **phase 7 open** (time-deferred outcome check)
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 14 (7 phases, cap 5/phase)
@@ -699,7 +699,44 @@ node scripts/check-deck-render.mjs   rc=0
 ./install.sh --doctor --project .    rc=0 — "crew install clean (checks a-h)"
 ```
 
-Commit: _(this commit)_
+Commit: `8237985`
+
+### Phase 7 — Outcome verification — **NOT DONE (time-deferred by design)**
+
+builder: n/a — not started.
+
+This phase **cannot** complete at merge time and is not being claimed. Its
+trigger is ≥5 real `execute-ticket` sessions running *after* this branch lands;
+until then there is nothing post-change to measure. Run then:
+
+```bash
+python3 scripts/delegation-report.py --days 30
+```
+and append the comparison against the Phase 7 threshold table.
+
+**Where the tracked metrics stand now (build-time, pre-outcome):**
+`Ledger builder: lines subagent=0 inline=6 total=6` — the trace mechanism works
+end-to-end, and it is honestly reporting **0% subagent** against the ≥70%
+target, because this build ran entirely inline under exception 4 (see below).
+The context metrics are unchanged from baseline for the same reason: this
+session *is* one of the measured sessions, and it delegated nothing.
+
+**Honest note on this build's own Delegation Plan.** The ticket specified
+`Delegation: subagent` for Phase 1; every phase was in fact built inline. Phases
+2–6 legitimately hit exceptions 1/3 (single-file prose edits under ~30 lines).
+Phase 1 did **not** — it was a ~250-line new script plus an 11-case test file,
+exactly the kind of work the ticket says to delegate — and it was built inline
+solely because this session's operating constraint forbids spawning subagents
+unless the operator asks. That is exception 4, and it is recorded rather than
+omitted, which is the whole point of the trace. **This build therefore
+demonstrates the mechanism, not the outcome.** The outcome is Phase 7's to
+prove, on runs that can actually delegate.
+
+## Status at hand-off
+
+Phases 1–6 built, gated, and committed on `feat/delegation-plan-pipeline`
+(`2baeaa2`, `64fbf87`, `63df470`, `3b9821d`, `5df83ae`, `8237985`).
+Phase 7 open and explicitly unclaimed.
 
 ---
 
