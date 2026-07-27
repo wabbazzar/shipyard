@@ -387,6 +387,49 @@ another agent modified `install.sh`, `README.md`, `skills/install/SKILL.md` and
 of this commit; `git add` was scoped to this phase's three files only. The 324
 count includes their work, which is also green.
 
+Commit: `bad5ac0`
+
+### Phase 3 — `scripts/ticket-lifecycle.sh`: the deterministic engine
+
+builder: subagent (1 agent) — the first phase in this session actually built by
+delegation rather than under exception 4.
+
+The engine that makes the lifecycle deterministic instead of advisory:
+`--check` (exit 1 on drift — what CI and `--doctor` call), `--sort` (dry-run by
+default) / `--sort --apply`, `--graduate <file>`, and **exit 3 as a deliberate
+no-op** when `lifecycle_dirs` isn't set, so flat projects are untouched.
+Freezer words are matched before complete words; an unparseable or absent
+`Status:` falls to **pending** — a ticket is never guessed into `complete/`.
+
+`tests/ticket-lifecycle-script.bats` — 14 cases, hermetic (fixture git repos in
+`$BATS_TEST_TMPDIR`).
+
+**Independently re-verified rather than trusted** (§2.5 — never trust a
+subagent's green). Two levels:
+
+1. *Behavior*, on a hand-built fixture outside the suite: `built + verified` →
+   complete; `superseded by the built replacement` → **freezer**, not complete;
+   no `Status:` line → stays pending; `--sort` dry-run left all four files in
+   place; `--check` exited 1 and named both misfiled tickets.
+2. *Test quality* — the agent's failing-first evidence was all exit 127
+   ("command not found"), which only proves the file didn't exist yet. So the
+   mapping was **mutation-tested** against three deliberate defects:
+
+   | mutation | caught by |
+   |---|---|
+   | unparseable status defaults to `complete` | `not ok 3`, `not ok 5` |
+   | freezer words never match (superseded→complete) | `not ok 3`, `not ok 6` |
+   | `--sort` applies without `--apply` | `not ok 7` |
+
+   Script restored byte-identical afterwards (`diff -q`), suite re-run green.
+
+*Cosmetic, not fixed:* the `MISFILED:` line echoes the raw status with its
+Markdown bullet artifacts (`status "** built + verified …"`). Harmless; noted
+for a later pass rather than churned now.
+
+Gate: `bats tests/` **338 passing, 0 failures** · `bash -n` OK · leak-check
+clean (files `git add -N`'d first) · deck-fresh in sync.
+
 Commit: _(this commit)_
 
 ---
