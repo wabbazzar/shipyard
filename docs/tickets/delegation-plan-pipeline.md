@@ -491,7 +491,52 @@ None blocking. Phase 7 is gated on real post-merge usage, not on other work.
 
 ## Ledger
 
-_(builder appends per phase: plan, commit hash, `builder:` line, honest notes)_
+### Phase 1 — Measurement harness + recorded baseline
+
+builder: inline (exception 4 — this session's operating constraint forbids
+spawning subagents unless the operator requests them; the ticket's own
+`Delegation:` line called for a subagent, and this deviation is recorded rather
+than omitted, which is the behavior the ticket exists to enforce)
+
+Shipped `scripts/delegation-report.py` (stdlib-only, read-only) +
+`tests/delegation-report.bats` (11 cases, hermetic via `CLAUDE_PROJECTS_DIR`
+into `$BATS_TEST_TMPDIR`).
+
+**Baseline reproduced** — `python3 scripts/delegation-report.py --all`:
+sessions=20, zero-subagent sessions=10 (50%), Agent calls=42, avg ctx/turn=344k,
+peak=812k (top: 812/731/724/681/677k), turns >300k = 53% carrying 72% of all
+context reads, `Read` = 84.7% of returned bytes (494 calls, 27.3 KB avg),
+results >60KB = 77, largest = 631 KB, context-carry-vs-work = **86%**.
+Turn/token counts drift slightly upward against the ticket's table (8,665 vs
+8,618 turns; 9.75 M vs 9.68 M output) because *this* session is an
+`execute-ticket` session still being appended to as the script runs — expected,
+and itself evidence the attribution works.
+
+**Two defects found by running it, both fixed and pinned failing-first:**
+1. *Cost-split denominator was ambiguous.* First run reported "cache-read 75%"
+   against the ticket's 86%: the script divided by total cost-equivalent
+   (including cache-write) while the baseline divided by context+output. Now
+   reports both, with `cache_read_pct_vs_output` (86%) explicitly labeled as the
+   Phase 7 headline ratio.
+2. *Ledger scan counted spec prose as phase entries.* First run reported
+   `subagent=1` from this very ticket's contract example. Scan is now scoped to
+   the section after the `## Ledger` heading. Reverting the fix makes tests 8+9
+   fail (`not ok 8`, `not ok 9`); reverting the attribution rule to a bare
+   substring match makes test 2 fail (`not ok 2`) — both demonstrated before
+   restoring.
+
+*Test-quality finding, self-caught:* test 8 originally named the Ledger-scoping
+defect but could not fail on it — its fixture's prose line wasn't at line-start,
+so the regex missed it either way. Fixture rewritten to a fenced line-start
+block mirroring the real false positive; it now fails on the defect. Per the
+ticket's own rule, a test that cannot fail is a finding, not a test.
+
+Gate: `py_compile` OK · `bats tests/delegation-report.bats` 11/11 ·
+`bats tests/` **285 passing, 0 failures** (274 baseline + 11) ·
+`leak-check` clean (with new files `git add -N`'d — see Traps) ·
+`check-deck-fresh` in sync.
+
+Commit: _(this commit)_
 
 ---
 
