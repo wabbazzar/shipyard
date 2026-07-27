@@ -567,6 +567,27 @@ states delegation moves the work, never the verification.
 Gate: `bats tests/` **292 passing, 0 failures** · `leak-check` clean ·
 `check-deck-fresh` in sync (deck byte-identical, as L1 requires).
 
+Commit: `64fbf87`
+
+### Phase 3 — `write-ticket`: draft the Delegation Plan
+
+builder: inline (exception 1 — single-file prose edit, as the phase's
+`Delegation:` line specified)
+
+`skills/write-ticket/SKILL.md`: the Step 4 Implementation Plan template now
+requires a `Delegation:` line per phase (intent only — the hardened brief stays
+polish-ticket's job, preserving the three-skill separation); Step 3 gains
+read-deep-not-wide (a wide sweep goes to a subagent that returns `path:line`
+citations, not file contents); Anti-patterns gains "a phase with no Delegation
+line", naming why silence is not neutral — it defaults to inline.
+
+`tests/delegation-contract.bats` +5 cases (3 contract, 2 guards).
+**Shown failing first** by stashing only the skill edit: cases 8–10 report
+`not ok`; the two separation guards pass pre-change, as guards must.
+
+Gate: `bats tests/` **297 passing, 0 failures** · `leak-check` clean ·
+`check-deck-fresh` in sync.
+
 Commit: _(this commit)_
 
 ---
