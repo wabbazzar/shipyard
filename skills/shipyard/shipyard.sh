@@ -243,6 +243,20 @@ _learn_classify() {
   echo ""
 }
 
+# _ticket_dir <dir> — absolute ticket directory for <dir>, read from ITS OWN
+# .agents/config.toml [write_ticket] ticket_dir. `learn` can write to a dir
+# other than $PROJECT_DIR, so never reuse the top-level CFG_JSON here.
+# Falls back to docs/tickets when the key or the config file is absent.
+_ticket_dir() {
+  local d="$1" cfg="{}" rel=""
+  if [ -f "$d/.agents/config.toml" ]; then
+    cfg="$(load_config_json "$d/.agents/config.toml" 2>/dev/null)" || cfg="{}"
+  fi
+  rel="$(jq -r '.write_ticket.ticket_dir // empty' <<<"$cfg" 2>/dev/null)"
+  [ -n "$rel" ] || rel="docs/tickets"
+  case "$rel" in /*) printf '%s\n' "$rel" ;; *) printf '%s/%s\n' "$d" "$rel" ;; esac
+}
+
 cmd_learn() {
   local lesson; lesson="${ARGS[*]:-}"
   lesson="$(printf '%s' "$lesson" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -281,8 +295,9 @@ cmd_learn() {
       echo "learn: routed project-specific → .agents/$role.md"
       ;;
     generic)
-      mkdir -p "$dir/docs/tickets"
-      local f="$dir/docs/tickets/learned-$slug.md"
+      local tdir; tdir="$(_ticket_dir "$dir")"
+      mkdir -p "$tdir"
+      local f="$tdir/learned-$slug.md"
       {
         printf '# Learned (generic → core change): %s\n\n' "$lesson"
         printf -- '- **Captured:** %s\n' "$stamp"
@@ -294,8 +309,9 @@ cmd_learn() {
       echo "learn: routed generic → $f"
       ;;
     install)
-      mkdir -p "$dir/docs/tickets"
-      local f="$dir/docs/tickets/installer-question-$slug.md"
+      local tdir; tdir="$(_ticket_dir "$dir")"
+      mkdir -p "$tdir"
+      local f="$tdir/installer-question-$slug.md"
       {
         printf '# Installer question (install-time): %s\n\n' "$lesson"
         printf -- '- **Captured:** %s\n' "$stamp"

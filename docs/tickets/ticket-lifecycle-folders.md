@@ -462,6 +462,34 @@ is gitignored and therefore **absent here** — the delegation-contract cases th
 assert against it skip cleanly (built to do exactly that), and Phase 5's
 `.agents/gates.md` edit must be made in the main checkout.
 
+Commit: `ebac9e1`
+
+### Phase 6 — `shipyard learn` honors `ticket_dir`
+
+builder: subagent (1 agent)
+
+`skills/shipyard/shipyard.sh` gains `_ticket_dir()` (:246-259), reading the
+**target** directory's own `.agents/config.toml` — `learn` can write to a dir
+other than `$PROJECT_DIR`, so the top-level `CFG_JSON` is deliberately not
+reused. Both arms (`learned-*`, `installer-question-*`) now resolve through it;
+falls back to `docs/tickets` when the key or the whole config is absent.
+Filename prefixes unchanged — they are deliberate draft-stub markers.
+
+**Independently re-verified** (§2.5):
+- *Behavior:* a fixture with `ticket_dir = "docs/tickets/pending"` put the stub
+  at `docs/tickets/pending/learned-…md`; a fixture with no `[write_ticket]`
+  block put it at `docs/tickets/…` — both confirmed by `find`.
+- *Test quality:* a first mutation was too coarse (it broke the function
+  syntactically and failed 7 cases including the fallback guards, which is
+  wrong). A **surgical** mutation — point the `jq` read at a nonexistent key so
+  config is ignored but the fallback still works — failed exactly cases 7 and 8
+  while 9 and 10 stayed green. That is the correct blast radius, and it proves
+  the new cases bite on the real defect rather than on collateral breakage.
+  Script restored byte-identical.
+
+Gate: `bats tests/` **348 passing, 0 failures** · `bash -n` OK · leak-check
+clean · deck-fresh in sync.
+
 Commit: _(this commit)_
 
 ---
