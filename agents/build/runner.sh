@@ -125,16 +125,42 @@ if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
 
   # Pre-flight: live only. dry-run does no git ops, so skip.
   if [ "$MODE" = "live" ]; then
-    if [ -n "$(git status --porcelain)" ]; then
-      echo "[$SVC] SKIP: main checkout dirty (benign — not a failure)" >> "$LOG_FILE"
-      git status --short >> "$LOG_FILE"
-      # Benign precondition: uncommitted changes mean "skip this cycle", not a
-      # failure. Record the skip for observability but exit 0 so the systemd
-      # unit does not enter `failed` — which the medic reads as self_failure
-      # and freezes 24h (ticket 041). A routine skip does not page the owner.
-      [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
-        mode="$MODE" status="abort" reason="dirty" || true
-      exit 0
+    PORCELAIN="$(git status --porcelain)"
+    if [ -n "$PORCELAIN" ]; then
+      # install.sh leaves shipyard-managed skill symlinks untracked in the
+      # project's main checkout (nothing ever commits them), which otherwise
+      # makes an idle project look permanently dirty and silently starves its
+      # daily build forever. An untracked symlink under .claude/skills/ that
+      # still resolves into $QUARTET_DIR/skills is exempt; any other change
+      # (including a modified/broken skill symlink) still counts as dirty.
+      REAL_DIRTY=""
+      while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        path="${line:3}"
+        case "$line" in
+          '?? .claude/skills/'*)
+            if [ -L "$path" ]; then
+              tgt="$(readlink -f "$path" 2>/dev/null || true)"
+              case "$tgt" in
+                "$QUARTET_DIR/skills/"*) continue ;;
+              esac
+            fi
+            ;;
+        esac
+        REAL_DIRTY="$REAL_DIRTY$line
+"
+      done <<<"$PORCELAIN"
+      if [ -n "$REAL_DIRTY" ]; then
+        echo "[$SVC] SKIP: main checkout dirty (benign — not a failure)" >> "$LOG_FILE"
+        printf '%s' "$REAL_DIRTY" >> "$LOG_FILE"
+        # Benign precondition: uncommitted changes mean "skip this cycle", not a
+        # failure. Record the skip for observability but exit 0 so the systemd
+        # unit does not enter `failed` — which the medic reads as self_failure
+        # and freezes 24h (ticket 041). A routine skip does not page the owner.
+        [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
+          mode="$MODE" status="abort" reason="dirty" || true
+        exit 0
+      fi
     fi
     CB="$(git rev-parse --abbrev-ref HEAD)"
     if [ "$CB" != "$TRUNK_BRANCH" ]; then

@@ -31,3 +31,30 @@ setup() {
   run run_runner build "$P" --mode bogus
   [ "$status" -ne 0 ]
 }
+
+@test "build: an untracked shipyard skill symlink alone is NOT dirty -> proceeds past pre-flight" {
+  P="$(make_fixture_project blskill can-merge-false.toml)"
+  # A sibling skill already tracked (real fleet state) so git reports the new
+  # symlink as its own line, not a collapsed untracked ".claude/" directory.
+  mkdir -p "$P/.claude/skills"
+  ln -s "$QUARTET_ROOT/skills/feature" "$P/.claude/skills/feature"
+  git -C "$P" add .claude/skills/feature
+  git -C "$P" commit -q -m "track feature skill"
+  ln -s "$QUARTET_ROOT/skills/bugfix" "$P/.claude/skills/bugfix"   # untracked, resolves into shipyard
+  run run_runner build "$P" --mode live
+  # Not the benign dirty-abort: install drift alone must not block the run.
+  ! events_json | jq -e 'select(.event=="job.end" and .reason=="dirty")' >/dev/null
+}
+
+@test "build: a real edit alongside a skill symlink still aborts dirty" {
+  P="$(make_fixture_project blskillreal can-merge-false.toml)"
+  mkdir -p "$P/.claude/skills"
+  ln -s "$QUARTET_ROOT/skills/feature" "$P/.claude/skills/feature"
+  git -C "$P" add .claude/skills/feature
+  git -C "$P" commit -q -m "track feature skill"
+  ln -s "$QUARTET_ROOT/skills/bugfix" "$P/.claude/skills/bugfix"   # benign, exempt
+  echo "uncommitted" > "$P/DIRTY"                                  # real edit, not exempt
+  run run_runner build "$P" --mode live
+  [ "$status" -eq 0 ]                        # still a benign skip (exit 0), not a failure
+  events_json | jq -e 'select(.event=="job.end" and .reason=="dirty")' >/dev/null
+}
