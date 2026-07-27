@@ -102,6 +102,7 @@ block (never a changed-file-membership one — see the critic input contract).
 | a project gate or budget | `.agents/config.toml` / `.agents/gates.md` |
 | portable doctrine | a core PR (leak-checked, fleet-live on merge) |
 | a question every future install should ask | the installer interview |
+| how a phase should be *built* (who does the work) | the ticket's `Delegation:` line → the Ledger's `builder:` line |
 
 `/shipyard learn "<lesson>"` applies this rule mechanically: `--to project`
 appends a note to `.agents/<role>.md`, `--to generic` drafts a `docs/tickets/`

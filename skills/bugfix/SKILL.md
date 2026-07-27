@@ -55,6 +55,17 @@ produce any of the three, the outcome is **not** a ticket — it is a
 data, environment) and what you observed. Do not close as "not reproducible"
 without that record.
 
+**Hunt for the repro through a subagent; keep the repro itself first-class.**
+Searching for where the defect lives — grepping the module, reading candidate
+call sites, trying inputs — is a wide sweep, and running it inline fills your
+context with files before the ticket exists. Brief a subagent with the symptom
+and the suspected surface; require back **≤40 lines: the exact commands run and
+their exit codes, the verbatim failing output or stack trace, and the
+`path:line`s involved.** Demand the *actual* output — a subagent's summary of a
+failure is not a reproduction, and the verbatim signature is what the ticket's
+acceptance anchor is built from. Re-run the repro yourself before you carry it
+into the ticket.
+
 ### 2 — Pin the violated observable contract (the repro must fail *because of* the bug)
 
 The reproduction pins the **observable contract being violated** — a returned
@@ -81,6 +92,13 @@ actually shows (**Actual**), and whether that rules the cause in or out
 Fixating on the first plausible cause is how you fix the wrong thing. **One
 survivor supported by the evidence** becomes the root cause you carry into the
 ticket.
+
+**Run the rival-cause probes as parallel subagents — one cause each.** Each
+returns **≤40 lines: Expected / Actual / Verdict, with the command output or
+`path:line` that decides it.** Two payoffs beyond context: the probes run
+concurrently, and a subagent briefed on *one* cause cannot quietly rationalize
+its way to the cause you already favor. Brief them to try to **rule their own
+cause out**, and to report Verdict: ruled in only on evidence they can quote.
 
 ### 4 — Root cause (four one-line answers, carry them into the ticket)
 
