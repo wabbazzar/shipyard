@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-27
 - **Owner:** wabbazzar
-- **Status:** Polished 2026-07-27 — ready for `execute-ticket`
+- **Status:** Phase 1 built (`79b3d25`); SCOPE REVISED 2026-07-27 by owner decision — determinism + default-on + fleet migration (see Scope Revision)
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 11 (4 phases, cap 5/phase)
@@ -364,3 +364,116 @@ Commit: _(this commit)_
 ---
 
 Run it with `execute-ticket`.
+
+---
+
+# SCOPE REVISION (owner decisions, 2026-07-27) — supersedes the plan above
+
+The owner's direction: **deterministic where possible, on by default, and every
+installed repo ends up with real ticket hygiene.** Four decisions, answered:
+
+| # | Decision |
+|---|---|
+| D1 | **One vocabulary fleet-wide: `pending/` `complete/` `freezer/`.** Rename `backlog→pending`, `archive→complete` on bopthere, shredly, starbird. |
+| D2 | **Auto-sort existing tickets by their `Status:` line**, dry-run first — but the *final* sort call on each repo is made by a **per-repo subagent (sonnet)** given the status-line reading as a recommendation. |
+| D3 | **Enforcement: block in CI + `--doctor`, warn in pre-commit.** |
+| D4 | **Keep existing filenames.** Only the folder changes. |
+
+### What this changes about the original plan
+
+The original ticket enforced the lifecycle with *prose only* — the reason
+Phases 1–3 had no real tests. That is now the minority of the work. The core
+becomes a **real script** that can be run, tested, and failed:
+
+`scripts/ticket-lifecycle.sh` — the deterministic engine, with real bats cases:
+- `--check` — every ticket's folder matches its `Status:`; **exit 1 on drift**
+  (this is what CI and `--doctor` call);
+- `--sort [--apply]` — `git mv` each ticket to the folder its status implies;
+  **dry-run by default**, prints the full plan;
+- `--graduate <file>` — move one finished ticket to `complete/`, for
+  `execute-ticket` to call in the final phase's commit;
+- exit `3` (deliberate no-op) when the project has no lifecycle configured, so
+  flat projects are untouched.
+
+`execute-ticket` no longer has to be *trusted* to move the file — it calls the
+script, and `--check` catches it if it doesn't.
+
+### Default ON — and the house-rule tension, resolved
+
+The repo's config-gated-additivity rule says an unset key must mean exactly
+today's behavior. The owner wants this **on by default**. Both hold, at
+different layers:
+
+- **Skills/script layer** — absent `lifecycle_dirs`, behavior is byte-identical
+  to today. A project whose config nobody touches never changes. (Keeps the
+  gate class honest, and keeps a stale checkout safe.)
+- **Installer layer** — `install.sh` now writes `lifecycle_dirs = true`, creates
+  the three folders, and offers migration. **On for every install and re-install**,
+  which is how every fleet project actually gets it.
+
+So "default off" survives only for a config nobody has run the installer against.
+
+## Revised phases
+
+Phase 1 is already built (`79b3d25`). Phases 2–8 below replace the original 2–4.
+
+### Phase 2 — `polish-ticket`: read the config, never move (2 pts)
+`Delegation: inline (single-file prose edit)`
+Replace the hardcoded `docs/tickets/<name>.md` (`SKILL.md:27`); state that polish
+hardens **in place** and never relocates. Content-contract cases.
+
+### Phase 3 — `scripts/ticket-lifecycle.sh`: the deterministic engine (5 pts)
+`Delegation: subagent — build the script + its bats suite to the spec above;
+return files changed, commands run with exit codes, and the failing-then-passing
+test output, ≤40 lines`
+Status→folder mapping is the load-bearing detail: a `Status:` matching
+built/complete/verified/shipped ⇒ `complete/`; parked/deferred/superseded/won't-do
+⇒ `freezer/`; **anything else, including unparseable ⇒ `pending/`** (never guess
+a ticket into `complete/`). Real failing-first bats cases against fixture repos.
+
+### Phase 4 — `execute-ticket` calls the engine (2 pts)
+`Delegation: inline (single-file prose edit)`
+Step 5 — Finish gains: on full completion with `lifecycle_dirs` on, run
+`ticket-lifecycle.sh --graduate <ticket>` and include the move **in the final
+phase's commit**. Partial completion leaves it in `pending/`. An autonomous run
+never writes to `freezer/`.
+
+### Phase 5 — installer: default ON + the gate class (5 pts)
+`Delegation: subagent — installer changes + doctor wiring + bats; return the
+--dry-run diff, doctor output, and test results, ≤40 lines`
+`install.sh` creates `pending/complete/freezer`, writes the four config keys plus
+`lifecycle_dirs = true`, drops the lifecycle gate class into `.agents/gates.md`,
+and wires `--doctor` to run `ticket-lifecycle.sh --check` as a **blocking** class.
+Pre-commit hook warns (never blocks). CI gets a lifecycle job.
+
+### Phase 6 — `shipyard learn` honors `ticket_dir` (2 pts)
+`Delegation: inline (small bash change; shipyard.sh already has CFG_JSON at :46)`
+Read the target repo's own `ticket_dir` (note: `learn` operates on `$dir`, not
+always `$PROJECT_DIR`), fall back to `docs/tickets`. Real behavioral bats cases.
+
+### Phase 7 — fleet migration, one subagent per repo (5 pts)
+`Delegation: subagent PER REPO (sonnet) — 7 agents`
+Per D1/D2/D4. Each agent gets one repo, runs `ticket-lifecycle.sh --sort`
+(dry-run) for the status-line recommendation, makes the final call per ticket,
+renames folders to the standard vocabulary, and commits on a branch. Repos:
+aurora (rename none; add `lifecycle_dirs`), bopthere, shredly (62 flat + already
+half-migrated), starbird, ice, caladan, 2pizzaclub (folders only, no tickets).
+**No repo is pushed or merged without the owner's stamp** — each agent stops at
+a branch and reports.
+
+### Phase 8 — shipyard dogfoods it + full battery (2 pts)
+`Delegation: inline`
+shipyard adopts the layout for its own 11 tickets, reversing original O4 — a
+harness that doesn't run its own hygiene rule has no business shipping it.
+Full battery + CI green.
+
+## Revised Definition of Done
+
+- [ ] `ticket-lifecycle.sh --check` exits non-zero on a misfiled ticket, proven by test
+- [ ] `--sort` is dry-run by default and never lands a ticket in `complete/` by guess
+- [ ] A project with no lifecycle config is byte-for-byte unaffected (proven, not asserted)
+- [ ] A fresh `install.sh` run yields the three folders, the config keys, and the gate class
+- [ ] `--doctor` fails on lifecycle drift; pre-commit warns; CI has a lifecycle job
+- [ ] All 7 fleet repos migrated on branches, one subagent each, filenames unchanged
+- [ ] shipyard's own tickets are foldered
+- [ ] `bats tests/`, leak-check, deck-fresh green; CI green on main
