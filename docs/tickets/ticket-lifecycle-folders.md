@@ -2,16 +2,17 @@
 
 - **Created:** 2026-07-27
 - **Owner:** wabbazzar
-- **Status:** Proposed — ready for polish
+- **Status:** Polished 2026-07-27 — ready for `execute-ticket`
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 11 (4 phases, cap 5/phase)
-- **Refs:** `skills/write-ticket/SKILL.md:46-49,73-81` (`ticket_dir` /
-  `backlog_dir` / `archive_dir`, id resolution), `skills/polish-ticket/SKILL.md:27`
-  (hardcoded `docs/tickets/<name>.md`), `skills/execute-ticket/SKILL.md:180-188`
-  (Step 5 — Finish), `skills/shipyard/shipyard.sh:285,298` (`learn` writes bare
-  `docs/tickets/learned-*.md` / `installer-question-*.md`),
-  `skills/gates.md.template`, `skills/install/SKILL.md`
+- **Refs (re-anchored 2026-07-27 — today's delegation commits shifted two):**
+  `skills/write-ticket/SKILL.md:46-48` (dir keys) and **`:77-82`** (id
+  resolution — ticket said `:73-81`), `skills/polish-ticket/SKILL.md:27`
+  (hardcoded `docs/tickets/<name>.md` — confirmed), **`skills/execute-ticket/SKILL.md:181-190`**
+  (Step 5 — Finish; ticket said `:180-188`), `skills/shipyard/shipyard.sh:284-305`
+  (`learn` generic/install stubs), `skills/gates.md.template`,
+  `skills/install/SKILL.md`. Aurora reference: `~/code/aurora@512b6bb`.
 
 ## Goal
 
@@ -148,6 +149,16 @@ This is the phase that makes the scheme real.
 - Gate: bats case on `shipyard learn` routing to a configured pending dir and to
   the flat fallback; `bash scripts/leak-check.sh`; `bash scripts/check-deck-fresh.sh`.
 
+## Out of scope
+
+- Adding `lifecycle_dirs` to **aurora's** live config (user-decision class — see
+  Polish Notes; flag to the owner as a follow-up).
+- Mechanical enforcement of the move (`scripts/check-ticket-lifecycle.sh`) —
+  the move is enforced by instruction + gate class, as stated.
+- Migrating **shipyard's own** tickets to the folder layout (O4).
+- Retrofitting existing tickets on any project.
+- Any runner or systemd unit change.
+
 ## Definition of Done
 
 - [ ] A project setting the four config keys gets: new tickets born in `pending/`,
@@ -174,12 +185,158 @@ Aurora's naming (`<NNN>_<type>_<short_slug>.md`, 3-digit never-reused id) is
 already the documented shipyard default at `write-ticket/SKILL.md:73`; it is the
 **folders**, not the names, that this ticket adds to core.
 
-## Open questions
+## Open questions — RESOLVED in Decisions below (O1, O2)
 
-1. Should `lifecycle_dirs` be a separate boolean at all, or should the presence of
-   `archive_dir` be sufficient to enable moving? (Proposed: keep it separate —
-   `archive_dir` currently means "also scan here for ids", and silently overloading
-   it would change behavior for any project that already sets it.)
-2. Should `execute-ticket` refuse to finish if the `Status:` line and the folder
-   disagree (e.g. a ticket in `complete/` that says "not built")? (Proposed: yes,
-   report it as a gate failure — but only when `lifecycle_dirs` is on.)
+---
+
+## POLISH NOTES (added 2026-07-27) — read before building
+
+### ⚠ The promised verification surface does not exist for Phases 1–3
+
+The plan says each of Phases 1–3 lands "a bats case shown failing against the
+pre-change code FIRST", e.g. *"a bats case asserting id resolution picks the max
+across three dirs"* and *"a case asserting the move happens on full completion"*.
+**Those tests cannot exist as written.** Phases 1–3 change **prose in a
+`SKILL.md`** — there is no executable code to drive, so nothing can assert that
+id resolution "picks the max" or that a move "happens". A bats case can only
+assert that *the instruction is present in the file*.
+
+This is a real limitation of the design, not a nit, and it must be stated in the
+ticket rather than discovered at build time — a test that cannot fail on the
+real defect is a finding, not a test (`.agents/gates.md`, bats gate class).
+
+**Restructured verification surface, per phase:**
+
+| Phase | What changes | What is actually testable |
+|---|---|---|
+| 1 `write-ticket` | prose | **content contract** — the birth-folder rule and the never-reuse rule are present |
+| 2 `polish-ticket` | prose | **content contract** — reads dir keys; "polish never moves a ticket" present |
+| 3 `execute-ticket` | prose + gate template | **content contract** + the gate class exists in `skills/gates.md.template` |
+| 4 `shipyard learn` | **real bash** in `shipyard.sh` | **behavioral** — run it against fixture projects and assert the written path |
+
+Only Phase 4 gets a genuine failing-first behavioral test. Model the content
+contracts on `tests/delegation-contract.bats` (shipped today) — including its two
+hard-won rules: **assert a phrase that fits within one source line** (the
+Markdown is hard-wrapped, so a regex spanning a break can never match), and
+**a guard case must be shown *passing* pre-change** or it is guarding nothing.
+
+**Consequence to accept explicitly:** with `lifecycle_dirs` on, the `git mv` is
+enforced by *instruction plus a gate class*, exactly like every other
+`execute-ticket` obligation — not by code. That is the same enforcement model as
+the Delegation contract shipped today, and it is honest as long as the ticket
+does not claim otherwise. If the owner wants mechanical enforcement, that is a
+follow-up ticket (a `scripts/check-ticket-lifecycle.sh` run as a gate), and it is
+**out of scope here**.
+
+### ⚠ Aurora — the reference project — would get nothing
+
+`~/code/aurora/.agents/config.toml` sets `ticket_dir` / `archive_dir` /
+`backlog_dir` / `scan_dirs`, but **not** `lifecycle_dirs` (verified: `grep -c
+lifecycle_dirs` → `0`). Under Open Question 1's proposed default (a separate
+boolean required to enable moving), aurora — the project this ticket
+generalizes, with 27 tickets already in `complete/` — gets **no** moving
+behavior until its config gains the key.
+
+The DoD's first line ("A project setting the four config keys gets…") therefore
+describes **no project that currently exists**.
+
+Adding that key to aurora changes the behavior of live automation the owner
+deliberately configured, on a repo with its own autonomous crew → **user-decision
+class**. It is scoped **OUT** of this ticket (see Out of scope) so the build is
+not blocked. Flag it to the owner on completion as a one-line follow-up.
+
+### Smaller than written: Phase 4
+
+`skills/shipyard/shipyard.sh` **already** sources `agents/lib/load-config.sh`
+(`:43`) and populates `CFG_JSON` (`:46`), and already resolves a per-dir config
+path (`:170`). Phase 4 does not need new config machinery — only to read
+`ticket_dir` out of the JSON it already has, with a `docs/tickets` fallback.
+Note the `learn` subcommand operates on `$dir`, which is **not** always
+`$PROJECT_DIR`; read that target's own config, not the ambient one.
+
+## Decisions
+
+### Locked
+
+| # | Decision | Rationale |
+|---|---|---|
+| L1 | Unset `lifecycle_dirs` ⇒ **byte-for-byte** today's behavior | The repo's config-gated-additivity gate class; proven by a test, not asserted |
+| L2 | Phases 1–3 ship **content-contract** tests; only Phase 4 gets behavioral tests | Prose has no executable surface — see Polish Notes |
+| L3 | The filename never changes; only the folder | Aurora's rule; the id is the chronology |
+| L4 | Polish **never** moves a ticket | Stated so no future agent invents a move step |
+| L5 | An autonomous run never freezes a ticket | Only the owner sends work to `backlog_dir` |
+| L6 | No `docs/shipyard-data.json` regen expected | No `roles:`/`kind:` or `GENERIC_SKILLS` change; a deck diff is a **defect** |
+
+### Open, with defaults (builder applies and records — never blocks)
+
+| # | Question | Default |
+|---|---|---|
+| O1 | Separate `lifecycle_dirs` boolean, or infer from `archive_dir`? | **Separate boolean** (the ticket's own proposal): `archive_dir` currently means "also scan here for ids", and overloading it silently changes behavior for any project already setting it |
+| O2 | Should `execute-ticket` fail when `Status:` and folder disagree? | **Yes, but only when `lifecycle_dirs` is on** — as a stated gate failure in prose |
+| O3 | Where does the gate class text come from? | Lift aurora's `.agents/gates.md:128-140` near-verbatim into `skills/gates.md.template`, genericized (no aurora paths) |
+| O4 | Does shipyard itself adopt the layout? | **No** — shipyard keeps its flat kebab slugs; this ticket adds *core support*, and dogfooding it here is a separate decision |
+
+### User-decision class
+
+**None blocking.** The one item (adding `lifecycle_dirs` to aurora's live config)
+is scoped out; the build proceeds without it. → auto-gate **PROCEEDS**.
+
+## Per-phase gate commands (from `.agents/gates.md`)
+
+Phases 1–3 (prose + template):
+```bash
+bats tests/ticket-lifecycle.bats        # shown failing FIRST for each new contract case
+bats tests/
+git add -N <any new file>               # leak-check scans git ls-files only
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh        # MUST stay byte-identical (L6)
+```
+Phase 4 (real bash) adds:
+```bash
+bash -n skills/shipyard/shipyard.sh
+bash -n install.sh agents/lib/*.sh agents/*/runner.sh agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit
+python3 -m py_compile scripts/gen-deck-data.py scripts/delegation-report.py
+./install.sh --doctor --project .       # exit 0
+```
+Final phase re-runs the whole battery end-to-end.
+
+**Baseline to beat (measured 2026-07-27, post-`d5822cd`):** `bats tests/` =
+**313 passing, 0 failures**; leak-check clean; deck in sync; doctor exit 0;
+**CI green on `main`** — check CI, not only the local suite (`.agents/gates.md`
+Traps).
+
+## Traps to pin
+
+- **Fleet-live.** `install.sh:755` symlinks `skills/*` into all 6 installed
+  projects; an edit is live at the next timer fire. Prose-only for Phases 1–3
+  limits the blast radius; Phase 4 touches real bash — test it hardest.
+- **`leak-check.sh` scans tracked files only** — `git add -N` new files first.
+- **Hard-wrapped prose vs `grep`** — assert phrases that fit on one source line.
+- **Deck coupling** — no frontmatter change is expected (L6); a `check-deck-fresh`
+  diff means something unintended changed.
+- **`git mv` in the *same* commit as the final phase** — a separate "move the
+  ticket" commit leaves a window where the tree says the work is unfinished, and
+  is the failure mode this ticket exists to prevent.
+
+## Delegation Plan
+
+Dogfooding the contract shipped today (`skills/execute-ticket/SKILL.md` §2.2).
+
+- **Phase 1** — `Delegation: inline (single-file prose edit in an already-read file)`
+- **Phase 2** — `Delegation: inline (single-file prose edit, well under 30 lines)`
+- **Phase 3** — `Delegation: subagent — brief: draft the Step 5 lifecycle step +
+  the genericized gate-class block from aurora's `.agents/gates.md:128-140`;
+  return the two text blocks and nothing else, ≤40 lines`
+- **Phase 4** — `Delegation: subagent — brief: implement the `ticket_dir` read in
+  `shipyard.sh` learn + its failing-first bats cases; return files changed,
+  commands run with exit codes, and the failing-then-passing test output, ≤40 lines`
+
+Each phase records the matching `builder:` line in the Ledger.
+
+## Ledger
+
+_(builder appends per phase: plan, commit hash, `builder:` line, honest notes)_
+
+---
+
+Run it with `execute-ticket`.
