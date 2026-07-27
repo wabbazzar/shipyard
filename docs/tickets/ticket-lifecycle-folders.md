@@ -359,6 +359,34 @@ work: a test that cannot fail is a finding, not a test.
 Gate: `bats tests/` **319 passing, 0 failures** · `leak-check` clean (new test
 file `git add -N`'d first) · `check-deck-fresh` in sync (byte-identical, L6).
 
+Commit: `79b3d25`
+
+### Phase 2 — `polish-ticket`: read the config, never move
+
+builder: inline (exception 1 — single-file prose edit, as the Delegation Plan
+specified)
+
+`SKILL.md:27` no longer hardcodes `docs/tickets/<name>.md`: polish reads the
+`[write_ticket]` dir keys (`ticket_dir` / `archive_dir` / `backlog_dir`), never
+guesses a path, and hardens **in place**. Graduating is named as
+`ticket-lifecycle.sh --graduate` (deterministic, `execute-ticket`'s final
+commit); parking stays the owner's call alone. A misfiled ticket gets reported,
+never silently relocated.
+
+`tests/ticket-lifecycle.bats` +5 cases (4 contract, 1 guard). **Shown failing
+first:** cases 7–10 `not ok` against pre-change `polish-ticket`; the
+anti-cheating guard passes pre-change.
+
+Gate: `bats tests/` **324 passing, 0 failures** · leak-check clean ·
+deck-fresh in sync.
+
+⚠ **Concurrent-agent note:** at 17:29:40, while this phase was being built,
+another agent modified `install.sh`, `README.md`, `skills/install/SKILL.md` and
+`tests/harness-install.bats` in this same working tree (a codex/hermes
+`AGENTS.md` skill-bridge — unrelated to this ticket). Those files are NOT part
+of this commit; `git add` was scoped to this phase's three files only. The 324
+count includes their work, which is also green.
+
 Commit: _(this commit)_
 
 ---

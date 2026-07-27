@@ -69,5 +69,36 @@ has() {
   has "$f" 'Hardening here'
 }
 
-# Phases 2-4 append their cases here as they land — see
+# ---------------------------------------------------------------------------
+# Phase 2 — polish-ticket: read the config, never move
+# ---------------------------------------------------------------------------
+
+@test "polish-ticket: reads the config dir keys instead of hardcoding a path" {
+  f="$SKILLS/polish-ticket/SKILL.md"
+  has "$f" 'never guess a path'
+  has "$f" 'archive_dir'
+}
+
+@test "polish-ticket: never moves a ticket" {
+  f="$SKILLS/polish-ticket/SKILL.md"
+  has "$f" 'never moves a ticket|harden it .in place'
+}
+
+@test "polish-ticket: names the deterministic graduate path, not a manual move" {
+  f="$SKILLS/polish-ticket/SKILL.md"
+  has "$f" 'ticket-lifecycle\.sh'
+}
+
+@test "polish-ticket: parking a ticket stays the owner's call" {
+  f="$SKILLS/polish-ticket/SKILL.md"
+  has "$f" "owner's call"
+}
+
+@test "polish-ticket: still keeps the verbatim anti-cheating clause" {
+  # GUARD: the rewrite of the intro must not disturb it.
+  f="$SKILLS/polish-ticket/SKILL.md"
+  has "$f" 'NEVER fake green'
+}
+
+# Phases 4-8 append their cases here as they land — see
 # docs/tickets/ticket-lifecycle-folders.md.
