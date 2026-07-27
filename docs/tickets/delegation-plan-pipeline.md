@@ -611,6 +611,47 @@ invent a specialist"), which matters because shipyard itself has no
 Gate: `bats tests/` **302 passing, 0 failures** · `leak-check` clean ·
 `check-deck-fresh` in sync.
 
+Commit: `3b9821d`
+
+### Phase 5 — Front doors: `/feature` and `/bugfix`
+
+builder: inline (exceptions 1 + 3 — two single-file prose edits, each well
+under 30 lines, as planned)
+
+`skills/feature/SKILL.md` Step 1: assumption probes now run through subagents
+returning ≤40 lines (verdict + the `path:line`/config key supporting it), with
+the never-guess-a-citation clause attached — a probe's answer is one line, but
+run inline its cost is every file it opened, sitting in context before a ticket
+exists.
+
+`skills/bugfix/SKILL.md`: the repro *hunt* (grepping the module, reading
+candidate call sites) is delegated, while the reproduction itself stays
+first-class — the brief demands verbatim failing output and exit codes, states
+explicitly that a subagent's summary of a failure is not a reproduction, and the
+front door re-runs the repro itself before carrying it into the ticket. Step 3
+rival-cause probes are delegated **one cause each**, briefed to try to rule
+their *own* cause out — which buys independence as well as context: a subagent
+briefed on one cause can't rationalize toward the cause the operator already
+favors.
+
+`tests/delegation-contract.bats` +6 cases (4 contract, 2 guards).
+**Shown failing first** by stashing only the two skill edits: cases 18, 20, 21,
+22 report `not ok`; both guards (no-fabricated-citation, no-repro-no-ticket)
+pass pre-change.
+
+**Two self-caught defects:**
+1. The first edit to `bugfix` step 1 spliced the new paragraph into the middle
+   of the no-reproduction sentence, leaving it duplicated and broken across the
+   section. Caught by reading the rendered section back rather than trusting the
+   edit; repaired before any gate ran.
+2. Case 21 failed post-edit on the **same line-wrap trap** as the Phase 2 guard
+   — the asserted phrase straddled a newline in the source. Narrowed, with a
+   comment naming the trap so the next case doesn't repeat it. Twice now; Phase 6
+   records it in the gate file.
+
+Gate: `bats tests/` **308 passing, 0 failures** · `leak-check` clean ·
+`check-deck-fresh` in sync.
+
 Commit: _(this commit)_
 
 ---

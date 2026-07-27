@@ -148,5 +148,47 @@ has() {
   has "$f" 'NEVER fake green'
 }
 
-# Phases 5-6 append their cases here as they land (feature/bugfix, gate file)
-# — see docs/tickets/delegation-plan-pipeline.md.
+# ---------------------------------------------------------------------------
+# front doors
+# ---------------------------------------------------------------------------
+
+@test "feature: assumption probes run as subagents with a bounded return" {
+  f="$SKILLS/feature/SKILL.md"
+  has "$f" 'subagent'
+  has "$f" '40 lines'
+}
+
+@test "feature: probes still may not fabricate a citation" {
+  # Guard: delegating a probe must not weaken the Unverified discipline.
+  f="$SKILLS/feature/SKILL.md"
+  has "$f" 'never guess a citation|Unverified'
+}
+
+@test "bugfix: the repro hunt runs as a subagent" {
+  f="$SKILLS/bugfix/SKILL.md"
+  has "$f" 'subagent'
+  has "$f" '40 lines'
+}
+
+@test "bugfix: rival-cause probes are delegated one cause each" {
+  f="$SKILLS/bugfix/SKILL.md"
+  has "$f" 'one cause each|one cause per'
+  # Phrase kept short: the source hard-wraps, so a longer regex would straddle
+  # the line break and never match (same trap as the execute-ticket guard).
+  has "$f" 'rule their own'
+}
+
+@test "bugfix: a delegated summary is not a reproduction" {
+  # The repro must stay verbatim evidence — it is the ticket's acceptance anchor.
+  f="$SKILLS/bugfix/SKILL.md"
+  has "$f" "summary of a.*failure is not a reproduction|verbatim failing output"
+}
+
+@test "bugfix: the no-reproduction-no-ticket rule is intact" {
+  # Guard: delegating the sweep must not weaken the reproduction requirement.
+  f="$SKILLS/bugfix/SKILL.md"
+  has "$f" 'no reproduction = no ticket|reproduce first'
+}
+
+# Phase 6 appends the gate-file cases — see
+# docs/tickets/delegation-plan-pipeline.md.
