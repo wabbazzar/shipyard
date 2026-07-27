@@ -36,14 +36,14 @@ agents/release/critic-*   shoulder mode (queue → watch → cold critique)
 skills/                   seven shared skills + install skill + gates template
 install.sh                per-project installer / --doctor / --uninstall
 scripts/                  leak-check, deck generator + freshness/render gates
-tests/                    bats suite (273 tests, ~23s)
+tests/                    bats suite (308 tests, ~60s)
 docs/                     INSTALL.md, ADAPTING.md, shoulder-mode.md, the deck
 ```
 
 ## Gates — run these before claiming anything works
 
 ```bash
-bats tests/                      # full suite, ~23s, no network/LLM (PATH shims)
+bats tests/                      # full suite, ~60s, no network/LLM (PATH shims)
 bash scripts/leak-check.sh       # no owner/machine-specific data (also a pre-commit hook)
 bash scripts/check-deck-fresh.sh # docs/shipyard-data.json regenerates byte-identical
 bash -n install.sh agents/lib/*.sh agents/*/runner.sh   # syntax

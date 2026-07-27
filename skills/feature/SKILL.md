@@ -52,6 +52,15 @@ candidate** — a repo read, a config read, a read-only probe — not a sweep:
   rules and DoD convention govern. Canonical sources: the project's
   `.agents/config.toml`, `CLAUDE.md`/`README.md`, the most recent ticket.
 
+**Run the probes through subagents.** A probe's *answer* is one line — a
+`path:line`, a config value, a named symbol. Its *cost*, run inline, is every
+file it had to open sitting in your context for the rest of the session, before
+a ticket even exists. Hand each probe (or a batch of them) to a subagent whose
+brief names the assumption and demands the citation back: **≤40 lines — the
+verdict, the `path:line` or config key that supports it, and nothing else.**
+Add the anti-cheating clause: *never guess a citation; report Unverified with
+the reason instead.* You keep the verdicts; the files stay out of your context.
+
 Probes must be side-effect-free: no writes, no mutations, no calls that bill or
 page. If the only way to verify is to write, the assumption stays Unverified.
 If a needed lookup (e.g. web search) is unavailable in the harness, mark it

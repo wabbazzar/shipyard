@@ -96,6 +96,18 @@ destructive, live-automation behavior, design fork) → stop and surface it via
 `AskUserQuestion`. An `autonomous = true` project skips even that stop,
 applying each decision's recorded default instead.
 
+**Every phase says who builds it.** A ticket phase carries a `Delegation:` line
+— `subagent — <brief>` or `inline (<reason>)` — that `write-ticket` drafts as
+intent, `polish-ticket` hardens into a self-contained brief with a bounded
+return (≤40 lines: files, exit codes, evidence, blockers), and `execute-ticket`
+obeys, recording the matching `builder:` line in the ticket's Ledger.
+Delegation is the **default**; `inline` is legitimate but must name its reason,
+because an orchestrator that builds everything itself spends most of a run's
+budget re-reading its own context rather than doing work. Delegation moves the
+work, never the verification — the orchestrator still re-runs each phase's gate
+before committing. `scripts/delegation-report.py` measures whether it's
+actually happening.
+
 ## Skills-parity
 
 The installer symlinks seven skills — `write-ticket`, `bugfix`,
