@@ -102,6 +102,13 @@ name exist or will be created. Every technical claim in the ticket is anchored
 to a real `path:line` or a named symbol — "a ticket written from assumptions is
 worthless." If you're guessing, you haven't read enough.
 
+Read *deep, not wide*: open the specific files the work touches. A **wide sweep**
+— "which modules call this", "how does this project name its X", "find every
+place Y is configured" — goes to a **subagent** that returns the answer with
+`path:line` citations, not the files themselves. More than two exploratory
+`Read`s on one question means you should have delegated it. You need the
+`path:line`s in the ticket; you do not need their contents in your context.
+
 ## Step 4 — Emit the ticket
 
 Write to `<ticket_dir>/<id>_<type>_<short_desc>.md`. Sections (adapt headings to
@@ -120,7 +127,19 @@ the project's prior-ticket style; keep the substance):
   per-phase point cap and independently verifiable + committable**. Per phase:
   goal, concrete steps, files touched, and what proving-it-works looks like at a
   high level (the exact gate commands are polish-ticket's to assemble — name the
-  gate *class*, not the command line).
+  gate *class*, not the command line). **Every phase also carries a
+  `Delegation:` line** — one of:
+
+  ```
+  Delegation: subagent — <one line: what it gets, what it returns>
+  Delegation: inline (<reason>)
+  ```
+
+  Name the *intent* only; `polish-ticket` turns it into the hardened brief. The
+  builder's context is a budgeted resource like any other, and a phase that
+  never says who builds it gets built inline by default — which is how a run
+  ends up spending most of its cost re-reading its own history. A phase with no
+  `Delegation:` line is an incomplete phase.
 - **Testing Strategy** — the test kinds and the project's test commands
   (`test_cmds`) that cover the new behavior; for a bug, the regression test that
   closes the named coverage gap.
@@ -182,3 +201,6 @@ user-decision-class item stops for an answer (see polish-ticket's Output).
   names no project.
 - **A vacuous Definition of Done.** "It works" is not acceptance. Every DoD item
   is an observable check.
+- **A phase with no Delegation line.** Silence defaults to inline, and inline is
+  what makes a build cost more in context re-reading than in work. Say who builds
+  each phase; `polish-ticket` will harden it.

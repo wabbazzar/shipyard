@@ -78,6 +78,41 @@ has() {
   has "$f" 'NEVER fake'
 }
 
-# Phases 3-6 append their cases here as they land (write-ticket,
-# polish-ticket, feature/bugfix, gate file) — see
-# docs/tickets/delegation-plan-pipeline.md.
+# ---------------------------------------------------------------------------
+# write-ticket
+# ---------------------------------------------------------------------------
+
+@test "write-ticket: emits a per-phase Delegation line in its template" {
+  f="$SKILLS/write-ticket/SKILL.md"
+  has "$f" 'Delegation:'
+  has "$f" 'subagent'
+}
+
+@test "write-ticket: refuses a phase with no Delegation line" {
+  f="$SKILLS/write-ticket/SKILL.md"
+  has "$f" 'no Delegation line|without a Delegation line'
+}
+
+@test "write-ticket: delegates wide sweeps but still reads deep itself" {
+  f="$SKILLS/write-ticket/SKILL.md"
+  has "$f" 'wide sweep'
+  has "$f" 'path:line'
+}
+
+@test "write-ticket: names intent only, leaving the brief to polish-ticket" {
+  # Guard on the three-skill separation: write-ticket must not start writing
+  # hardened briefs.
+  f="$SKILLS/write-ticket/SKILL.md"
+  has "$f" 'intent'
+  has "$f" "polish-ticket.*(brief|harden)|harden.*polish-ticket"
+}
+
+@test "write-ticket: still defers hardening to polish-ticket" {
+  # Guard on the three-skill separation this repo enforces.
+  f="$SKILLS/write-ticket/SKILL.md"
+  has "$f" "polish-ticket"
+  has "$f" 'Hardening here'
+}
+
+# Phases 4-6 append their cases here as they land (polish-ticket,
+# feature/bugfix, gate file) — see docs/tickets/delegation-plan-pipeline.md.
