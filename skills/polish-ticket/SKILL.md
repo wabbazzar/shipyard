@@ -148,6 +148,11 @@ Two sources. The **generic traps** every harnessed project inherits:
 - Harness units bake env at install; editing env means re-baking the units.
 - The merge-is-live hazard on the harness dev clone (§ Step 0.5).
 - Legacy per-project cron launchers are forbidden (the installer removes them).
+- A test that greps prose (a SKILL.md clause, a role prompt) must assert a
+  phrase that fits **within one source line** — Markdown is hard-wrapped, so a
+  regex spanning a line break can never match. And a *guard* case (one asserting
+  existing behavior survived an edit) must be shown **passing against the
+  pre-change file**: a guard that fails pre-change is asserting nothing.
 Plus the **project-specific traps appendix** in `.agents/gates.md` — read it
 and pin the ones this ticket could trip.
 

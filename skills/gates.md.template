@@ -68,6 +68,25 @@ For each such change, write BOTH the verify command and the rollback command in
 the ticket **before** making the change (e.g. `nft list table …` + the delete
 command; `docker ps` + the stop command; probe the port + revert).
 
+### Delegation contract  — APPLIES: yes (always)
+Applies to every ticket on every project — it costs nothing to check and it is
+the difference between a build that spends its budget on work and one that
+spends it re-reading its own history.
+- Every phase in a ticket declares a `Delegation:` line — `subagent — <brief>`
+  or `inline (<reason>)`.
+- Every phase in the Ledger records the matching `builder: subagent (<N>
+  agents)` / `builder: inline (<reason>)`.
+- An `inline` states a reason from the exception list: a single-file edit in an
+  already-read file; a gate command the orchestrator must read itself; a change
+  under ~30 lines; an operating constraint that forbids subagents. **An `inline`
+  with no recorded reason is a defect.**
+- Delegation never moves the verification: the orchestrator re-runs the phase's
+  gate itself before committing.
+
+Measure it, don't assume it: `python3 <shipyard>/scripts/delegation-report.py`
+reports context carried per turn, sessions using zero subagents, and which tool
+is returning the bytes.
+
 ## Traps that have bitten this project  (append-only; starts empty)
 
 The accreted incident history for this project. Every burned session becomes a

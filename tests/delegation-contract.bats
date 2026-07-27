@@ -190,5 +190,42 @@ has() {
   has "$f" 'no reproduction = no ticket|reproduce first'
 }
 
-# Phase 6 appends the gate-file cases — see
-# docs/tickets/delegation-plan-pipeline.md.
+# ---------------------------------------------------------------------------
+# gate files
+# ---------------------------------------------------------------------------
+
+@test "gates template declares the Delegation contract gate class" {
+  f="$QUARTET_ROOT/skills/gates.md.template"
+  has "$f" '### Delegation contract'
+  has "$f" 'builder:'
+}
+
+# .agents/ is gitignored (this box's self-install), so a fresh clone — CI
+# included — has no gate file to assert against. These cases check the LOCAL
+# install when it exists and skip when it doesn't; the tracked contract lives in
+# gates.md.template above and is asserted unconditionally.
+local_gates() {
+  f="$QUARTET_ROOT/.agents/gates.md"
+  [ -f "$f" ] || skip "no local .agents/gates.md (gitignored self-install)"
+}
+
+@test "this repo's own gate file declares the Delegation contract gate class" {
+  local_gates
+  has "$f" '### Delegation contract'
+  has "$f" 'builder:'
+}
+
+@test "gate file pins the leak-check-scans-tracked-files-only trap" {
+  local_gates
+  has "$f" 'git ls-files|tracked files only|add -N'
+}
+
+@test "gate file pins the hard-wrap trap for content assertions" {
+  local_gates
+  has "$f" 'straddles a line break|hard-wrapped'
+}
+
+@test "the shipped template keeps delegation from laundering verification" {
+  f="$QUARTET_ROOT/skills/gates.md.template"
+  has "$f" 'never moves the verification|re-runs the phase'
+}
