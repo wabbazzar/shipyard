@@ -72,14 +72,38 @@ exact config keys. Cross-repo work names the target repo, branch strategy,
 and that repo's own gate. Numbers cited from live state (event counts, config
 values) get a **date and the command that produced them** — the system drifts.
 
-### B. Orchestration protocol
-State that the builder is an orchestrator: delegate heavy/wide work to
-subagents with tight briefs, keep the orchestrator lean, re-verify personally.
-Embed the verbatim anti-cheating brief:
+### B. Orchestration protocol — harden every Delegation line into a brief
+State that the builder is an orchestrator: delegate by default, keep the
+orchestrator lean, re-verify personally. Embed the verbatim anti-cheating brief:
 > Converge honestly or report the precise blocker with the actual evidence —
 > NEVER fake green, weaken a check, or hand-wave "should work". Run the real
 > command, read the real file, curl the real port, and report exact output
 > (exit codes, JSONL lines, HTTP codes), not adjectives.
+
+Then do the hardening this step exists for. `write-ticket` leaves each phase a
+`Delegation:` line naming **intent**; you turn each one into something a cold
+subagent can execute:
+
+- **`Delegation: subagent`** → write the actual brief, self-contained: the
+  inputs it may assume, the exact question or change, the files it owns, and its
+  **return shape — ≤40 lines: files changed; commands run + exit codes; evidence
+  lines (JSONL, HTTP codes, test counts); blockers.** Evidence longer than that
+  belongs in the ticket Ledger, not the orchestrator's context. Append the
+  anti-cheating clause above to every brief.
+- **`Delegation: inline`** → confirm the reason is one of the real exceptions
+  (a single-file edit in an already-read file; a gate command the orchestrator
+  must read itself; a change under ~30 lines; an operating constraint that
+  forbids subagents) and keep it. An `inline` with a vague reason gets rewritten
+  as a brief.
+- **A phase with no `Delegation:` line at all** → add one. Silence defaults to
+  inline, and a run built inline spends most of its cost re-reading its own
+  history rather than doing work.
+
+**Name the specialist when the project has one.** If
+`<project>/.agents/build.md` carries a "delegate to specialists" table (the
+installer writes it from checked-in `.claude/agents/*.md`), point the brief at
+the right specialist by name. Many projects have none — when it is **absent**,
+write a generic brief and move on; never invent a specialist.
 
 ### C. The gate (make it inescapable) — assembled per phase from the gate file
 The ticket must state, for EVERY phase, which gate classes from
@@ -159,7 +183,9 @@ big-bang phase. A final phase re-runs the whole ticket's gate end-to-end.
 
 ### H. Ledger + Definition of Done
 Give the ticket a **Ledger** section (builder appends plan + commit hash per
-phase, honest notes on anything deferred) and an observable DoD per phase —
+phase, the phase's `builder: subagent (<N> agents)` / `builder: inline
+(<reason>)` line, and honest notes on anything deferred) and an observable DoD
+per phase —
 stated as "this command shows X / this JSONL line appears / this port
 returns 200," not "implemented." Roll-up DoD: all phases committed (worktree
 clean), all gates green, live system healthy, background processes cleaned up.

@@ -588,6 +588,29 @@ line", naming why silence is not neutral — it defaults to inline.
 Gate: `bats tests/` **297 passing, 0 failures** · `leak-check` clean ·
 `check-deck-fresh` in sync.
 
+Commit: `63df470`
+
+### Phase 4 — `polish-ticket`: harden plans into briefs
+
+builder: inline (exception 1 — single-file prose edit, as planned)
+
+`skills/polish-ticket/SKILL.md` §B rewritten from one advisory sentence into the
+hardening step it should have been: each `Delegation: subagent` intent becomes a
+self-contained brief (inputs, exact question, files owned, ≤40-line return
+shape, anti-cheating clause appended); each `Delegation: inline` has its reason
+checked against the real exception list and is rewritten as a brief if vague; a
+phase with no line at all gets one. §B also consumes `<project>/.agents/build.md`'s
+specialist table when present — and explicitly tolerates its absence ("never
+invent a specialist"), which matters because shipyard itself has no
+`.claude/agents/`. §H Ledger now names the `builder:` field.
+
+`tests/delegation-contract.bats` +5 cases (4 contract, 1 guard).
+**Shown failing first** by stashing only the skill edit: cases 13–16 report
+`not ok`; the anti-cheating guard passes pre-change.
+
+Gate: `bats tests/` **302 passing, 0 failures** · `leak-check` clean ·
+`check-deck-fresh` in sync.
+
 Commit: _(this commit)_
 
 ---
