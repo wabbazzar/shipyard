@@ -137,7 +137,7 @@ $( [ -f "$dir/data/fyi-requests.jsonl" ] && head -c 2000 "$dir/data/fyi-requests
 ## RECENT COMMITS (hash · committer-date-UTC · subject · co-authors):
 ## Correlate a result file's timestamp against these dates before calling it
 ## out of sync; a Co-authored-by trailer names the role svc that made a commit.
-$(TZ=UTC git -C "$dir" log -15 --date=iso-strict-local \
+$(TZ=UTC git -C "$dir" log -15 --date=format-local:'%Y-%m-%dT%H:%M:%SZ' \
     --pretty=format:'%h %cd %s | co: %(trailers:key=Co-authored-by,valueonly,separator=%x2C%x20)' \
     2>/dev/null || echo '(no git)')
 ## WORKING TREE:
