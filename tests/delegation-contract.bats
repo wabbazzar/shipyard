@@ -114,5 +114,39 @@ has() {
   has "$f" 'Hardening here'
 }
 
-# Phases 4-6 append their cases here as they land (polish-ticket,
-# feature/bugfix, gate file) — see docs/tickets/delegation-plan-pipeline.md.
+# ---------------------------------------------------------------------------
+# polish-ticket
+# ---------------------------------------------------------------------------
+
+@test "polish-ticket: hardens each Delegation intent into a concrete brief" {
+  f="$SKILLS/polish-ticket/SKILL.md"
+  has "$f" 'Delegation:'
+  has "$f" 'brief'
+  has "$f" '40 lines'
+}
+
+@test "polish-ticket: adds a Delegation line to a phase that lacks one" {
+  f="$SKILLS/polish-ticket/SKILL.md"
+  has "$f" 'no .Delegation:. line|Silence defaults to inline'
+}
+
+@test "polish-ticket: consumes the specialist table and tolerates its absence" {
+  f="$SKILLS/polish-ticket/SKILL.md"
+  has "$f" 'build\.md'
+  has "$f" 'absent'
+  has "$f" 'never invent a specialist'
+}
+
+@test "polish-ticket: Ledger section carries the builder: field" {
+  f="$SKILLS/polish-ticket/SKILL.md"
+  has "$f" 'builder:'
+}
+
+@test "polish-ticket: keeps the verbatim anti-cheating clause" {
+  # Guard: the brief-hardening rewrite must not displace it.
+  f="$SKILLS/polish-ticket/SKILL.md"
+  has "$f" 'NEVER fake green'
+}
+
+# Phases 5-6 append their cases here as they land (feature/bugfix, gate file)
+# — see docs/tickets/delegation-plan-pipeline.md.
