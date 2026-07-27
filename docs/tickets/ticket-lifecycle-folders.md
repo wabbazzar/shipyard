@@ -335,7 +335,31 @@ Each phase records the matching `builder:` line in the Ledger.
 
 ## Ledger
 
-_(builder appends per phase: plan, commit hash, `builder:` line, honest notes)_
+### Phase 1 — `write-ticket`: name the birth folder
+
+builder: inline (exception 1 — single-file prose edit in an already-read file,
+as the Delegation Plan specified)
+
+Step 0 now documents `lifecycle_dirs` alongside the existing dir keys, states
+the folder-is-the-status mapping, and pins that **a new ticket is always born in
+`ticket_dir`** — never written into archive/backlog, never moved by this skill.
+Step 1 makes never-reuse explicit and adds never-**renumber** (a ticket keeps id
+and filename for life; only its folder changes).
+
+`tests/ticket-lifecycle.bats` created — 6 cases (4 contract, 2 guards).
+**Shown failing first:** cases 1–4 `not ok` against pre-change `write-ticket`;
+guards 5–6 pass pre-change, as guards must.
+
+*Self-caught test defect:* case 4 first asserted the generic words
+"unset|absent" + "flat", both of which already appear elsewhere in the file — it
+passed pre-change and so could not fail on the defect. Narrowed to the specific
+new clause (`absent .lifecycle_dirs`). Same class of finding as the delegation
+work: a test that cannot fail is a finding, not a test.
+
+Gate: `bats tests/` **319 passing, 0 failures** · `leak-check` clean (new test
+file `git add -N`'d first) · `check-deck-fresh` in sync (byte-identical, L6).
+
+Commit: _(this commit)_
 
 ---
 
