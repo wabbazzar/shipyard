@@ -188,6 +188,29 @@ final state (honest about anything deferred + why), fire the completion
 notify, and summarize: what shipped, the evidence gathered (commands +
 outputs, not adjectives), decisions made, anything NOT verified.
 
+**Graduate the ticket — deterministically, in the final phase's commit.**
+Where the project files tickets by lifecycle folder, a finished ticket must not
+be left sitting in `pending/`: that is exactly how a ticket dir stops being
+trustworthy. Do not hand-move it — run the engine:
+
+```bash
+<shipyard>/scripts/ticket-lifecycle.sh --project <dir> --graduate <ticket-path>
+```
+
+and stage that rename **in the same commit that lands the last verified phase**.
+A separate "move the ticket" commit leaves a window where the tree says the work
+is unfinished, which is the failure mode this exists to prevent.
+
+- **Only on full completion.** If any in-scope phase is deferred, blocked, or
+  waiting on a user decision, the ticket **stays in `pending/`** — say so in the
+  Ledger. Partial work never graduates.
+- **Never freeze.** `freezer/` is the owner's call alone; an autonomous run puts
+  nothing there, ever.
+- **Flat projects are untouched.** Without `lifecycle_dirs` the engine exits 3
+  (a deliberate no-op) and nothing moves — that is correct, not an error.
+- Verify it landed: `ticket-lifecycle.sh --project <dir> --check` exits 0. This
+  is a gate like any other, and CI and `install.sh --doctor` run it too.
+
 ## Adaptation Contract
 
 - **Parameter surface** (what install configures): the gate menu and its

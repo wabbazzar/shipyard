@@ -100,5 +100,44 @@ has() {
   has "$f" 'NEVER fake green'
 }
 
-# Phases 4-8 append their cases here as they land — see
+# ---------------------------------------------------------------------------
+# Phase 4 — execute-ticket: graduate the ticket deterministically
+# ---------------------------------------------------------------------------
+
+@test "execute-ticket: Step 5 graduates the ticket via the engine" {
+  f="$SKILLS/execute-ticket/SKILL.md"
+  has "$f" 'ticket-lifecycle\.sh'
+  has "$f" 'graduate'
+}
+
+@test "execute-ticket: the move rides in the final phase's commit" {
+  f="$SKILLS/execute-ticket/SKILL.md"
+  has "$f" "same commit|final phase's commit"
+}
+
+@test "execute-ticket: partial completion leaves the ticket in pending" {
+  f="$SKILLS/execute-ticket/SKILL.md"
+  has "$f" 'partial|deferred'
+  has "$f" 'stays in|leave it in'
+}
+
+@test "execute-ticket: an autonomous run never freezes a ticket" {
+  f="$SKILLS/execute-ticket/SKILL.md"
+  has "$f" 'never.*freezer|freezer.*owner'
+}
+
+@test "execute-ticket: a flat project is explicitly untouched" {
+  # The backward-compat guarantee has to be visible to the builder, not just
+  # implemented in the script's exit 3.
+  f="$SKILLS/execute-ticket/SKILL.md"
+  has "$f" 'exit 3|no lifecycle|flat project'
+}
+
+@test "execute-ticket: verify-before-commit still survives" {
+  # GUARD.
+  f="$SKILLS/execute-ticket/SKILL.md"
+  has "$f" 'VERIFY-BEFORE-COMMIT'
+}
+
+# Phases 5-8 append their cases here as they land — see
 # docs/tickets/ticket-lifecycle-folders.md.

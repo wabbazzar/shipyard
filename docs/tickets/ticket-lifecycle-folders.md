@@ -430,6 +430,38 @@ for a later pass rather than churned now.
 Gate: `bats tests/` **338 passing, 0 failures** · `bash -n` OK · leak-check
 clean (files `git add -N`'d first) · deck-fresh in sync.
 
+Commit: `a207503`
+
+### Phase 4 — `execute-ticket` calls the engine
+
+builder: inline (exception 1 — single-file prose edit)
+
+Step 5 — Finish now graduates the ticket by **running the engine**, not by hand:
+`ticket-lifecycle.sh --graduate <ticket>`, staged **in the same commit that
+lands the last verified phase** (a separate move-commit leaves a window where
+the tree claims the work is unfinished). Only on full completion — deferred or
+blocked phases leave the ticket in `pending/` with an honest Ledger note. An
+autonomous run never writes to `freezer/`; that is the owner's call alone.
+Flat projects are explicitly untouched (engine exits 3). Closes with
+`--check` exiting 0, the same gate CI and `--doctor` run.
+
+`tests/ticket-lifecycle.bats` +6 cases (5 contract, 1 guard). **Shown failing
+first:** cases 12–16 `not ok` pre-change; the verify-before-commit guard passes
+pre-change.
+
+Gate: `bats tests/` **344 passing, 0 failures** · leak-check clean ·
+deck-fresh in sync.
+
+**Worktree note:** from this phase on, the build runs in
+`.worktrees/ticket-lifecycle` (owner-approved) because another agent is editing
+`install.sh` / `README.md` / `skills/install/SKILL.md` /
+`tests/harness-install.bats` in the main checkout — the codex/hermes `AGENTS.md`
+bridge. Their work was left untouched on `main`; a backup of their uncommitted
+diff sits in this session's scratchpad. Per CLAUDE.md's worktree trap, `.agents/`
+is gitignored and therefore **absent here** — the delegation-contract cases that
+assert against it skip cleanly (built to do exactly that), and Phase 5's
+`.agents/gates.md` edit must be made in the main checkout.
+
 Commit: _(this commit)_
 
 ---
