@@ -302,9 +302,13 @@ leaves the prompt byte-identical. See `agents/release/critic-role.md`.
 
 ## Notifications & environment knobs
 
-Transport-agnostic. Knobs are **baked into the generated units at install
-time** (user services don't inherit your shell env), so set them when running
-`install.sh`:
+Transport-agnostic. `QUARTET_NOTIFY_CMD`, `QUARTET_EVENTS_DIR`, and
+`QUARTET_OPS_JSON` are **baked into the generated crew units at install time**
+(user services don't inherit your shell env), so set them when running
+`install.sh`. The rest below are plain runtime env vars the runner/spawn code
+reads directly (`${VAR:-default}`) — install.sh does not bake them into any
+unit, so a systemd unit needing one (e.g. the overseer's fleet timer, which
+install.sh does not manage at all) must set it by hand:
 
 | var | effect |
 |---|---|
@@ -313,6 +317,7 @@ time** (user services don't inherit your shell env), so set them when running
 | `QUARTET_OPS_JSON` | optional systemd/cron state snapshot for medic's scan |
 | `QUARTET_SCRIBE_PRE_HOOK` | optional executable run before each scribe pass |
 | `CODE_ROOT` | root the dogfood overseer scans for `autonomous = true` repos (default `~/code`) |
+| `OVERSEER_HARNESS` | authoring harness the overseer's QA judge runs under (default `claude`) |
 | `OVERSEER_MODEL` | model the overseer's QA judge uses (default `sonnet`) |
 | `OVERSEER_WALL_CLOCK` | per-repo wall-clock cap for the overseer's judge call, seconds (default `600`) |
 | `SPAWN_STALL_RETRIES` | how many times `spawn_model` retries a transient upstream stream stall (claude CLI `Response stalled mid-stream`, overloaded/429/5xx) before giving up — **default `2`**, all roles/harnesses. A wrapper timeout (RC 124) and non-transient failures are never retried. Set `0` for the pre-2026-07 single-shot behavior. |
