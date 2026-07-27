@@ -9,7 +9,8 @@ description: >
   (including --theme and a conventions interview), authors <project>/.agents/,
   ensures preconditions (git remote, clean tree, data handling), runs the
   harness install.sh with the hub env knobs, symlinks the shared skills into
-  <project>/.claude/skills/, and verifies the timers. Installs the four
+  <project>/.claude/skills/, writes a Codex/Hermes skill bridge AGENTS.md when
+  absent, and verifies the timers. Installs the four
   standard roles by default (design is opt-in); pass --agents for a subset.
 ---
 
@@ -208,8 +209,9 @@ The installer is idempotent. It: writes the systemd units (schedules from
 removes legacy `<project>-<agent>.sh` cron/launchers, **symlinks
 `skills/{polish-ticket,execute-ticket,coverage-audit}` → `<project>/.claude/skills/`**
 so agents (headless) and humans (in-session) load the identical files, **drops
-`gates.md.template` → `<project>/.agents/gates.md` if absent**, and verifies.
-Subset with `--agents build,release,medic` (role IDs only).
+`gates.md.template` → `<project>/.agents/gates.md` if absent**, and creates a
+root `AGENTS.md` skill bridge for Codex/Hermes if absent. Subset with `--agents
+build,release,medic` (role IDs only).
 
 ## Step 7 — Smoke-verify before declaring done
 
@@ -220,6 +222,8 @@ Subset with `--agents build,release,medic` (role IDs only).
 - Release gates green (Step 3).
 - `systemctl --user list-timers '<project>-*'` shows sane next-fire times.
 - `ls -l <project>/.claude/skills/` shows the three skill symlinks resolving.
+- `AGENTS.md` exists or was deliberately project-owned before install; when
+  generated, it names each `.claude/skills/<skill>/SKILL.md` path.
 
 Commit `<project>/.agents/` (config + role blocks + gates.md) in the project
 repo and push. Any shared-runner changes get their own commit in the harness

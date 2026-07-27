@@ -59,12 +59,15 @@ economy, dependency policy, naming, comment density) that the release critic
 grades against. Asked for at install time; never inferred.
 
 ### L5 — skills
-**Where:** `<project>/.claude/skills/` (symlinks into `<harness>/skills/`).
+**Where:** `<project>/.claude/skills/` (symlinks into `<harness>/skills/`) plus
+the root `AGENTS.md` skill bridge for Codex and Hermes.
 **What:** `write-ticket`, `bugfix`, `feature`, `polish-ticket`, `execute-ticket`,
 `coverage-audit`, `shipyard` — **the same files agents load headless and humans
 invoke in-session.** One implementation, two callers, no agent-only fork. The
 installer symlinks the harness skills so a core upgrade (L0) flows to every
-project's skills at once.
+project's skills at once. It creates the `AGENTS.md` bridge even if scheduled
+roles currently use Claude, because an operator may open Codex or Hermes in any
+installed project; an existing project-owned `AGENTS.md` is left unchanged.
 
 The first three are the **front doors** into the design loop. `bugfix`
 (reproduce-and-root-cause first) and `feature` (clarify and set a Definition of
