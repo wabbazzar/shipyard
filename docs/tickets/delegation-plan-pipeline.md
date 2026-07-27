@@ -652,6 +652,53 @@ pass pre-change.
 Gate: `bats tests/` **308 passing, 0 failures** · `leak-check` clean ·
 `check-deck-fresh` in sync.
 
+Commit: `5df83ae`
+
+### Phase 6 — Gate class + docs + full battery
+
+builder: inline (exception 3 — small edits across five files, each well under
+30 lines, as planned)
+
+- `skills/gates.md.template`: new **Delegation contract** gate class (APPLIES:
+  yes, always), shipped to every project the installer touches.
+- `.agents/gates.md`: the same gate class for this repo, plus **two traps
+  discovered during this build** — leak-check scanning tracked files only, and
+  content assertions vs hard-wrapped prose.
+- `README.md`: "Every phase says who builds it" — the artifact, the default, and
+  the delegation-moves-work-never-verification rule.
+- `docs/ADAPTING.md`: new routing-rule row for "how a phase should be built".
+- `CLAUDE.md`: corrected the stale "273 tests, ~23s" → **313 tests, ~60s**
+  (measured, not estimated).
+- `skills/polish-ticket/SKILL.md` §D: the hard-wrap/guard-test lesson added to
+  the **generic** traps list (see defect 2 below).
+
+`tests/delegation-contract.bats` +5 cases → 28 total.
+
+**Two self-caught defects:**
+1. *The gate-file cases would have failed in CI.* They assert against
+   `.agents/gates.md`, which is **gitignored** (this box's self-install), so a
+   fresh clone — including the GitHub Actions runner — has no such file. Caught
+   by checking `git check-ignore` on the file after `git status` showed the edit
+   missing. Fixed with a `local_gates` helper that skips when absent, and
+   **verified both ways**: with `.agents/` present the three cases report `ok`;
+   with `.agents/` temporarily moved aside they report `ok … # skip`, and the
+   tracked-template case still passes unconditionally. `.agents/` restored and
+   confirmed intact.
+2. *A portable lesson was about to die in a gitignored file.* The hard-wrap /
+   guard-test trap applies to any project asserting on prose, but the gate file
+   it landed in is never committed. Routed per `ADAPTING.md` ("portable doctrine
+   → a core PR") into `polish-ticket` §D's generic traps list, which does ship.
+
+**Full battery, all green:**
+```
+bats tests/                          313 passing, 0 failures, rc=0
+bash -n <syntax sweep> + py_compile  rc=0 (incl. delegation-report.py)
+bash scripts/leak-check.sh           clean, rc=0
+bash scripts/check-deck-fresh.sh     in sync, rc=0 (byte-identical — L1 held)
+node scripts/check-deck-render.mjs   rc=0
+./install.sh --doctor --project .    rc=0 — "crew install clean (checks a-h)"
+```
+
 Commit: _(this commit)_
 
 ---
