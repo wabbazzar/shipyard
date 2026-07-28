@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # reconcile-skills.sh — make an installed project's skill symlinks match the
-# current GENERIC_SKILLS, WITHOUT re-running the full installer.
+# current GENERIC_SKILLS in both the Claude/Hermes compatibility root and
+# Codex's native .agents/skills discovery root, WITHOUT re-running the full
+# installer.
 #
 # Why this exists: adding a skill to install.sh's GENERIC_SKILLS makes every
 # installed project's `--doctor` report "skill symlink missing" until it is
@@ -62,30 +64,30 @@ reconcile_one() {
   if [ ! -d "$dir/.agents" ] && [ ! -d "$dir/.claude/skills" ]; then
     echo "  skip (not a crew project): $dir"; return 0
   fi
-  local dest_root="$dir/.claude/skills"
-  [ "$DRY_RUN" = "1" ] || mkdir -p "$dest_root"
-
-  local skill src dest cur changed=0
-  for skill in $GENERIC_SKILLS; do
-    src="$QUARTET_DIR/skills/$skill"
-    dest="$dest_root/$skill"
-    [ -d "$src" ] || { echo "  skip $skill: source missing"; continue; }
-    if [ -L "$dest" ]; then
-      cur="$(readlink -f "$dest" 2>/dev/null || true)"
-      if [ "$cur" = "$(readlink -f "$src")" ]; then
-        continue                                   # already correct
+  local dest_root skill src dest cur changed=0
+  for dest_root in "$dir/.claude/skills" "$dir/.agents/skills"; do
+    [ "$DRY_RUN" = "1" ] || mkdir -p "$dest_root"
+    for skill in $GENERIC_SKILLS; do
+      src="$QUARTET_DIR/skills/$skill"
+      dest="$dest_root/$skill"
+      [ -d "$src" ] || { echo "  skip $skill: source missing"; continue; }
+      if [ -L "$dest" ]; then
+        cur="$(readlink -f "$dest" 2>/dev/null || true)"
+        if [ "$cur" = "$(readlink -f "$src")" ]; then
+          continue                                   # already correct
+        elif [ "$DRY_RUN" = "1" ]; then
+          echo "  would relink: $dest -> $src"; changed=1
+        else
+          ln -sfn "$src" "$dest"; echo "  relinked: $dest"; changed=1
+        fi
+      elif [ -e "$dest" ]; then
+        echo "  SKIP (real dir/file, not clobbering): $dest" # operator owns it
       elif [ "$DRY_RUN" = "1" ]; then
-        echo "  would relink: $dest -> $src"; changed=1
+        echo "  would symlink: $dest -> $src"; changed=1
       else
-        ln -sfn "$src" "$dest"; echo "  relinked: $skill"; changed=1
+        ln -s "$src" "$dest"; echo "  symlinked: $dest"; changed=1
       fi
-    elif [ -e "$dest" ]; then
-      echo "  SKIP (real dir/file, not clobbering): $dest"   # operator owns it
-    elif [ "$DRY_RUN" = "1" ]; then
-      echo "  would symlink: $dest -> $src"; changed=1
-    else
-      ln -s "$src" "$dest"; echo "  symlinked: $skill"; changed=1
-    fi
+    done
   done
   [ "$changed" = "0" ] && echo "  up-to-date"
   return 0

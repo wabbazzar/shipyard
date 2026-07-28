@@ -63,8 +63,8 @@ _install() {
   p="$(make_fixture_project abridge harness-config.toml)"   # build=codex
   _install "$p" --agents build >/dev/null
   [ -f "$p/AGENTS.md" ]
-  grep -q '.claude/skills/execute-ticket/SKILL.md' "$p/AGENTS.md"
-  grep -q '.claude/skills/write-ticket/SKILL.md'   "$p/AGENTS.md"
+  grep -q '.agents/skills/execute-ticket/SKILL.md' "$p/AGENTS.md"
+  grep -q '.agents/skills/write-ticket/SKILL.md'   "$p/AGENTS.md"
   # CWD guarantee: the unit runs with WorkingDirectory at the project root, so
   # the root AGENTS.md is auto-injected by codex/hermes.
   grep -Fxq "WorkingDirectory=$p" "$HOME/.config/systemd/user/abridge-build.service"
@@ -74,8 +74,8 @@ _install() {
   p="$(make_fixture_project nobridge can-merge-true.toml)"  # no harness config
   _install "$p" --agents build,release,medic,scribe >/dev/null
   [ -f "$p/AGENTS.md" ]
-  grep -q '.claude/skills/execute-ticket/SKILL.md' "$p/AGENTS.md"
-  grep -q '.claude/skills/write-ticket/SKILL.md'   "$p/AGENTS.md"
+  grep -q '.agents/skills/execute-ticket/SKILL.md' "$p/AGENTS.md"
+  grep -q '.agents/skills/write-ticket/SKILL.md'   "$p/AGENTS.md"
 }
 
 @test "install: an existing AGENTS.md is never clobbered" {

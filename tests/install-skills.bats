@@ -1,12 +1,13 @@
 #!/usr/bin/env bats
 #
 # install-skills.bats — the installer's shared-skills symlink step + gate-file
-# drop (install.sh step 4.5).
+# drop (install.sh step 4.5). Claude/Hermes use .claude/skills; Codex natively
+# discovers repository skills from .agents/skills.
 #
 # Asserts:
 #   * --dry-run announces it WOULD symlink the six generic skills and WOULD
 #     drop gates.md, and writes NOTHING;
-#   * a real run creates the six symlinks (pointing into this repo's skills/)
+#   * a real run creates every shared skill link in both discovery locations
 #     and writes .agents/gates.md;
 #   * re-running is idempotent (skills "unchanged", gates.md left as-is);
 #   * an existing gate file is NEVER clobbered;
@@ -33,26 +34,31 @@ run_install() {
     bash "$QUARTET_ROOT/install.sh" --project "$PROJ" "$@"
 }
 
-@test "dry-run announces the 6 skill symlinks + gates.md drop, writes nothing" {
+@test "dry-run announces Claude/Hermes and Codex skill links + gates.md drop, writes nothing" {
   run run_install --dry-run
   [ "$status" -eq 0 ]
-  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature; do
+  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard; do
     echo "$output" | grep -q "would symlink: $PROJ/.claude/skills/$s"
+    echo "$output" | grep -q "would symlink: $PROJ/.agents/skills/$s"
   done
   echo "$output" | grep -q "would drop: $PROJ/.agents/gates.md"
   # Nothing actually written.
   [ ! -e "$PROJ/.claude/skills/polish-ticket" ]
   [ ! -e "$PROJ/.claude/skills/write-ticket" ]
+  [ ! -e "$PROJ/.agents/skills/polish-ticket" ]
   [ ! -e "$PROJ/.agents/gates.md" ]
 }
 
-@test "real run symlinks the 6 skills into the repo skills/ and drops gates.md" {
+@test "real run symlinks every skill into both discovery roots and drops gates.md" {
   run run_install
   [ "$status" -eq 0 ]
-  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature; do
+  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard; do
     [ -L "$PROJ/.claude/skills/$s" ]
     [ "$(readlink -f "$PROJ/.claude/skills/$s")" = "$(readlink -f "$QUARTET_ROOT/skills/$s")" ]
     [ -f "$PROJ/.claude/skills/$s/SKILL.md" ]   # resolves to a real skill
+    [ -L "$PROJ/.agents/skills/$s" ]
+    [ "$(readlink -f "$PROJ/.agents/skills/$s")" = "$(readlink -f "$QUARTET_ROOT/skills/$s")" ]
+    [ -f "$PROJ/.agents/skills/$s/SKILL.md" ]   # Codex discovery path
   done
   [ -f "$PROJ/.agents/gates.md" ]
   grep -q "skilltest" "$PROJ/.agents/gates.md"   # <PROJECT_NAME> substituted

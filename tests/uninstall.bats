@@ -51,6 +51,7 @@ agents_digest() { find "$P/.agents" -type f -exec md5sum {} \; | sort; }
   [ -z "$(unit_set)" ]                                  # every crew unit gone
   for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature; do
     [ ! -L "$P/.claude/skills/$s" ]
+    [ ! -L "$P/.agents/skills/$s" ]
   done
   [[ "$output" == *"left in place"* ]]
   [[ "$output" == *".agents/"* ]]

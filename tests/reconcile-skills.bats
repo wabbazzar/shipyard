@@ -29,7 +29,7 @@ generic_skills() {
   [ "$status" -eq 2 ]
 }
 
-@test "creates a missing generic-skill symlink for a project" {
+@test "creates a missing generic-skill symlink for Claude/Hermes and Codex" {
   P="$(make_fixture_project rc1)"
   mkdir -p "$P/.claude/skills"
   # a skill that must exist after reconcile
@@ -39,6 +39,8 @@ generic_skills() {
   [ "$status" -eq 0 ]
   [ -L "$P/.claude/skills/$one" ]
   [ "$(readlink -f "$P/.claude/skills/$one")" = "$(readlink -f "$QUARTET_ROOT/skills/$one")" ]
+  [ -L "$P/.agents/skills/$one" ]
+  [ "$(readlink -f "$P/.agents/skills/$one")" = "$(readlink -f "$QUARTET_ROOT/skills/$one")" ]
 }
 
 @test "does NOT clobber a real (non-symlink) skill dir" {
@@ -69,4 +71,5 @@ generic_skills() {
   run run_reconcile --all
   [ "$status" -eq 0 ]
   [ -L "$P/.claude/skills/$one" ]
+  [ -L "$P/.agents/skills/$one" ]
 }

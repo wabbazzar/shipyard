@@ -24,21 +24,21 @@ run_install() {
 
 @test "--relink recreates a missing skill symlink (and --doctor then clean)" {
   run_install                       # baseline install: all symlinks present
-  rm -f "$PROJ/.claude/skills/polish-ticket"   # simulate drift
-  [ ! -e "$PROJ/.claude/skills/polish-ticket" ]
+  rm -f "$PROJ/.agents/skills/polish-ticket"   # simulate Codex discovery drift
+  [ ! -e "$PROJ/.agents/skills/polish-ticket" ]
   # doctor sees the drift
   run run_install --doctor
   [ "$status" -eq 1 ]
-  echo "$output" | grep -q "skill: polish-ticket symlink missing"
+  echo "$output" | grep -q "codex skill: polish-ticket symlink missing"
 
   run run_install --relink
   [ "$status" -eq 0 ]
-  [ -L "$PROJ/.claude/skills/polish-ticket" ]
-  [ "$(readlink -f "$PROJ/.claude/skills/polish-ticket")" = "$(readlink -f "$QUARTET_ROOT/skills/polish-ticket")" ]
+  [ -L "$PROJ/.agents/skills/polish-ticket" ]
+  [ "$(readlink -f "$PROJ/.agents/skills/polish-ticket")" = "$(readlink -f "$QUARTET_ROOT/skills/polish-ticket")" ]
   # the skill-symlink drift is resolved: doctor no longer flags it (other
   # unrelated findings in the stubbed test env are not this test's concern).
   run run_install --doctor
-  ! echo "$output" | grep -q "skill: polish-ticket symlink missing"
+  ! echo "$output" | grep -q "codex skill: polish-ticket symlink missing"
 }
 
 @test "--relink repairs a BROKEN symlink (points nowhere)" {
@@ -81,7 +81,7 @@ run_install() {
   run run_install --relink
   [ "$status" -eq 0 ]
   [ -f "$PROJ/AGENTS.md" ]
-  grep -q '.claude/skills/write-ticket/SKILL.md' "$PROJ/AGENTS.md"
+  grep -q '.agents/skills/write-ticket/SKILL.md' "$PROJ/AGENTS.md"
 }
 
 @test "--relink --dry-run reports a missing bridge without creating it" {
@@ -99,6 +99,7 @@ run_install() {
   [ "$status" -eq 0 ]
   for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard; do
     [ -L "$PROJ/.claude/skills/$s" ]
+    [ -L "$PROJ/.agents/skills/$s" ]
     echo "$output" | grep -q "ok: $s"
   done
 }

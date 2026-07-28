@@ -220,6 +220,15 @@ EOF
   [[ "$output" == *"DOCTOR skill: bugfix symlink missing"* ]]
 }
 
+@test "doctor (e): a missing Codex discovery skill symlink -> finding" {
+  doctor_install
+  rm -f "$P/.agents/skills/execute-ticket"
+  run_doctor
+  echo "$output"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"DOCTOR codex skill: execute-ticket symlink missing"* ]]
+}
+
 @test "doctor (e): a symlink resolving OUTSIDE shipyard skills -> finding" {
   doctor_install
   ln -sfn /etc/hostname "$P/.claude/skills/feature"
