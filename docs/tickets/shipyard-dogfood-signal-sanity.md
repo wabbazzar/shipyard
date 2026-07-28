@@ -454,3 +454,17 @@ bats tests/
   and hermetic-test changes prove the policy without Signal contact. Focused:
   35/35; full: 375/375. No dead `dedupe_window_sec` key was added: the consumed
   default is 86,400 seconds and `--window` is the supported override.
+- 2026-07-28 — Phase 4 built; `builder: subagent (1 reusable audit agent; six
+  bounded repository briefs)`. The actionable Signal policy is live in all six
+  downstream repos: Aurora `3446928` on `main` (also merged into its live
+  product branch at `5f3353f`; clean-origin suite 462 passed/6 skipped),
+  Bopthere `c9377d3` (320 frontend and 265 backend passed/1 skipped), Shredly
+  `ba9ef8bd` (4,744 passed/4 skipped), Starbird `0a23a41` (23 passed,
+  svelte-check 0 errors, static build green), 2pizzaclub `dcff523` (RAG 5/5),
+  and Ice `4093b33`. Each doctor reports checks a–j clean. Ice's five
+  hub-only decisions were recovered to canonical project ledgers; the tracked
+  Aurora recovery shipped in `3446928` and Bopthere's two recoveries in
+  `8e25500` after a fresh 320/320 + 265/1 gate. Ice Dispatch edition 209
+  generated with 7 desks and 73 items, proving routine news remains available
+  outside Signal. BopBop's independent conversation/thread fixtures passed
+  17/17. Caladan remained excluded as the owner directed.
