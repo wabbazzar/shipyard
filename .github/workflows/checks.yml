@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: bash -n all scripts
         run: |
-          bash -n install.sh agents/lib/*.sh agents/*/runner.sh .githooks/pre-commit scripts/leak-check.sh scripts/check-deck-fresh.sh
+          bash -n install.sh agents/lib/*.sh agents/*/runner.sh .githooks/pre-commit scripts/leak-check.sh scripts/check-deck-fresh.sh scripts/ticket-lifecycle.sh
       - name: py_compile generators
         run: python3 -m py_compile scripts/gen-deck-data.py
 
@@ -27,6 +27,20 @@ jobs:
       - uses: actions/checkout@v4
       - name: deck data is generated from the skills (not stale)
         run: bash scripts/check-deck-fresh.sh
+
+  ticket-lifecycle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: every ticket lives in the folder its Status implies
+        run: |
+          rc=0
+          bash scripts/ticket-lifecycle.sh --project . --check || rc=$?
+          if [ "$rc" -eq 3 ]; then
+            echo "no lifecycle layout configured here — deliberate no-op"
+            exit 0
+          fi
+          exit "$rc"
 
   bats:
     runs-on: ubuntu-latest

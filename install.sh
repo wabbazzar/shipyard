@@ -334,8 +334,29 @@ run_doctor() {
     [ -f "$sh_env" ] || emit "shoulder: delivery env $sh_env missing (run install.sh --wire-shoulder)"
   fi
 
+  # (j) ticket lifecycle drift — every ticket must sit in the folder its
+  #     `Status:` line implies. The deterministic engine is the authority.
+  #     Exit 1 = drift (one finding per misfiled ticket — blocking, which is
+  #     the point); exit 3 = the project has no lifecycle layout configured, so
+  #     a flat project is NOT a finding; exit 2 = the engine could not run.
+  local lc_engine="$QUARTET_DIR/scripts/ticket-lifecycle.sh" lc_out lc_rc
+  if [ -f "$lc_engine" ]; then
+    lc_out="$(bash "$lc_engine" --project "$PROJECT_DIR" --check 2>/dev/null)"
+    lc_rc=$?
+    case "$lc_rc" in
+      0|3) : ;;
+      1)
+        while IFS= read -r hit; do
+          [ -z "$hit" ] && continue
+          emit "lifecycle: ${hit#MISFILED: }"
+        done <<<"$lc_out"
+        ;;
+      *) emit "lifecycle: ticket-lifecycle.sh --check could not run (exit $lc_rc)" ;;
+    esac
+  fi
+
   if [ "$findings" -eq 0 ]; then
-    echo "doctor: $PROJECT_NAME crew install clean (checks a-h)" >&2
+    echo "doctor: $PROJECT_NAME crew install clean (checks a-j)" >&2
     return 0
   fi
   echo "doctor: $PROJECT_NAME — $findings finding(s)" >&2
@@ -793,6 +814,75 @@ elif [ "$DRY_RUN" = "1" ]; then
 else
   sed "s/<PROJECT_NAME>/$PROJECT_NAME/g" "$GATES_SRC" > "$GATES_DEST"
   echo "  wrote:     $GATES_DEST (fill in the commands + gate classes)"
+fi
+
+# ---------- step 4.55: ticket lifecycle folders -----------------------------
+# Ticket hygiene is DEFAULT ON at install time: a project gets
+# docs/tickets/{pending,complete,freezer} plus the [write_ticket] keys that name
+# them, so THE FOLDER IS THE STATUS and scripts/ticket-lifecycle.sh --check can
+# enforce it (blocking in --doctor and CI, warning in the pre-commit hook).
+#
+# Tri-state, by the project's existing config:
+#   (a) no ticket_dir configured  -> provision the folders + config (default ON)
+#   (b) lifecycle_dirs present    -> already configured; touch nothing
+#   (c) ticket_dir but no flag    -> a non-standard layout (several projects use
+#       backlog/ + archive/). Enabling the mover would MISFILE those tickets, so
+#       print a migration NOTICE and change nothing — no silent enable, no
+#       rewrite of the operator's dir keys. Migration is handled separately.
+#
+# Never clobbers: an existing folder or an existing config value is left as-is,
+# same posture as the gates.md drop above.
+echo "==> ticket lifecycle folders"
+LC_BASE="docs/tickets"
+lc_ticket_dir="$(jq -r '.write_ticket.ticket_dir // empty' <<<"$CFG_JSON")"
+lc_flag_set="$(jq -r '((.write_ticket // {}) | has("lifecycle_dirs")) | tostring' <<<"$CFG_JSON")"
+
+if [ "$lc_flag_set" = "true" ]; then
+  echo "  ticket lifecycle: already configured (lifecycle_dirs present) — leaving as-is"
+elif [ -n "$lc_ticket_dir" ]; then
+  echo "  NOTICE: ticket lifecycle NOT enabled for $PROJECT_NAME."
+  echo "  NOTICE: this project keeps tickets in a non-standard layout"
+  echo "  NOTICE: (ticket_dir = \"$lc_ticket_dir\") and needs migration first —"
+  echo "  NOTICE: switching the mover on now would misfile them."
+  echo "  NOTICE: migrate to $LC_BASE/{pending,complete,freezer}, then add"
+  echo "  NOTICE: lifecycle_dirs = true to [write_ticket] in $CFG."
+else
+  for lc_sub in pending complete freezer; do
+    lc_dir="$PROJECT_DIR/$LC_BASE/$lc_sub"
+    if [ -d "$lc_dir" ]; then
+      echo "  $LC_BASE/$lc_sub exists — leaving as-is (never clobbered)"
+    elif [ "$DRY_RUN" = "1" ]; then
+      echo "  would create: $lc_dir"
+    else
+      mkdir -p "$lc_dir"
+      [ -e "$lc_dir/.gitkeep" ] || : >"$lc_dir/.gitkeep"
+      echo "  created:   $lc_dir"
+    fi
+  done
+
+  lifecycle_keys="ticket_dir     = \"$LC_BASE/pending\""$'\n'
+  lifecycle_keys+="archive_dir    = \"$LC_BASE/complete\""$'\n'
+  lifecycle_keys+="backlog_dir    = \"$LC_BASE/freezer\""$'\n'
+  lifecycle_keys+="scan_dirs      = [ \"$LC_BASE/pending\", \"$LC_BASE/complete\", \"$LC_BASE/freezer\" ]"$'\n'
+  lifecycle_keys+="lifecycle_dirs = true"$'\n'
+
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "  would write into [write_ticket] in $CFG:"
+    printf '%s' "$lifecycle_keys" | sed 's/^/    /'
+  elif grep -qE '^[[:space:]]*\[write_ticket\][[:space:]]*$' "$CFG"; then
+    # A [write_ticket] section exists with other keys — insert into it rather
+    # than appending a second header (duplicate TOML tables are a parse error).
+    tmp_cfg="$(mktemp)"
+    awk -v keys="$lifecycle_keys" '
+      { print }
+      !ins && /^[[:space:]]*\[write_ticket\][[:space:]]*$/ { printf "%s", keys; ins=1 }
+    ' "$CFG" >"$tmp_cfg"
+    mv "$tmp_cfg" "$CFG"
+    echo "  wrote lifecycle keys into the existing [write_ticket] in $CFG"
+  else
+    printf '\n[write_ticket]\n%s' "$lifecycle_keys" >>"$CFG"
+    echo "  wrote [write_ticket] (lifecycle_dirs = true) in $CFG"
+  fi
 fi
 
 # ---------- step 4.6: skill-bridge AGENTS.md for non-claude harnesses --------

@@ -490,6 +490,63 @@ Filename prefixes unchanged — they are deliberate draft-stub markers.
 Gate: `bats tests/` **348 passing, 0 failures** · `bash -n` OK · leak-check
 clean · deck-fresh in sync.
 
+Commit: `97c0d9f`
+
+### Phase 5 — installer: ticket hygiene DEFAULT ON
+
+builder: subagent (1 agent)
+
+`install.sh` step 4.55 provisions the layout, with a **tri-state** that is the
+whole safety story:
+- **(a) nothing configured** → create `pending/complete/freezer`, write the four
+  dir keys + `lifecycle_dirs = true`. Default ON, per owner decision.
+- **(b) already lifecycle-configured** → leave alone, idempotent.
+- **(c) `ticket_dir` set but no `lifecycle_dirs`** → print a migration NOTICE and
+  **do not enable, do not rewrite dir keys**. This is what protects a repo whose
+  folders mean something non-standard (see the bopthere finding below).
+
+Doctor gains check **(j)**: runs the engine's `--check`, emits one finding per
+misfiled ticket, exits non-zero — blocking, as decided. Engine exit 3 (flat
+project) is explicitly *not* a finding. Pre-commit warns without blocking
+(leak-check remains the only blocker and its status still propagates). CI gains
+a `ticket-lifecycle` job treating exit 3 as success.
+
+**Independently re-verified** (§2.5) on my own fixtures:
+- (a) dry-run: no `docs/` created, `lifecycle_dirs` count 0 — wrote nothing.
+- (a) real run: `pending complete freezer` all created; all four keys present.
+- (c) NOTICE printed; `lifecycle_dirs` count **0**; `docs/tickets/backlog` key
+  untouched — the protection holds.
+- doctor: clean project → no lifecycle finding; after planting a
+  `Status: built + verified` ticket in `pending/` →
+  `DOCTOR lifecycle: …/late.md — status "** built + verified" implies
+  docs/tickets/complete`, exit 1.
+- *Mutation:* making exit 3 emit a finding fails exactly case 7 (flat project).
+  A first attempt used a `sed` that silently didn't match the real `0|3) : ;;`
+  arm and reported "not caught" — a meaningless result that would have been easy
+  to accept. Re-done correctly; restored byte-identical.
+
+Gate: `bats tests/` **355 passing, 0 failures** · `bash -n` OK · leak-check
+clean · deck-fresh in sync.
+
+### Fleet survey (read-only, 2026-07-27) — Phase 7 input
+
+207 tickets, 7 repos. Drift = current folder vs. what the `Status:` line implies:
+aurora 9 · shredly 71 · starbird 3 · bopthere (see below) · ice/shipyard/caladan flat.
+
+**Aurora — the reference project — already has 9 misfiled tickets**, hours after
+adopting the layout (incl. `freezer/014` reading "BUILT + VERIFIED"). That is the
+argument for the deterministic checker in one number: hygiene decays in hours
+without enforcement.
+
+⚠ **`archive/` does NOT universally mean "complete".** bopthere's `archive/`
+holds 28 tickets of which **13 are "Not Started"** and 6 "PENDING"; its config
+says the archived material is a *previous abandoned app*. Semantically that is
+**freezer**, not complete. A mechanical `git mv archive/ complete/` — which
+decision D1 naively implies — would have marked 19 never-started tickets as
+built and verified. **Folder vocabulary is per-repo semantics and must be
+established from each repo's own config/README/history before anything moves.**
+This is why Phase 7 is one subagent per repo rather than a fleet-wide script.
+
 Commit: _(this commit)_
 
 ---

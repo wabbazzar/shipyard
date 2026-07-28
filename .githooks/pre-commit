@@ -1,4 +1,25 @@
 #!/usr/bin/env bash
 # Pre-commit guard: block owner/machine-specific data from entering the
 # public repo. Enabled by install.sh via `git config core.hooksPath .githooks`.
-exec "$(git rev-parse --show-toplevel)/scripts/leak-check.sh" --staged
+#
+# leak-check is the ONLY blocking part, and its exit status is this hook's exit
+# status. Ticket-lifecycle drift WARNS and never fails the commit (the blocking
+# enforcement lives in `install.sh --doctor` and in CI), so a misfiled ticket
+# can never wedge an unrelated commit.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+# Advisory: exit 1 = drift; 3 = no lifecycle layout configured (nothing to say).
+LC_ENGINE="$ROOT/scripts/ticket-lifecycle.sh"
+if [ -f "$LC_ENGINE" ]; then
+  lc_out="$(bash "$LC_ENGINE" --project "$ROOT" --check 2>/dev/null)"
+  lc_rc=$?
+  if [ "$lc_rc" -eq 1 ]; then
+    printf 'WARNING: ticket lifecycle drift (not blocking this commit):\n' >&2
+    printf '%s\n' "$lc_out" >&2
+    printf 'WARNING: see scripts/ticket-lifecycle.sh --project . --sort for the plan.\n' >&2
+  fi
+fi
+
+exec "$ROOT/scripts/leak-check.sh" --staged
