@@ -1,0 +1,40 @@
+{
+  "agent_calls": 0,
+  "avg_ctx_per_turn": 38.666666666666664,
+  "big_results": 0,
+  "bloated_cache_read_pct": 0.0,
+  "bloated_turn_pct": 0.0,
+  "bloated_turns": 0,
+  "cache_read_cost_pct_of_total": 1.5360092740182585,
+  "cache_read_pct_vs_output": 2.301346070343031,
+  "cache_read_tokens": 53,
+  "cost_equiv_total": 345.05,
+  "cutoff": null,
+  "largest_result": 23,
+  "ledger_builder": {
+    "inline": 0,
+    "subagent": 0,
+    "total": 0
+  },
+  "malformed_timestamps": 0,
+  "output_cost_pct_of_total": 65.2079408781336,
+  "output_tokens": 45,
+  "peak_ctx": 68,
+  "read_byte_pct": 100.0,
+  "sessions": 1,
+  "tool_bytes": {
+    "Read": 23
+  },
+  "tool_calls": {
+    "Read": 1,
+    "Skill": 1
+  },
+  "top_peaks": [
+    68
+  ],
+  "total_tool_bytes": 23,
+  "turns": 3,
+  "window": "all",
+  "zero_agent_pct": 100.0,
+  "zero_agent_sessions": 1
+}

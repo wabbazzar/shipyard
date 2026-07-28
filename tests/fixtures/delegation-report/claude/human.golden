@@ -1,0 +1,22 @@
+delegation-report — skill=execute-ticket window=all
+
+  sessions                     1
+  sessions with ZERO subagents 1 (100%)
+  Agent calls (all sessions)   0
+  assistant turns              3
+  malformed timestamps skipped 0
+
+  output tokens                0.00 M
+  cache-read (context carry)   0.00 B
+  cost-equivalent, of total    cache-read 2%  vs output 65%
+  context carry vs work alone  2%  (the Phase 7 headline ratio)
+
+  avg context per turn         0 k
+  peak context                 0 k   (top: 0k)
+  turns above 300k context      0 (0%), carrying 0% of all context reads
+
+  bytes returned into the orchestrator:
+    Read                    1 calls     0.00 MB  100.0%  avg    0.0 KB
+    results >60KB: 0   largest: 0 KB
+
+  Ledger builder: lines        subagent=0 inline=0 total=0

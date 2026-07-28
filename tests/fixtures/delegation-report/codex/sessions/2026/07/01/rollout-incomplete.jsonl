@@ -1,0 +1,3 @@
+{"timestamp":"2026-07-01T15:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-5"}}
+{"timestamp":"2026-07-01T15:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<!-- shipyard-skill:execute-ticket:v1 -->"}]}}
+{"timestamp":"2026-07-01T15:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":888888,"cached_input_tokens":888888,"output_tokens":888888,"reasoning_output_tokens":888888,"total_tokens":3555552}}}}

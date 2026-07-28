@@ -1000,14 +1000,28 @@ after the explicit invocation marker lands.
 
 #### Slice A Ledger placeholder
 
-- plan:
-- builder: subagent (<N> agents)
-- RED command / failing cases / exit:
+- plan: Add synthetic pre-change Claude goldens and meaningful red Codex
+  contract cases first, then implement source adapters while preserving the
+  omitted-source Claude output byte-for-byte.
+- builder: subagent (1 agent)
+- RED command / failing cases / exit: `bats tests/delegation-report.bats
+  tests/delegation-contract.bats` → 47 passed / 8 failed, rc=1. Failures:
+  explicit Claude source; Codex totals, result pairing/delegation, unavailable
+  fields, marker attribution, root precedence; separate-source JSON and human
+  output.
 - pre-change Claude golden guard command / passing cases / exit:
+  `bats --filter 'legacy golden human' tests/delegation-report.bats` and the
+  corresponding `legacy golden JSON` filter → 1/1 passed each, rc=0 each.
 - golden SHA-256 (human / JSON):
-- GREEN command / passing cases / exit:
-- commit:
-- notes / blockers:
+  `60ec9af138dcca783fe69d9daac0a37db65c1eced65e4bed394eeae26de05d7b` /
+  `7db65fbaf94d767bfb15c0424288d7bd875c862e216399768e95bf0452f4b5c4`.
+- GREEN command / passing cases / exit: `python3 -m py_compile
+  scripts/delegation-report.py` rc=0; focused bats 56/56 passed, rc=0; four
+  legacy-golden `cmp` calls rc=0; scoped `git diff --check` rc=0.
+- commit: not committed (parent orchestrator owns the Slice A commit).
+- notes / blockers: stdlib-only/read-only adapters landed with hand-authored
+  fixtures only; no personal transcript data. Independent review restored and
+  pinned the legacy missing-Claude-root diagnostic. No blockers.
 
 #### Slice B Ledger placeholder
 

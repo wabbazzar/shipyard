@@ -1,0 +1,4 @@
+{"type":"assistant","timestamp":"2026-07-01T12:00:00Z","message":{"content":[{"type":"tool_use","id":"skill-1","name":"Skill","input":{"skill":"execute-ticket"}}],"usage":{"input_tokens":2,"output_tokens":3,"cache_read_input_tokens":5,"cache_creation_input_tokens":7}}}
+{"type":"assistant","timestamp":"2026-07-01T12:00:01Z","message":{"content":[{"type":"tool_use","id":"read-1","name":"Read","input":{"file_path":"synthetic.txt"}}],"usage":{"input_tokens":11,"output_tokens":13,"cache_read_input_tokens":17,"cache_creation_input_tokens":19}}}
+{"type":"user","timestamp":"2026-07-01T12:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"read-1","content":"synthetic tool result"}]}}
+{"type":"assistant","timestamp":"2026-07-01T12:00:03Z","message":{"content":[{"type":"text","text":"synthetic completion"}],"usage":{"input_tokens":23,"output_tokens":29,"cache_read_input_tokens":31,"cache_creation_input_tokens":37}}}

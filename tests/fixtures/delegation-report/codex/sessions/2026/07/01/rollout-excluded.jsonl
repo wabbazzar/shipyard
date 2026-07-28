@@ -1,0 +1,6 @@
+{"timestamp":"2026-07-01T14:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-4"}}
+{"timestamp":"2026-07-01T14:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Available skills: execute-ticket at skills/execute-ticket/SKILL.md"}]}}
+{"timestamp":"2026-07-01T14:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"please run <!-- shipyard-skill:execute-ticket:v1 --> naturally"}]}}
+{"timestamp":"2026-07-01T14:00:03Z","type":"event_msg","payload":{"type":"agent_message","message":"<!-- shipyard-skill:execute-ticket:v1 -->"}}
+{"timestamp":"2026-07-01T14:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":999999,"cached_input_tokens":999999,"output_tokens":999999,"reasoning_output_tokens":999999,"total_tokens":3999996}}}}
+{"timestamp":"2026-07-01T14:00:05Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-4"}}

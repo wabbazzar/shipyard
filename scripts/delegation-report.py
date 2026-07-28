@@ -17,6 +17,7 @@ Read-only. Stdlib only. No network.
   python3 scripts/delegation-report.py --since 2026-07-27T20:17:45Z --json
 
 Transcript root resolves as ${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}.
+Codex root resolves as ${CODEX_SESSIONS_DIR:-${CODEX_HOME:-$HOME/.codex}/sessions}.
 """
 
 from __future__ import annotations
@@ -41,12 +42,23 @@ W_OUTPUT = 5.0
 BLOAT_CTX = 300_000
 # A single tool result above this is called out individually.
 BIG_RESULT = 60_000
+CODEX_MARKER = "<!-- shipyard-skill:execute-ticket:v1 -->"
 
 
 def transcript_root() -> str:
     return os.environ.get(
         "CLAUDE_PROJECTS_DIR", os.path.join(os.path.expanduser("~"), ".claude", "projects")
     )
+
+
+def codex_transcript_root() -> str:
+    override = os.environ.get("CODEX_SESSIONS_DIR")
+    if override:
+        return override
+    codex_home = os.environ.get("CODEX_HOME")
+    if codex_home:
+        return os.path.join(codex_home, "sessions")
+    return os.path.join(os.path.expanduser("~"), ".codex", "sessions")
 
 
 def _is_invocation(rec: dict, skill: str) -> bool:
@@ -236,6 +248,187 @@ def scan(root: str, skill: str, cutoff: datetime | None) -> dict:
     return agg
 
 
+def _codex_assistant_message(payload: dict) -> bool:
+    return payload.get("type") == "message" and payload.get("role") == "assistant"
+
+
+def _codex_has_marker(payload: dict) -> bool:
+    """Match only the versioned marker in canonical assistant message text."""
+    if not _codex_assistant_message(payload):
+        return False
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(block, dict)
+        and block.get("type") == "output_text"
+        and isinstance(block.get("text"), str)
+        and CODEX_MARKER in block["text"]
+        for block in content
+    )
+
+
+def scan_codex(root: str, cutoff: datetime | None) -> dict:
+    """Scan canonical Codex rollout records after the forward-only marker."""
+    agg = {
+        "sessions": 0,
+        "zero_agent_sessions": 0,
+        "turns": 0,
+        "input_tokens": 0,
+        "cache_read_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "context_tokens": 0,
+        "agent_calls": 0,
+        "malformed_records": 0,
+        "malformed_boundaries": 0,
+        "malformed_timestamps": 0,
+    }
+    tool_calls: Counter = Counter()
+    tool_bytes: Counter = Counter()
+
+    paths = glob.glob(os.path.join(root, "*", "*", "*", "rollout-*.jsonl"))
+    for path in sorted(paths):
+        active = False
+        agents = 0
+        task: dict | None = None
+        calls: dict[str, str] = {}
+        results: dict[str, object] = {}
+        session_calls: Counter = Counter()
+
+        try:
+            fh = open(path, errors="ignore")
+        except OSError:
+            continue
+
+        with fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except (ValueError, TypeError):
+                    if active:
+                        agg["malformed_records"] += 1
+                    continue
+                if not isinstance(rec, dict):
+                    if active:
+                        agg["malformed_records"] += 1
+                    continue
+
+                rec_type = rec.get("type")
+                payload = rec.get("payload")
+                if not isinstance(payload, dict):
+                    if active and rec_type in ("response_item", "event_msg"):
+                        agg["malformed_records"] += 1
+                    continue
+
+                parsed_ts = None
+                if rec_type == "response_item" and _codex_has_marker(payload) and not active:
+                    if cutoff is not None:
+                        parsed_ts = _parse_timestamp(rec.get("timestamp"))
+                        if parsed_ts is None:
+                            agg["malformed_timestamps"] += 1
+                            continue
+                        if parsed_ts < cutoff:
+                            continue
+                    active = True
+
+                event_type = payload.get("type")
+                if rec_type == "event_msg" and event_type == "task_started":
+                    if active and task is not None:
+                        agg["malformed_boundaries"] += 1
+                    task = {"turn_id": payload.get("turn_id"), "usage": None}
+
+                if not active:
+                    continue
+
+                if cutoff is not None:
+                    if parsed_ts is None:
+                        parsed_ts = _parse_timestamp(rec.get("timestamp"))
+                    if parsed_ts is None:
+                        agg["malformed_timestamps"] += 1
+                        continue
+                    if parsed_ts < cutoff:
+                        continue
+
+                if rec_type == "response_item":
+                    if _codex_assistant_message(payload):
+                        agg["turns"] += 1
+                    if event_type in ("function_call", "custom_tool_call"):
+                        name = payload.get("name")
+                        call_id = payload.get("call_id")
+                        if not isinstance(name, str) or not isinstance(call_id, str):
+                            agg["malformed_records"] += 1
+                            continue
+                        calls[call_id] = name
+                        session_calls[name] += 1
+                        if name == "spawn_agent" or name.endswith(".spawn_agent"):
+                            agents += 1
+                    elif event_type in ("function_call_output", "custom_tool_call_output"):
+                        call_id = payload.get("call_id")
+                        if not isinstance(call_id, str) or "output" not in payload:
+                            agg["malformed_records"] += 1
+                            continue
+                        results[call_id] = payload["output"]
+                    continue
+
+                if rec_type != "event_msg":
+                    continue
+                if event_type == "token_count" and task is not None:
+                    info = payload.get("info")
+                    usage = info.get("last_token_usage") if isinstance(info, dict) else None
+                    if usage is not None:
+                        if isinstance(usage, dict):
+                            task["usage"] = usage
+                        else:
+                            agg["malformed_records"] += 1
+                elif event_type == "task_complete":
+                    if task is None or payload.get("turn_id") != task.get("turn_id"):
+                        agg["malformed_boundaries"] += 1
+                        task = None
+                        continue
+                    usage = task.get("usage")
+                    if usage is None:
+                        agg["malformed_boundaries"] += 1
+                    else:
+                        input_tokens = usage.get("input_tokens", 0)
+                        cached_tokens = usage.get("cached_input_tokens", 0)
+                        output_tokens = usage.get("output_tokens", 0)
+                        reasoning_tokens = usage.get("reasoning_output_tokens", 0)
+                        values = (input_tokens, cached_tokens, output_tokens, reasoning_tokens)
+                        if not all(isinstance(value, int) and value >= 0 for value in values):
+                            agg["malformed_records"] += 1
+                        else:
+                            agg["input_tokens"] += input_tokens
+                            agg["cache_read_tokens"] += cached_tokens
+                            agg["output_tokens"] += output_tokens
+                            agg["reasoning_output_tokens"] += reasoning_tokens
+                            agg["context_tokens"] += input_tokens
+                    task = None
+
+        if not active:
+            continue
+        if task is not None:
+            agg["malformed_boundaries"] += 1
+        agg["sessions"] += 1
+        agg["agent_calls"] += agents
+        if agents == 0:
+            agg["zero_agent_sessions"] += 1
+        tool_calls.update(session_calls)
+        for call_id, output in results.items():
+            name = calls.get(call_id)
+            if name is None:
+                continue
+            size = len(
+                json.dumps(output, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            )
+            tool_bytes[name] += size
+
+    agg["tool_calls"] = dict(tool_calls)
+    agg["tool_result_bytes_proxy"] = dict(tool_bytes)
+    agg["serialized_tool_result_bytes_proxy"] = sum(tool_bytes.values())
+    return agg
+
+
 def scan_ledgers(ticket_dir: str) -> dict:
     """Count `builder:` lines by kind, inside each ticket's Ledger section only.
 
@@ -304,6 +497,31 @@ def summarize(agg: dict, ledgers: dict) -> dict:
     }
 
 
+def summarize_codex(agg: dict, ledgers: dict) -> dict:
+    sessions = max(agg["sessions"], 1)
+    return {
+        "sessions": agg["sessions"],
+        "zero_agent_sessions": agg["zero_agent_sessions"],
+        "zero_agent_pct": agg["zero_agent_sessions"] / sessions * 100,
+        "turns": agg["turns"],
+        "input_tokens": agg["input_tokens"],
+        "cache_read_tokens": agg["cache_read_tokens"],
+        "output_tokens": agg["output_tokens"],
+        "reasoning_output_tokens": agg["reasoning_output_tokens"],
+        "context_tokens": agg["context_tokens"],
+        "agent_calls": agg["agent_calls"],
+        "malformed_records": agg["malformed_records"],
+        "malformed_boundaries": agg["malformed_boundaries"],
+        "malformed_timestamps": agg["malformed_timestamps"],
+        "tool_calls": agg["tool_calls"],
+        "serialized_tool_result_bytes_proxy": agg["serialized_tool_result_bytes_proxy"],
+        "tool_result_bytes_proxy": agg["tool_result_bytes_proxy"],
+        "filesystem_network_bytes": None,
+        "cross_provider_cost_equivalent": None,
+        "ledger_builder": ledgers,
+    }
+
+
 def render(s: dict, skill: str, window: str) -> str:
     lines = [
         f"delegation-report — skill={skill} window={window}",
@@ -349,9 +567,51 @@ def render(s: dict, skill: str, window: str) -> str:
     return "\n".join(lines)
 
 
+def render_codex(s: dict, skill: str, window: str) -> str:
+    lines = [
+        f"delegation-report — source=codex skill={skill} window={window}",
+        "",
+        f"  sessions                     {s['sessions']}",
+        f"  sessions with ZERO subagents {s['zero_agent_sessions']} ({s['zero_agent_pct']:.0f}%)",
+        f"  spawn_agent calls            {s['agent_calls']}",
+        f"  assistant turns              {s['turns']}",
+        f"  malformed records skipped    {s['malformed_records']}",
+        f"  malformed task boundaries    {s['malformed_boundaries']}",
+        f"  malformed timestamps skipped {s['malformed_timestamps']}",
+        "",
+        f"  input/context tokens         {s['context_tokens']}",
+        f"  cached input tokens          {s['cache_read_tokens']}",
+        f"  output tokens                {s['output_tokens']}",
+        f"  reasoning output tokens      {s['reasoning_output_tokens']}",
+        "",
+        "  serialized tool-result bytes (context-ingress proxy only):",
+    ]
+    for name, size in sorted(
+        s["tool_result_bytes_proxy"].items(), key=lambda item: -item[1]
+    ):
+        calls = s["tool_calls"].get(name, 0)
+        lines.append(f"    {name:<18} {calls:>6} calls  {size:>8} bytes")
+    led = s["ledger_builder"]
+    lines += [
+        f"    proxy total: {s['serialized_tool_result_bytes_proxy']} bytes",
+        "  filesystem/network read/write bytes: unavailable",
+        "  cross-provider cost equivalent: unavailable",
+        "",
+        f"  Ledger builder: lines        subagent={led['subagent']} inline={led['inline']}"
+        f" total={led['total']}",
+    ]
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--skill", default="execute-ticket", help="skill to attribute (default: execute-ticket)")
+    ap.add_argument(
+        "--source",
+        choices=("claude", "codex", "all"),
+        default="claude",
+        help="transcript source (default: claude)",
+    )
     window = ap.add_mutually_exclusive_group()
     window.add_argument("--days", type=int, help="window in days (default: 30)")
     window.add_argument("--all", action="store_true", help="no time window")
@@ -365,27 +625,59 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--tickets-dir", default="docs/tickets", help="where to count Ledger builder: lines")
     args = ap.parse_args(argv)
 
-    root = transcript_root()
-    if not os.path.isdir(root):
-        print(f"delegation-report: no transcript root at {root}", file=sys.stderr)
-        return 2
+    roots = {}
+    if args.source in ("claude", "all"):
+        roots["claude"] = transcript_root()
+    if args.source in ("codex", "all"):
+        roots["codex"] = codex_transcript_root()
+    for source, root in roots.items():
+        if not os.path.isdir(root):
+            source_label = "" if source == "claude" else f"{source} "
+            print(
+                f"delegation-report: no {source_label}transcript root at {root}",
+                file=sys.stderr,
+            )
+            return 2
 
     days = 30 if args.days is None else args.days
     cutoff = None if args.all else args.since or datetime.now(timezone.utc) - timedelta(days=days)
-    summary = summarize(scan(root, args.skill, cutoff), scan_ledgers(args.tickets_dir))
     if args.all:
         window_label = "all"
     elif args.since is not None:
         window_label = f"since {args.since.isoformat().replace('+00:00', 'Z')} (inclusive)"
     else:
         window_label = f"{days}d"
-    summary["window"] = window_label
-    summary["cutoff"] = cutoff.isoformat().replace("+00:00", "Z") if cutoff else None
+    cutoff_label = cutoff.isoformat().replace("+00:00", "Z") if cutoff else None
+    ledgers = scan_ledgers(args.tickets_dir)
+    summaries = {}
+    if "claude" in roots:
+        summaries["claude"] = summarize(scan(roots["claude"], args.skill, cutoff), ledgers)
+    if "codex" in roots:
+        summaries["codex"] = summarize_codex(scan_codex(roots["codex"], cutoff), ledgers)
+    for summary in summaries.values():
+        summary["window"] = window_label
+        summary["cutoff"] = cutoff_label
 
-    if args.json:
-        print(json.dumps(summary, indent=2, sort_keys=True))
+    if args.source == "all":
+        if args.json:
+            print(json.dumps({"sources": summaries}, indent=2, sort_keys=True))
+        else:
+            print("source: claude")
+            print(render(summaries["claude"], args.skill, window_label))
+            print("\nsource: codex")
+            print(render_codex(summaries["codex"], args.skill, window_label))
+    elif args.source == "codex":
+        summary = summaries["codex"]
+        if args.json:
+            print(json.dumps(summary, indent=2, sort_keys=True))
+        else:
+            print(render_codex(summary, args.skill, window_label))
     else:
-        print(render(summary, args.skill, window_label))
+        summary = summaries["claude"]
+        if args.json:
+            print(json.dumps(summary, indent=2, sort_keys=True))
+        else:
+            print(render(summary, args.skill, window_label))
     return 0
 
 
