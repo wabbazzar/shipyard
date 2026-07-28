@@ -139,6 +139,22 @@ commit_all() {
   [[ "$output" == *"docs/tickets/pending"* ]]
 }
 
+@test "--check: an inline metadata Status in the opening header is recognized" {
+  p="$(make_lifecycle_project 1)"
+  cat >"$p/docs/tickets/complete/006_feature_inline.md" <<'EOF'
+# Inline-status ticket
+
+**Created:** 2026-07-28 · **Status:** BUILT and verified
+**Type:** feature
+
+The body may mention a status field in example code without changing lifecycle.
+EOF
+  commit_all "$p"
+
+  run lc "$p" --check
+  [ "$status" -eq 0 ]
+}
+
 @test "--check: superseded goes to freezer even when the body says built" {
   p="$(make_lifecycle_project 1)"
   ticket "$p" "docs/tickets/pending/007_feature_old.md" \

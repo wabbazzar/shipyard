@@ -108,10 +108,13 @@ FREEZER_DIR="$(strip_slash "$FREEZER_DIR")"
 
 # ---- status parsing -------------------------------------------------------
 
-# ticket_status <abs-file> — the text after the first `Status:` label, or "".
+# ticket_status <abs-file> — the text after a `Status:` label in the opening
+# metadata, or "".  Existing tickets use both a standalone metadata line and
+# an inline header (`**Created:** … · **Status:** …`); only inspect the first
+# twelve lines so a status field mentioned later in prose or code is not state.
 ticket_status() {
   local line
-  line="$(grep -m1 -iE '^[[:space:]]*([-*+][[:space:]]*)?\**[[:space:]]*status[[:space:]]*\**[[:space:]]*:' "$1" 2>/dev/null)"
+  line="$(sed -n '1,12p' "$1" | grep -m1 -iE '(^[[:space:]]*([-*+][[:space:]]*)?\**[[:space:]]*|[[:space:]·]+\**[[:space:]]*)status[[:space:]]*\**[[:space:]]*:' 2>/dev/null)"
   [ -n "$line" ] || return 0
   line="${line#*[:]}"
   line="${line#"${line%%[![:space:]]*}"}"   # ltrim
