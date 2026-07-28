@@ -110,14 +110,12 @@ actually happening.
 
 ## Skills-parity
 
-The installer symlinks seven skills — `write-ticket`, `bugfix`,
-`feature`, `polish-ticket`, `execute-ticket`, `coverage-audit`, `shipyard` —
-from this repo's `skills/` into `<project>/.claude/skills/`. It also creates a
-root `AGENTS.md` skill bridge for Codex and Hermes, even when scheduled roles
-use Claude, because an operator can open either harness in any installed
-project. Headless agents and in-session humans load the **identical files**:
-one implementation, two callers, no agent-only fork. A core upgrade flows to
-every project at once.
+The installer links all seven shared skills from this repo into
+`<project>/.agents/skills/` for Codex and `<project>/.claude/skills/` for
+Claude/Hermes; both roots resolve to the same source files. It also creates a
+root `AGENTS.md` bridge when absent, but never changes a project-owned one.
+This guarantees repository-local discovery, not entries or labels in a
+host-managed/global skill-picker UI.
 
 **`/shipyard`** is the operator's in-project console for the install itself
 (`skills/shipyard/shipyard.sh` is its deterministic core, with load-bearing exit

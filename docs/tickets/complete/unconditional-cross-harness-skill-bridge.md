@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-27
 - **Owner:** wabbazzar
-- **Status:** Polished — documentation and closeout evidence pending
+- **Status:** Built + verified — bridge and canonical documentation complete
 - **Priority:** high
 - **Type:** bugfix
 - **Estimated Points:** 1 remaining (evidence/documentation closeout)
@@ -163,11 +163,11 @@ documentation edits.
 - [x] Doctor detects missing bridge/link drift; relink repairs it; dry-run
       creates nothing.
 - [x] Targeted bridge/install/doctor tests pass 35/35.
-- [ ] Existing canonical install docs state both discovery roots and the
+- [x] Existing canonical install docs state both discovery roots and the
       host-managed/global skill-picker boundary, with no new documentation.
-- [ ] Current targeted, deterministic discovery, full-gate, doctor, dry-run,
+- [x] Current targeted, deterministic discovery, full-gate, doctor, dry-run,
       and CI evidence is recorded below.
-- [ ] Ticket graduates to `complete/` in the documentation closeout commit.
+- [x] Ticket graduates to `complete/` in the documentation closeout commit.
 
 ## Ledger
 
@@ -183,10 +183,23 @@ builder: another agent for prototype; inline for native-root correction.
 
 ### Documentation and evidence closeout
 
-builder: pending — must be `inline` for the bounded reason above.
+builder: inline (two tightly coupled canonical-doc edits under 30 lines, plus
+gate commands whose output the orchestrator must personally read).
 
-Append exact evidence and final commit SHA here. No product implementation is
-planned.
+Plan: update only the existing README Skills-parity paragraph and INSTALL L5
+paragraph, then prove the targeted bridge contract, deterministic Codex links,
+doctor/relink behavior, complete project gates, and current CI before
+graduating. No product implementation or new documentation is planned.
+
+Result: the two existing canonical paragraphs now state both discovery roots,
+generated-bridge ownership, and the host-managed picker boundary. Targeted
+bridge/install/doctor tests passed 35/35; doctor returned clean checks a–j;
+relink dry-run reported `0 would be repaired, 15 already ok` and preserved
+`AGENTS.md`. Deterministic probes resolved write-ticket, polish-ticket, and
+execute-ticket from `.agents/skills/` to this repository's source directories.
+The complete Bats suite passed 380/380; syntax, Python byte-compile, leak,
+deck freshness, deck render, and lifecycle checks passed. GitHub checks run
+`30391785223` completed successfully for polished-ticket commit `7d68954`.
 
 ---
 
