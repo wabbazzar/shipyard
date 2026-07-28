@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-24
 - **Owner:** wabbazzar
-- **Status:** Polished — refreshed 2026-07-28; ready for `execute-ticket`
+- **Status:** Built + verified — both phases complete
 - **Type:** docs
 - **Estimated Points:** 3 (P1 2 · P2 1)
 - **Refs:** `docs/deck-editorial.json` (prose source), `docs/index.html`
@@ -131,12 +131,12 @@ Record screenshot paths/hashes and graduate with
 - [x] Harness support names claude, codex, and hermes accurately.
 - [x] All prose edits are in `deck-editorial.json`; `shipyard-data.json`
       regenerated and byte-identical (`check-deck-fresh` green).
-- [ ] The drawer + skill graph render cleanly at the deck viewport, **verified by
+- [x] The drawer + skill graph render cleanly at the deck viewport, **verified by
       screenshot** — no overflow, no overlap.
 - [x] Glossary terms remain anchored to shipped files with `path:line` sources.
 - [x] Existing CLAUDE/README/deck surfaces carry the canonical no-bloat and
       Pages-current policy/presentation; no new guide exists.
-- [ ] Full 405+ suite and syntax, `py_compile`, leak, lifecycle, deck
+- [x] Full 405+ suite and syntax, `py_compile`, leak, lifecycle, deck
       fresh/complete/render, doctor, exact-SHA CI, and both Pages hashes green.
 
 ## Risks & Mitigations
@@ -163,7 +163,7 @@ Record screenshot paths/hashes and graduate with
   both render paths, current three-harness support, 405 tests, and the missing
   no-bloat policy. Ticket now has locked decisions and per-phase delegation.
   Commit `c7220cc`; CI `30397005141` completed successfully.
-- P1 — ready for scoped commit. `builder: subagent (1 render/prose agent)`
+- P1 — complete. `builder: subagent (1 render/prose agent)`
   owned the two render paths, failing-first tests, concise editorial, generated
   JSON, and a review-driven spacing correction; the orchestrator owned
   canonical CLAUDE/README policy. RED: 3/8 before structure/prose, then 8/9
@@ -171,9 +171,26 @@ Record screenshot paths/hashes and graduate with
   both drawer paths use the escaped helper with sibling spacing; all current
   harness/critic facts and glossary anchors remain; browser render,
   freshness/completeness, and diff checks pass. Full 411/411; syntax,
-  `py_compile`, leak, lifecycle, doctor, and diff checks pass. Commit: this
-  scoped P1 commit; SHA/CI are recorded in P2.
-- P2 — pending
+  `py_compile`, leak, lifecycle, doctor, and diff checks pass. Commit:
+  `30d7b7e`; CI `30397722271` completed successfully; the pre-push cascade
+  pushed mirror commit `d09c8fb`.
+- P2 — complete. `builder: inline (the orchestrator personally inspected
+  screenshots, full gates, published hashes, CI, and lifecycle)`. Final full
+  suite 411/411; syntax, `py_compile`, leak, lifecycle, deck
+  fresh/complete/render, doctor, and diff checks exited 0; relink dry-run
+  reported 0 repairs/17 healthy. At 1280×900, the release card, graph drawer,
+  unchanged write-ticket card, and full graph were captured and inspected:
+  four readable paragraphs, contained scrolling, no overflow, and zero
+  rectangle overlaps; browser/server cleanup was clean. Evidence:
+  `/tmp/shipyard-shoulder.375F6d/release-shoulder.png`
+  (`bce6fb4a…8b559`), `full-graph.png` (`f3fd24cc…bfbc4`),
+  `/tmp/shipyard-shoulder.d7PUIQ/graph-shoulder-drawer.png`
+  (`8b92dda4…cc85e`), and
+  `/tmp/shipyard-shoulder.LOyEvP/unchanged-write-ticket.png`
+  (`94165081…8b35`). Both published JSON URLs returned 200 and SHA-256
+  `5640bdf8016b360a93e562fc1a2bed225f2d3b9b8bded604b29ec88c71317ade`,
+  matching local. Final evidence/graduation commit: this commit; exact-SHA CI
+  is verified after push.
 
 ---
 Run it: `execute-ticket docs/tickets/pending/deck-shoulder-mode-clarity.md`
