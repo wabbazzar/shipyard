@@ -2,11 +2,11 @@
 
 - **Created:** 2026-07-27
 - **Owner:** wabbazzar
-- **Status:** Phase 7 waiting on sample gate (2/5); phases 1–6 implemented
-  2026-07-27
+- **Status:** Phase 6.5 Codex-reporting prerequisite drafted; Phase 7 waiting on
+  a comparable sample; phases 1–6 implemented 2026-07-27
 - **Priority:** high
 - **Type:** feature
-- **Estimated Points:** 14 (7 phases, cap 5/phase)
+- **Estimated Points:** 17 (7 phases + Phase 6.5 prerequisite, cap 5/phase)
 - **Refs:** `skills/{execute,write,polish}-ticket/SKILL.md`, `skills/{feature,bugfix}/SKILL.md`,
   `install.sh:120` (`GENERIC_SKILLS`), `install.sh:755` (skill symlink step),
   `.agents/gates.md`
@@ -167,6 +167,7 @@ over ~500 lines → that is a subagent brief. Ask for the answer, not the file.
 | L4 | Measurement lands **before** behavior change (Phase 1 first) | A baseline recorded by the same script that will judge the outcome |
 | L5 | Owner authorized the fleet-live skill change (2026-07-27, this session) | `install.sh:755` symlinks skills into all 6 installed projects; `can_merge=false` + human PR stamp + green CI remain the wall |
 | L6 | Thresholds live in the ticket, not in code | Phase 7 is a judgment checkpoint, not an automated gate that could be tuned to pass |
+| L7 | Codex is a separate source cohort; Claude remains the default and its output/baseline stay byte-for-byte unchanged | Cross-harness evidence may be compared only where the underlying metric means the same thing; adding Codex must not rewrite the accepted Claude baseline |
 
 ### Open, with defaults (builder applies and records — never blocks)
 
@@ -388,6 +389,75 @@ count in `CLAUDE.md` matches the actual `bats tests/` output.
 
 ---
 
+### Phase 6.5 — Codex transcript cohort prerequisite (3 pts)
+
+**Delegation:** subagent — extend the reporter through a source adapter, add the
+forward-only invocation marker and synthetic fixtures, and return changed files,
+test counts, the unchanged Claude-output proof, one local Codex smoke summary,
+and blockers.
+
+**Why this is a prerequisite.** Phase 7 currently sees only Claude Code
+transcripts. The 2026-07-28 checkpoint below records that real Codex
+`execute-ticket` work does not increment the sample, so waiting for more runs
+without first teaching the reporter about Codex would measure harness choice
+rather than delegation behavior.
+
+**Slice.**
+- Extend `scripts/delegation-report.py` with `--source
+  claude|codex|all`; default `claude` preserves the current output and
+  2026-07-27 baseline byte-for-byte.
+- Resolve Codex transcripts from `CODEX_SESSIONS_DIR` when set, otherwise
+  `${CODEX_HOME:-$HOME/.codex}/sessions`, whose canonical layout is
+  `YYYY/MM/DD/rollout-*.jsonl`. Keep `CLAUDE_PROJECTS_DIR` unchanged.
+- Parse canonical `response_item` records for user/assistant messages and
+  tool calls/results paired by `call_id`; do not double-count their duplicate
+  `event_msg/user_message` and `event_msg/agent_message` UI events. Recognize
+  `spawn_agent` and the other collaboration calls as delegation activity.
+- Attribute only forward runs whose assistant transcript emits the exact,
+  versioned marker `<!-- shipyard-skill:execute-ticket:v1 -->`.
+  `skills/execute-ticket/SKILL.md` must require that marker once at invocation.
+  Do not infer old invocations from ticket names, available-skill text, edited
+  paths, or natural-language prompts.
+- Report a separate Codex cohort with sessions, assistant turns, zero-subagent
+  sessions/delegation calls, per-tool serialized-result size, input/output/
+  cached-input/cache-write/reasoning tokens, context-window data, and malformed
+  record counts. A missing source metric remains explicit rather than zero.
+- In `--source all`, emit distinct Claude and Codex sections. Never pool raw
+  totals whose tokenization or cost weights differ. Serialized tool-result size
+  is a context-ingress proxy only, never filesystem or network read/write bytes.
+- Extend `tests/delegation-report.bats` using only hand-authored Codex rollout
+  JSONL under the test temp directory. No fixture may copy a real transcript,
+  prompt, session id, path, or user data.
+- Run one read-only smoke report against the local Codex store after the
+  forward marker exists; report counts only, never transcript content.
+
+**Boundaries.**
+- **Always:** stdlib-only, read-only, hermetic fixtures; source-labelled output;
+  preserve the Claude default and accepted baseline exactly.
+- **Ask first:** only the existing user-decision classes; none are open for this
+  slice.
+- **Never:** copy personal transcripts into the repo; heuristically backfill
+  historical Codex invocation; pool source-specific cost weights/totals; label
+  serialized result size as filesystem or network bytes; add a dependency.
+
+**Gate classes:** Python syntax, hermetic bats, public-repo hygiene, and a
+read-only local smoke apply. `polish-ticket` must supply the exact commands and
+the byte-for-byte Claude golden procedure.
+
+**Observable DoD:**
+- `--source` accepts `claude`, `codex`, and `all`; omitted means `claude`, with
+  byte-for-byte unchanged human and JSON output for the existing Claude fixtures.
+- `CODEX_SESSIONS_DIR` overrides the Codex root; absent it, `CODEX_HOME` then
+  `HOME` resolve the canonical `sessions/YYYY/MM/DD/rollout-*.jsonl` tree.
+- Synthetic fixtures prove canonical turn/tool/delegation/token parsing,
+  call/result pairing, duplicate-UI-event exclusion, marker-only attribution,
+  and explicit unavailable/incomparable fields without reading a real store.
+- `all` returns two source-labelled sections and no pooled incompatible totals.
+- The forward-only marker is emitted once by a real `execute-ticket` invocation;
+  a local read-only Codex smoke report attributes it without exposing content.
+
+---
+
 ### Phase 7 — Outcome verification against the baseline (1 pt, TIME-DEFERRED)
 
 **Delegation:** inline (a single report run + a Ledger append — exception 2).
@@ -428,14 +498,21 @@ Fire a completion notify: `"$QUARTET_NOTIFY_CMD" "delegation-plan-pipeline" "<re
   Ledger.
 - `tests/delegation-report.bats` — the measurement script against synthesized
   fixture transcripts; hermetic via a temp `CLAUDE_PROJECTS_DIR`. Includes the
-  negative case proving the bare-substring attribution trap is avoided.
+  negative case proving the bare-substring attribution trap is avoided. Phase
+  6.5 adds a synthetic `CODEX_SESSIONS_DIR` rollout tree; no personal transcript
+  content enters a fixture.
 - Existing battery unchanged and green throughout.
 
 ## Roll-up Definition of Done
 
-- [ ] All 7 phases committed, `git status` clean in `~/code/shipyard`.
+- [ ] All 7 phases plus Phase 6.5 committed, `git status` clean in
+      `~/code/shipyard`.
 - [ ] `python3 scripts/delegation-report.py --all` reproduces the 2026-07-27
       baseline; `bats tests/delegation-report.bats` hermetic and green.
+- [ ] Reporter supports source-labelled Claude/Codex/all cohorts; Claude remains
+      the byte-for-byte default, and incompatible source totals are never pooled.
+- [ ] Codex attribution requires the forward-only `execute-ticket` marker;
+      synthetic fixtures and a content-free local smoke prove the adapter.
 - [ ] `execute-ticket` delegates **by default** with a named exception list and a
       `builder:` Ledger trace.
 - [ ] `write-ticket` emits a `Delegation:` line per planned phase.
@@ -457,7 +534,9 @@ Fire a completion notify: `"$QUARTET_NOTIFY_CMD" "delegation-plan-pipeline" "<re
 
 ## Dependencies
 
-None blocking. Phase 7 is gated on real post-merge usage, not on other work.
+Phase 7 is blocked by Phase 6.5 and then by enough explicitly marked,
+post-cutover usage to form its comparable sample. No external dependency is
+required; the local Codex store is smoke-test input only.
 
 ## Risks & Mitigations
 
@@ -475,6 +554,16 @@ None blocking. Phase 7 is gated on real post-merge usage, not on other work.
 - **Baseline is machine-local**; transcript retention here is ~30 days.
   *Mitigation:* dated numbers, the producing script ships with them, Phase 7
   compares like-for-like on the same box.
+- **Codex schema drift or duplicate UI events inflate counts.** *Mitigation:*
+  source adapters consume canonical `response_item` records, synthetic fixtures
+  pin the schema, duplicates are explicitly excluded, and malformed records are
+  counted rather than guessed through.
+- **Cross-harness totals look comparable when they are not.** *Mitigation:*
+  source-labelled cohorts; no pooled token/cost totals; unavailable byte fields
+  remain explicit, and serialized result size is named only as a proxy.
+- **Historical Codex work is tempting to backfill heuristically.** *Mitigation:*
+  a versioned, forward-only assistant marker is the sole attribution signal;
+  Phase 7 waits for honest marked evidence.
 - **Threshold gaming.** *Mitigation:* stated in Phase 7 and L6 — a miss reopens
   the ticket; weakening it is cheating the gate.
 - **A contract test that only greps prose** can pass while the behavior text is
@@ -488,6 +577,8 @@ None blocking. Phase 7 is gated on real post-merge usage, not on other work.
 - Any runner, `install.sh` unit-generation, or config-schema change.
 - Deck data regeneration or any `docs/shipyard-data.json` edit.
 - Retrofitting existing tickets in `docs/tickets/` with Delegation Plans.
+- Importing or sanitizing personal transcript data into test fixtures.
+- Historical Codex attribution or a cross-source blended cost model.
 - Building an in-repo specialist roster for shipyard itself.
 
 ## Ledger
@@ -739,6 +830,15 @@ sample. Current recursive Ledger evidence is subagent=5, inline=12, total=17
 (29.41% subagent), also provisional until the session trigger is met. No
 completion notification was sent and no threshold was weakened.
 
+### Phase 6.5 — Codex transcript cohort — **PENDING**
+
+builder: not started
+
+The requirements slice above was appended rather than opening a duplicate
+ticket because it directly unblocks this ticket's only unfinished outcome gate.
+Existing Codex sessions are intentionally not backfilled: measurement starts
+after the explicit invocation marker lands.
+
 **Honest note on this build's own Delegation Plan.** The ticket specified
 `Delegation: subagent` for Phase 1; every phase was in fact built inline. Phases
 2–6 legitimately hit exceptions 1/3 (single-file prose edits under ~30 lines).
@@ -754,8 +854,9 @@ prove, on runs that can actually delegate.
 
 Phases 1–6 built, gated, and committed on `feat/delegation-plan-pipeline`
 (`2baeaa2`, `64fbf87`, `63df470`, `3b9821d`, `5df83ae`, `8237985`).
-Phase 7 remains open: its exact post-cutover sample is 2 sessions, below the
-five-session outcome gate.
+Phase 6.5 is now the prerequisite. Phase 7 remains open: its existing Claude
+post-cutover sample is 2 sessions, and Codex contributes only forward,
+explicitly marked sessions after Phase 6.5 lands.
 
 ---
 
