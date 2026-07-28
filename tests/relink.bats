@@ -1,10 +1,9 @@
 #!/usr/bin/env bats
 #
-# relink.bats — install.sh --relink: a repair mode that recreates ONLY missing
-# (or broken) installer-owned skill symlinks that --doctor flags as drift.
-# Deterministic + reversible: touches nothing but $PROJECT_DIR/.claude/skills/
-# symlinks — no systemd, no config, no gate file. Never clobbers a real
-# file/dir. Honors --dry-run.
+# relink.bats — install.sh --relink: a repair mode that recreates missing (or
+# broken) installer-owned skill symlinks and a missing cross-harness bridge that
+# --doctor flags as drift. Deterministic + reversible: no systemd, config, or
+# gate file. Never clobbers a real file/dir. Honors --dry-run.
 
 setup() {
   load helpers
@@ -70,6 +69,28 @@ run_install() {
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "would relink: $PROJ/.claude/skills/feature"
   [ ! -e "$PROJ/.claude/skills/feature" ]          # nothing created
+}
+
+@test "--relink restores a missing AGENTS.md skill bridge" {
+  run_install
+  rm -f "$PROJ/AGENTS.md"
+  run run_install --doctor
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q 'skill bridge: AGENTS.md missing'
+
+  run run_install --relink
+  [ "$status" -eq 0 ]
+  [ -f "$PROJ/AGENTS.md" ]
+  grep -q '.claude/skills/write-ticket/SKILL.md' "$PROJ/AGENTS.md"
+}
+
+@test "--relink --dry-run reports a missing bridge without creating it" {
+  run_install
+  rm -f "$PROJ/AGENTS.md"
+  run run_install --relink --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "would drop: $PROJ/AGENTS.md"
+  [ ! -e "$PROJ/AGENTS.md" ]
 }
 
 @test "--relink on a clean install leaves every correct symlink as-is" {

@@ -59,7 +59,7 @@ _install() {
 # Skill-bridge AGENTS.md (Phase 5)
 # ---------------------------------------------------------------------------
 
-@test "install: a non-claude role drops a skill-bridge AGENTS.md; unit CWD is the project" {
+@test "install: every project drops a skill-bridge AGENTS.md; unit CWD is the project" {
   p="$(make_fixture_project abridge harness-config.toml)"   # build=codex
   _install "$p" --agents build >/dev/null
   [ -f "$p/AGENTS.md" ]
@@ -70,10 +70,12 @@ _install() {
   grep -Fxq "WorkingDirectory=$p" "$HOME/.config/systemd/user/abridge-build.service"
 }
 
-@test "install: claude-only config drops NO AGENTS.md" {
+@test "install: claude-only config still drops a skill-bridge AGENTS.md" {
   p="$(make_fixture_project nobridge can-merge-true.toml)"  # no harness config
   _install "$p" --agents build,release,medic,scribe >/dev/null
-  [ ! -f "$p/AGENTS.md" ]
+  [ -f "$p/AGENTS.md" ]
+  grep -q '.claude/skills/execute-ticket/SKILL.md' "$p/AGENTS.md"
+  grep -q '.claude/skills/write-ticket/SKILL.md'   "$p/AGENTS.md"
 }
 
 @test "install: an existing AGENTS.md is never clobbered" {

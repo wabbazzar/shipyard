@@ -90,6 +90,14 @@ retired_word_a() { printf '%s' "au""gur"; }
   [ "$((e - s))" -lt 5 ]
 }
 
+@test "doctor (f): missing AGENTS.md skill bridge -> finding" {
+  doctor_install
+  rm -f "$P/AGENTS.md"
+  run_doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"DOCTOR skill bridge: AGENTS.md missing"* ]]
+}
+
 # ---------------------------------------------------------------------------
 # (a) expected unit missing / disabled / wrong QUARTET_DIR
 # ---------------------------------------------------------------------------
@@ -222,10 +230,10 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# (f) dead hook wiring in .claude/settings.json
+# (g) dead hook wiring in .claude/settings.json
 # ---------------------------------------------------------------------------
 
-@test "doctor (f): a hook command naming a missing script -> finding" {
+@test "doctor (g): a hook command naming a missing script -> finding" {
   doctor_install
   cat >"$P/.claude/settings.json" <<EOF
 {"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"bash \$CLAUDE_PROJECT_DIR/scripts/post-push-ghost.sh"}]}]}}
@@ -237,7 +245,7 @@ EOF
   [[ "$output" == *"post-push-ghost.sh"* ]]
 }
 
-@test "doctor (f): live hooks (existing file, \$CLAUDE_PROJECT_DIR, inline jq) are NOT flagged" {
+@test "doctor (g): live hooks (existing file, \$CLAUDE_PROJECT_DIR, inline jq) are NOT flagged" {
   doctor_install
   mkdir -p "$P/.claude/hooks"
   printf '#!/bin/bash\n' >"$P/.claude/hooks/ok.sh"
@@ -254,10 +262,10 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# (g) legacy launcher script / crontab line
+# (h) legacy launcher script / crontab line
 # ---------------------------------------------------------------------------
 
-@test "doctor (g): a legacy (non-shim) launcher script -> finding" {
+@test "doctor (h): a legacy (non-shim) launcher script -> finding" {
   doctor_install
   mkdir -p "$P/scripts"
   printf '#!/bin/bash\necho old launcher\n' >"$P/scripts/docp-medic.sh"
@@ -268,7 +276,7 @@ EOF
   [[ "$output" == *"docp-medic.sh"* ]]
 }
 
-@test "doctor (g): a legacy crontab launcher line -> finding" {
+@test "doctor (h): a legacy crontab launcher line -> finding" {
   doctor_install
   make_stub_script crontab "
 case \"\$*\" in
@@ -282,10 +290,10 @@ esac"
 }
 
 # ---------------------------------------------------------------------------
-# (h) hub-only decisions-ledger mirror
+# (i) hub-only decisions-ledger mirror
 # ---------------------------------------------------------------------------
 
-@test "doctor (h): a hub mentat decision not mirrored to the project ledger -> finding" {
+@test "doctor (i): a hub mentat decision not mirrored to the project ledger -> finding" {
   doctor_install
   mkdir -p "$P/data/news"
   printf '%s\n' '{"id":"mentat:sib:deadbeef","project":"sib","decision":"approve"}' \
@@ -302,7 +310,7 @@ esac"
   [[ "$output" == *"mentat:sib:deadbeef"* ]]
 }
 
-@test "doctor (h): a mirrored decision is NOT flagged" {
+@test "doctor (i): a mirrored decision is NOT flagged" {
   doctor_install
   mkdir -p "$P/data/news"
   printf '%s\n' '{"id":"mentat:sib:deadbeef","project":"sib","decision":"approve"}' \

@@ -112,9 +112,12 @@ actually happening.
 
 The installer symlinks seven skills — `write-ticket`, `bugfix`,
 `feature`, `polish-ticket`, `execute-ticket`, `coverage-audit`, `shipyard` —
-from this repo's `skills/` into `<project>/.claude/skills/`. Headless agents and
-in-session humans load the **identical files**: one implementation, two
-callers, no agent-only fork. A core upgrade flows to every project at once.
+from this repo's `skills/` into `<project>/.claude/skills/`. It also creates a
+root `AGENTS.md` skill bridge for Codex and Hermes, even when scheduled roles
+use Claude, because an operator can open either harness in any installed
+project. Headless agents and in-session humans load the **identical files**:
+one implementation, two callers, no agent-only fork. A core upgrade flows to
+every project at once.
 
 **`/shipyard`** is the operator's in-project console for the install itself
 (`skills/shipyard/shipyard.sh` is its deterministic core, with load-bearing exit
@@ -235,7 +238,8 @@ Default `--agents` is `build,release,medic,scribe` — design is opt-in. The
 installer bakes the `[names]` theme block into the config, writes
 `~/.config/systemd/user/<project>-<display>.{service,timer}` and enables the
 timers, symlinks the seven shared skills into `<project>/.claude/skills/`,
-drops `skills/gates.md.template` into `.agents/gates.md` (never clobbering an
+writes a root `AGENTS.md` skill bridge for Codex and Hermes when absent, drops
+`skills/gates.md.template` into `.agents/gates.md` (never clobbering an
 existing gate file), removes legacy cron launchers that would race the timers
 (crontab backed up first), and prints next-fire times.
 
