@@ -47,6 +47,11 @@ run_report() {
   [ "$status" -eq 0 ]
 }
 
+run_since_report() {
+  run python3 "$REPORT" --since "$1" --json --tickets-dir "$TICKETS"
+  [ "$status" -eq 0 ]
+}
+
 # jq-free field read: the script emits indented "key": value JSON
 field() {
   printf '%s\n' "$output" | sed -n "s/.*\"$1\": \([0-9.]*\).*/\1/p" | head -1
@@ -200,4 +205,66 @@ TICKET
 @test "a missing transcript root exits 2" {
   CLAUDE_PROJECTS_DIR="$BATS_TEST_TMPDIR/nope" run python3 "$REPORT" --all
   [ "$status" -eq 2 ]
+}
+
+@test "--since is timezone-aware and inclusive; malformed timestamps are counted" {
+  mkdir -p "$PROJECTS/proj-since"
+  cat > "$PROJECTS/proj-since/s1.jsonl" <<'JSONL'
+{"type":"assistant","timestamp":"2026-07-27T20:17:45Z","message":{"content":[{"type":"tool_use","id":"t1","name":"Skill","input":{"skill":"execute-ticket"}}],"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+{"type":"assistant","timestamp":"not-an-iso-timestamp","message":{"usage":{"input_tokens":0,"output_tokens":999,"cache_read_input_tokens":999,"cache_creation_input_tokens":0}}}
+{"type":"assistant","timestamp":"2026-07-27T20:17:45+00:00","message":{"usage":{"input_tokens":0,"output_tokens":123,"cache_read_input_tokens":456,"cache_creation_input_tokens":0}}}
+JSONL
+
+  run_since_report "2026-07-27T20:17:45Z"
+  [ "$(field sessions)" = "1" ]
+  [ "$(field turns)" = "2" ]
+  [ "$(field output_tokens)" = "123" ]
+  [ "$(field malformed_timestamps)" = "1" ]
+}
+
+@test "--since excludes a skill invocation before the boundary" {
+  mkdir -p "$PROJECTS/proj-before"
+  cat > "$PROJECTS/proj-before/s1.jsonl" <<'JSONL'
+{"type":"assistant","timestamp":"2026-07-27T20:17:44.999999Z","message":{"content":[{"type":"tool_use","id":"t1","name":"Skill","input":{"skill":"execute-ticket"}}],"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+{"type":"assistant","timestamp":"2026-07-27T20:17:46Z","message":{"usage":{"input_tokens":0,"output_tokens":999,"cache_read_input_tokens":999,"cache_creation_input_tokens":0}}}
+JSONL
+
+  run_since_report "2026-07-27T20:17:45Z"
+  [ "$(field sessions)" = "0" ]
+  [ "$(field output_tokens)" = "0" ]
+}
+
+@test "--since rejects invalid and timezone-naive ISO timestamps with rc 2" {
+  run python3 "$REPORT" --since not-a-date --tickets-dir "$TICKETS"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--since"* ]]
+
+  run python3 "$REPORT" --since 2026-07-27T20:17:45 --tickets-dir "$TICKETS"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"timezone"* ]]
+}
+
+@test "--since conflicts with explicitly supplied --days or --all" {
+  run python3 "$REPORT" --since 2026-07-27T20:17:45Z --days 30 --tickets-dir "$TICKETS"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not allowed with argument"* || "$output" == *"cannot be combined"* ]]
+
+  run python3 "$REPORT" --since 2026-07-27T20:17:45Z --all --tickets-dir "$TICKETS"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not allowed with argument"* || "$output" == *"cannot be combined"* ]]
+}
+
+@test "Ledger discovery recursively scans lifecycle ticket directories" {
+  mkdir -p "$TICKETS/pending" "$TICKETS/complete"
+  cat > "$TICKETS/complete/nested.md" <<'TICKET'
+# Nested ticket
+
+## Ledger
+
+builder: subagent (1 agent)
+TICKET
+
+  run_report
+  [ "$(field subagent)" = "1" ]
+  [ "$(field total)" = "1" ]
 }

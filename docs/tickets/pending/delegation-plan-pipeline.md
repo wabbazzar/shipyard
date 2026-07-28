@@ -701,25 +701,34 @@ node scripts/check-deck-render.mjs   rc=0
 
 Commit: `8237985`
 
-### Phase 7 — Outcome verification — **NOT DONE (time-deferred by design)**
+### Phase 7 — Outcome verification — **OPEN (sample below threshold)**
 
-builder: n/a — not started.
+builder: subagent (1 measurement agent) — implemented the exact-cutoff report
+surface and ran it against the real transcript store.
 
-This phase **cannot** complete at merge time and is not being claimed. Its
-trigger is ≥5 real `execute-ticket` sessions running *after* this branch lands;
-until then there is nothing post-change to measure. Run then:
+**Cutover from git evidence:** delegation behavior finished landing in
+`823798574333437c4365d0b39a5f6d1e9c3c5a43` at the inclusive UTC boundary
+`2026-07-27T20:17:45Z` (`git show -s --format=%cI 8237985` reports
+`2026-07-27T15:17:45-05:00`). The reproducible command is:
 
 ```bash
-python3 scripts/delegation-report.py --days 30
+python3 scripts/delegation-report.py \
+  --since 2026-07-27T20:17:45Z --json
 ```
-and append the comparison against the Phase 7 threshold table.
 
-**Where the tracked metrics stand now (build-time, pre-outcome):**
-`Ledger builder: lines subagent=0 inline=6 total=6` — the trace mechanism works
-end-to-end, and it is honestly reporting **0% subagent** against the ≥70%
-target, because this build ran entirely inline under exception 4 (see below).
-The context metrics are unchanged from baseline for the same reason: this
-session *is* one of the measured sessions, and it delegated nothing.
+**Measured 2026-07-28:** 2 post-cutover skill-using sessions, below the required
+5, so the outcome is **not yet measurable and no threshold is claimed met**.
+Current sample: 2/2 zero-subagent sessions (100%), 0 Agent calls, 1,009
+assistant turns, 947,169 output tokens, 338,155,663 cache-read tokens,
+context-carry-vs-work 87.72%, average context 337,963/turn, peak 613,221,
+549 turns above 300k (54.41%) carrying 70.71% of context reads, 5 results above
+60KB (largest 581,580), Read 73.48% of returned bytes. The report skipped and
+counted 363 malformed or missing post-invocation timestamps rather than silently
+including them. Recursive lifecycle-ticket discovery, including this Phase 7
+entry, found Ledger builders: subagent=5, inline=9, total=14.
+
+Re-run the exact command after at least three more real post-cutover sessions
+and compare the resulting ≥5-session sample to the locked Phase 7 thresholds.
 
 **Honest note on this build's own Delegation Plan.** The ticket specified
 `Delegation: subagent` for Phase 1; every phase was in fact built inline. Phases
@@ -736,7 +745,8 @@ prove, on runs that can actually delegate.
 
 Phases 1–6 built, gated, and committed on `feat/delegation-plan-pipeline`
 (`2baeaa2`, `64fbf87`, `63df470`, `3b9821d`, `5df83ae`, `8237985`).
-Phase 7 open and explicitly unclaimed.
+Phase 7 remains open: its exact post-cutover sample is 2 sessions, below the
+five-session outcome gate.
 
 ---
 

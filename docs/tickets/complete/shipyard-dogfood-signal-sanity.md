@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-28
 - **Owner:** wabbazzar
-- **Status:** Phase 5 in progress; Phase 6 open; phases 1–4 implemented
+- **Status:** Built + verified — all six phases complete; 24-hour Signal result has a named follow-up
 - **Priority:** high
 - **Type:** chore
 - **Estimated Points:** 18 (6 phases, cap 5/phase)
@@ -149,37 +149,37 @@ Out of scope:
 
 ## Definition of Done
 
-- [ ] A pre-change failing Bats fixture proves `signal_level=actionable`
+- [x] A pre-change failing Bats fixture proves `signal_level=actionable`
       suppresses routine sends while retaining actionable and urgent sends;
       unset config preserves existing behavior.
-- [ ] A pre-change failing Bats fixture proves repeated medic no-result scans
+- [x] A pre-change failing Bats fixture proves repeated medic no-result scans
       emit one alert for the same project/cause/window, not one per timer tick.
-- [ ] Build, release, scribe, medic, and overseer notification call sites have
+- [x] Build, release, scribe, medic, and overseer notification call sites have
       explicit classifications; critic fallback remains a directly tested,
       always-actionable exception.
-- [ ] A role failure followed by medic does not double-page the same episode.
-- [ ] Direct BopBop replies remain functional and release-critic fallback still
+- [x] A role failure followed by medic does not double-page the same episode.
+- [x] Direct BopBop replies remain functional and release-critic fallback still
       delivers.
-- [ ] Suppressed routine activity still appears in the event stream and a real
+- [x] Suppressed routine activity still appears in the event stream and a real
       Ice Dispatch generation succeeds.
-- [ ] `notification.decision` distinguishes delivered, policy-suppressed, and
+- [x] `notification.decision` distinguishes delivered, policy-suppressed, and
       episode-deduped sends without replacing the underlying job/incident event.
-- [ ] The active non-dummy fleet uses the actionable Signal level.
-- [ ] A 24-hour measurement command reports zero routine Shipyard crew sends
+- [x] The active non-dummy fleet uses the actionable Signal level.
+- [x] A 24-hour measurement command reports zero routine Shipyard crew sends
       and no more than one actionable send per project/cause/window. If 24
       elapsed hours are unavailable during execution, record a timestamped
       baseline plus an exact follow-up command; do not claim the elapsed result.
-- [ ] Shipyard's `[write_ticket]` enables lifecycle folders and every existing
+- [x] Shipyard's `[write_ticket]` enables lifecycle folders and every existing
       ticket is classified into exactly one of `pending/`, `complete/`, or
       `freezer/`, with its header and ledger reconciled to git reality.
-- [ ] `install.sh --doctor --project .` exits 0 and validates the Codex/Hermes
+- [x] `install.sh --doctor --project .` exits 0 and validates the Codex/Hermes
       skill bridge.
-- [ ] `delegation-report.py --since <ISO-8601>` excludes older turns and has
+- [x] `delegation-report.py --since <ISO-8601>` excludes older turns and has
       hermetic fixture coverage for boundary timestamps and malformed input.
-- [ ] `delegation-plan-pipeline.md` records the exact cutover and current
+- [x] `delegation-plan-pipeline.md` records the exact cutover and current
       post-change sample without claiming an outcome before at least five real
       executions exist.
-- [ ] Every phase's named gates and the complete `.agents/gates.md` battery are
+- [x] Every phase's named gates and the complete `.agents/gates.md` battery are
       green; commits are on `main` and pushed.
 
 ## Phases
@@ -483,3 +483,58 @@ bats tests/
   Codex sandbox could not query the systemd user bus and therefore reported
   five false disabled-timer findings; the normal full-permission installed
   session is the verified operating surface.
+- 2026-07-28 — Phase 6 planned; `builder: subagent (1 build agent)`. Add the
+  exact inclusive UTC cutover and recursive lifecycle scan, then report the
+  real post-cutover sample even if the five-session outcome gate is not yet
+  measurable. Signal follow-up will name its UTC due time and reproducible
+  event query rather than claiming that 24 hours elapsed.
+- 2026-07-28 — Phase 6 measurement surfaces implemented. The delegation
+  cutover is `2026-07-27T20:17:45Z` inclusive; the real report found 2
+  qualifying sessions, so the five-session outcome gate remains unmeasurable
+  and unclaimed. Focused report fixtures: 16/16; Python byte-compile: rc 0.
+- 2026-07-28 — Signal baseline owner: **wabbazzar**. Baseline captured at
+  `2026-07-28T17:43:43Z`; follow-up due exactly 24 hours later at
+  `2026-07-29T17:43:43Z`. In the preceding 24 hours, the append-only hub stream
+  contained 132 `notify.send` events: 112 crew-titled sends, including the
+  measured 70 repeated `Suk (<repo>) FAILED` cascade sends, and 20 non-crew
+  sends. It contained 0 `notification.decision` events because the classified
+  policy had not yet produced a scheduled run. This is the baseline, **not an
+  elapsed result**. At or after the due time, run exactly:
+
+  ```bash
+  START=2026-07-28T17:43:43Z
+  END=2026-07-29T17:43:43Z
+  jq -Rn --arg start "$START" --arg end "$END" '
+    [inputs | fromjson?
+      | select((.ts // "") >= $start and (.ts // "") < $end)] as $events
+    | [$events[] | select(.event == "notification.decision")] as $d
+    | [$events[] | select(.event == "notify.send")
+        | select((.title // "")
+          | test("Suk|Proctor|Helldiver|chronicler|Mentat"; "i"))] as $crew
+    | {window:{start:$start,end:$end},
+       decisions:($d|length),
+       outcomes:($d|group_by(.outcome)
+         | map({key:.[0].outcome,value:length})|from_entries),
+       routine_delivered:([$d[]
+         | select(.class == "routine" and .outcome == "delivered")]|length),
+       actionable_without_episode:([$d[]
+         | select((.class == "actionable" or .class == "urgent")
+           and .outcome == "delivered" and (.episode // "") == "")]|length),
+       duplicate_delivered_episodes:([$d[]
+         | select((.class == "actionable" or .class == "urgent")
+           and .outcome == "delivered" and (.episode // "") != "")]
+         | group_by([.svc,.episode])
+         | map(select(length > 1)
+           | {svc:.[0].svc,episode:.[0].episode,count:length})),
+       raw_crew_notify_sends:($crew|length)}' \
+    "$HOME"/code/wabbazzar-ice/data/events/*.jsonl
+  ```
+- 2026-07-28 — Phase 6 built; `builder: subagent (1 build agent)`. Five new
+  focused cases failed before implementation and the final report suite passed
+  16/16. The inclusive cutover is `2026-07-27T20:17:45Z`; the real report
+  found 2 sessions, 2/2 with zero subagents, 0 Agent calls, and 363 malformed
+  or missing timestamps explicitly skipped. Recursive Ledger counts are
+  subagent=5, inline=9. The separate delegation outcome ticket remains pending
+  until at least three more real sessions exist. The Signal follow-up is owned
+  by wabbazzar, due `2026-07-29T17:43:43Z`, and the exact query above has
+  already passed a syntax/live-stream probe; no elapsed result is claimed.

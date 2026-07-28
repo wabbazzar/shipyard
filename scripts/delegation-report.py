@@ -14,6 +14,7 @@ Read-only. Stdlib only. No network.
 
   python3 scripts/delegation-report.py --all
   python3 scripts/delegation-report.py --days 30 --json
+  python3 scripts/delegation-report.py --since 2026-07-27T20:17:45Z --json
 
 Transcript root resolves as ${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}.
 """
@@ -74,15 +75,37 @@ def _is_invocation(rec: dict, skill: str) -> bool:
     return False
 
 
-def _in_window(ts: str | None, cutoff: datetime | None) -> bool:
-    if cutoff is None:
-        return True
-    if not ts:
-        return False
+def _parse_timestamp(value: object) -> datetime | None:
+    """Parse one transcript timestamp as an aware UTC datetime."""
+    if not isinstance(value, str) or not value:
+        return None
     try:
-        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")) >= cutoff
-    except ValueError:
-        return False
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _parse_since(value: str) -> datetime:
+    """argparse converter for an explicit timezone-aware inclusive cutoff."""
+    parsed = _parse_timestamp(value)
+    if parsed is None:
+        try:
+            naive = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            raise argparse.ArgumentTypeError(
+                "--since must be a valid timezone-aware ISO-8601 timestamp"
+            ) from None
+        if naive.tzinfo is None or naive.utcoffset() is None:
+            raise argparse.ArgumentTypeError(
+                "--since timestamp must include a timezone (for example, Z or +00:00)"
+            )
+        raise argparse.ArgumentTypeError(
+            "--since must be a valid timezone-aware ISO-8601 timestamp"
+        )
+    return parsed
 
 
 def scan(root: str, skill: str, cutoff: datetime | None) -> dict:
@@ -101,6 +124,7 @@ def scan(root: str, skill: str, cutoff: datetime | None) -> dict:
         "agent_calls": 0,
         "big_results": 0,
         "largest_result": 0,
+        "malformed_timestamps": 0,
     }
     tool_calls: Counter = Counter()
     tool_bytes: Counter = Counter()
@@ -126,25 +150,45 @@ def scan(root: str, skill: str, cutoff: datetime | None) -> dict:
                 except (ValueError, TypeError):
                     continue
 
-                if _is_invocation(rec, skill):
+                msg = rec.get("message") or {}
+                content = msg.get("content")
+
+                invocation = _is_invocation(rec, skill)
+                parsed_ts = None
+                if invocation and not active:
+                    if cutoff is not None:
+                        parsed_ts = _parse_timestamp(rec.get("timestamp"))
+                        if parsed_ts is None:
+                            agg["malformed_timestamps"] += 1
+                            continue
+                        if parsed_ts < cutoff:
+                            continue
                     active = True
                     seen = True
 
-                msg = rec.get("message") or {}
-                content = msg.get("content")
+                if not active:
+                    continue
+
+                # Every measured record must itself be in the requested window.
+                # A bad timestamp is evidence about transcript quality, not a
+                # reason to silently include or discard an unknown record.
+                if cutoff is not None:
+                    if parsed_ts is None:
+                        parsed_ts = _parse_timestamp(rec.get("timestamp"))
+                    if parsed_ts is None:
+                        agg["malformed_timestamps"] += 1
+                        continue
+                    if parsed_ts < cutoff:
+                        continue
 
                 # Remember tool_use ids so a later tool_result can be attributed.
                 if rec.get("type") == "assistant" and isinstance(content, list):
                     for block in content:
                         if isinstance(block, dict) and block.get("type") == "tool_use":
                             tool_names[block.get("id")] = block.get("name") or "?"
-                            if active:
-                                tool_calls[block.get("name") or "?"] += 1
-                                if block.get("name") in ("Agent", "Task"):
-                                    agents += 1
-
-                if not active:
-                    continue
+                            tool_calls[block.get("name") or "?"] += 1
+                            if block.get("name") in ("Agent", "Task"):
+                                agents += 1
 
                 if rec.get("type") == "user" and isinstance(content, list):
                     for block in content:
@@ -160,8 +204,6 @@ def scan(root: str, skill: str, cutoff: datetime | None) -> dict:
                 if rec.get("type") != "assistant":
                     continue
 
-                if not _in_window(rec.get("timestamp"), cutoff):
-                    continue
                 in_window = True
 
                 usage = msg.get("usage") or {}
@@ -203,7 +245,7 @@ def scan_ledgers(ticket_dir: str) -> dict:
     """
     out = {"subagent": 0, "inline": 0, "total": 0}
     pattern = re.compile(r"^\s*builder:\s*(subagent|inline)\b", re.IGNORECASE | re.MULTILINE)
-    for path in sorted(glob.glob(os.path.join(ticket_dir, "*.md"))):
+    for path in sorted(glob.glob(os.path.join(ticket_dir, "**", "*.md"), recursive=True)):
         try:
             text = open(path, errors="ignore").read()
         except OSError:
@@ -253,6 +295,7 @@ def summarize(agg: dict, ledgers: dict) -> dict:
         "agent_calls": agg["agent_calls"],
         "big_results": agg["big_results"],
         "largest_result": agg["largest_result"],
+        "malformed_timestamps": agg["malformed_timestamps"],
         "read_byte_pct": agg["tool_bytes"].get("Read", 0) / total_bytes * 100,
         "tool_bytes": agg["tool_bytes"],
         "tool_calls": agg["tool_calls"],
@@ -269,6 +312,7 @@ def render(s: dict, skill: str, window: str) -> str:
         f"  sessions with ZERO subagents {s['zero_agent_sessions']} ({s['zero_agent_pct']:.0f}%)",
         f"  Agent calls (all sessions)   {s['agent_calls']}",
         f"  assistant turns              {s['turns']}",
+        f"  malformed timestamps skipped {s['malformed_timestamps']}",
         "",
         f"  output tokens                {s['output_tokens'] / 1e6:.2f} M",
         f"  cache-read (context carry)   {s['cache_read_tokens'] / 1e9:.2f} B",
@@ -308,8 +352,15 @@ def render(s: dict, skill: str, window: str) -> str:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--skill", default="execute-ticket", help="skill to attribute (default: execute-ticket)")
-    ap.add_argument("--days", type=int, default=30, help="window in days (default: 30)")
-    ap.add_argument("--all", action="store_true", help="no time window")
+    window = ap.add_mutually_exclusive_group()
+    window.add_argument("--days", type=int, help="window in days (default: 30)")
+    window.add_argument("--all", action="store_true", help="no time window")
+    window.add_argument(
+        "--since",
+        type=_parse_since,
+        metavar="ISO-8601",
+        help="inclusive timezone-aware ISO-8601 cutoff",
+    )
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--tickets-dir", default="docs/tickets", help="where to count Ledger builder: lines")
     args = ap.parse_args(argv)
@@ -319,13 +370,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"delegation-report: no transcript root at {root}", file=sys.stderr)
         return 2
 
-    cutoff = None if args.all else datetime.now(timezone.utc) - timedelta(days=args.days)
+    days = 30 if args.days is None else args.days
+    cutoff = None if args.all else args.since or datetime.now(timezone.utc) - timedelta(days=days)
     summary = summarize(scan(root, args.skill, cutoff), scan_ledgers(args.tickets_dir))
+    if args.all:
+        window_label = "all"
+    elif args.since is not None:
+        window_label = f"since {args.since.isoformat().replace('+00:00', 'Z')} (inclusive)"
+    else:
+        window_label = f"{days}d"
+    summary["window"] = window_label
+    summary["cutoff"] = cutoff.isoformat().replace("+00:00", "Z") if cutoff else None
 
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=True))
     else:
-        print(render(summary, args.skill, "all" if args.all else f"{args.days}d"))
+        print(render(summary, args.skill, window_label))
     return 0
 
 
