@@ -114,6 +114,19 @@ STUB
   export QUARTET_NOTIFY_CMD="$NOTIFY_CMD"
 }
 
+# make_notify_stub_rc <rc> — replace the recorder with one that returns rc.
+# Attempts are still appended so a test can distinguish "not called" from
+# "called but transport failed".
+make_notify_stub_rc() {
+  local rc="${1:-0}"
+  cat >"$NOTIFY_CMD" <<STUB
+#!/usr/bin/env bash
+printf '%s|%s\n' "\${1:-}" "\${2:-}" >> "$NOTIFY_LOG"
+exit $rc
+STUB
+  chmod +x "$NOTIFY_CMD"
+}
+
 # notify_log — recorded notifications ("" if none).
 notify_log() {
   [ -f "$NOTIFY_LOG" ] && cat "$NOTIFY_LOG" || true

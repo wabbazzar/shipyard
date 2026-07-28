@@ -40,12 +40,183 @@ PY
   printf '%s\n' "$raw"
 }
 
-# quartet_notify <title> <body> — owner notification, transport-agnostic.
+# quartet_notify <title> <body>
+# quartet_notify --class <routine|actionable|urgent>
+#   [--episode <key>] [--window <seconds>] <title> <body>
+#
+# Owner notification, transport-agnostic. Classified calls read the already
+# loaded $CFG_JSON (`[notify].signal_level` = all|actionable|urgent|off), emit a
+# notification.decision event, and optionally dedupe an explicit episode under
+# $PROJECT_DIR/tmp. Legacy two-argument calls retain their exact old behavior.
+#
 # Set QUARTET_NOTIFY_CMD to any command taking (title, body) as two args,
-# e.g. a Signal/ntfy/pushover wrapper. Unset → events are still logged,
-# notifications are silently skipped. Never fails the caller.
-quartet_notify() {
-  [ -n "${QUARTET_NOTIFY_CMD:-}" ] || return 0
+# e.g. a Signal/ntfy/pushover wrapper. Unset → notifications are skipped.
+_quartet_notification_decision() {
+  local class="$1" episode="$2" outcome="$3" policy="$4" reason="$5"
+  local root log_event svc
+  root="${QUARTET_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+  log_event="$root/agents/lib/log_event.sh"
+  svc="${SVC:-${PROJECT_NAME:-notification}}"
+  [ -x "$log_event" ] || return 0
+  "$log_event" "$svc" notification.decision \
+    class="$class" episode="$episode" outcome="$outcome" policy="$policy" \
+    reason="$reason" || true
+}
+
+_quartet_notify_transport() {
+  local title="$1" body="$2"
+  [ -n "${QUARTET_NOTIFY_CMD:-}" ] || return 1
   # shellcheck disable=SC2086 — word-splitting QUARTET_NOTIFY_CMD is intentional
-  $QUARTET_NOTIFY_CMD "$1" "$2" >/dev/null 2>&1 || true
+  $QUARTET_NOTIFY_CMD "$title" "$body" >/dev/null 2>&1
+}
+
+quartet_notify() {
+  # Backward compatibility is deliberately a separate, byte-equivalent path:
+  # no policy, state, or decision event is introduced for legacy callers.
+  if [ "${1:-}" != "--class" ]; then
+    [ "$#" -ge 2 ] || return 2
+    _quartet_notify_transport "$1" "$2" || true
+    return 0
+  fi
+
+  shift
+  local class="${1:-}" episode="" window=86400
+  shift || true
+  case "$class" in
+    routine|actionable|urgent) ;;
+    *) echo "quartet_notify: invalid --class: $class" >&2; return 2 ;;
+  esac
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --episode)
+        [ "$#" -ge 2 ] || { echo "quartet_notify: --episode requires a key" >&2; return 2; }
+        episode="$2"; shift 2 ;;
+      --window)
+        [ "$#" -ge 2 ] || { echo "quartet_notify: --window requires seconds" >&2; return 2; }
+        window="$2"; shift 2 ;;
+      --*) echo "quartet_notify: unknown option: $1" >&2; return 2 ;;
+      *) break ;;
+    esac
+  done
+  [ "$#" -eq 2 ] || {
+    echo "quartet_notify: classified calls require title and body" >&2
+    return 2
+  }
+  [[ "$window" =~ ^[0-9]+$ ]] || {
+    echo "quartet_notify: --window must be non-negative seconds" >&2
+    return 2
+  }
+  local title="$1" body="$2"
+
+  local policy invalid_policy=0 threshold class_level cfg_data
+  cfg_data="${CFG_JSON:-}"
+  [ -n "$cfg_data" ] || cfg_data='{}'
+  policy="$(jq -r '.notify.signal_level // "all"' <<<"$cfg_data" 2>/dev/null || echo all)"
+  case "$policy" in
+    all)        threshold=0 ;;
+    actionable) threshold=1 ;;
+    urgent)     threshold=2 ;;
+    off)        threshold=99 ;;
+    *) policy=all; threshold=0; invalid_policy=1 ;;
+  esac
+  case "$class" in
+    routine)    class_level=0 ;;
+    actionable) class_level=1 ;;
+    urgent)     class_level=2 ;;
+  esac
+
+  if [ "$class_level" -lt "$threshold" ]; then
+    _quartet_notification_decision "$class" "$episode" suppressed "$policy" policy
+    return 0
+  fi
+
+  local reason=""
+  [ "$invalid_policy" -eq 1 ] && reason="invalid_policy"
+
+  # Calls without an episode are classified and filtered, but not deduped.
+  if [ -z "$episode" ]; then
+    if _quartet_notify_transport "$title" "$body"; then
+      _quartet_notification_decision "$class" "" delivered "$policy" "$reason"
+    else
+      _quartet_notification_decision "$class" "" suppressed "$policy" transport_failed
+    fi
+    return 0
+  fi
+
+  local project_name project_tmp state_file lock_file key now state last
+  project_name="${PROJECT_NAME:-$(jq -r '.project_name // empty' <<<"$cfg_data" 2>/dev/null)}"
+  [ -n "$project_name" ] || project_name="unknown"
+  project_tmp="${PROJECT_DIR:-}/tmp"
+  if [ -z "${PROJECT_DIR:-}" ] || ! mkdir -p "$project_tmp" 2>/dev/null; then
+    if _quartet_notify_transport "$title" "$body"; then
+      _quartet_notification_decision "$class" "$episode" delivered "$policy" dedup_unavailable
+    else
+      _quartet_notification_decision "$class" "$episode" suppressed "$policy" transport_failed
+    fi
+    return 0
+  fi
+
+  state_file="$project_tmp/notification-dedup.json"
+  lock_file="$project_tmp/notification-dedup.lock"
+  key="$(printf '%s' "$project_name|$episode" | sha256sum | awk '{print $1}')"
+  now="$(date +%s)"
+
+  local notify_lock_fd
+  exec {notify_lock_fd}>"$lock_file" || {
+    if _quartet_notify_transport "$title" "$body"; then
+      _quartet_notification_decision "$class" "$episode" delivered "$policy" dedup_unavailable
+    else
+      _quartet_notification_decision "$class" "$episode" suppressed "$policy" transport_failed
+    fi
+    return 0
+  }
+  if ! flock -x "$notify_lock_fd"; then
+    exec {notify_lock_fd}>&-
+    if _quartet_notify_transport "$title" "$body"; then
+      _quartet_notification_decision "$class" "$episode" delivered "$policy" dedup_unavailable
+    else
+      _quartet_notification_decision "$class" "$episode" suppressed "$policy" transport_failed
+    fi
+    return 0
+  fi
+
+  state='{"episodes":{}}'
+  if [ -s "$state_file" ]; then
+    state="$(jq -c 'if (.episodes | type) == "object" then . else {episodes:{}} end' \
+      "$state_file" 2>/dev/null || printf '%s' '{"episodes":{}}')"
+  fi
+  last="$(jq -r --arg key "$key" '.episodes[$key] // 0' <<<"$state")"
+  [[ "$last" =~ ^[0-9]+$ ]] || last=0
+  if [ "$last" -gt 0 ] && [ $((now - last)) -lt "$window" ]; then
+    flock -u "$notify_lock_fd"
+    exec {notify_lock_fd}>&-
+    _quartet_notification_decision "$class" "$episode" deduped "$policy" episode_window
+    return 0
+  fi
+
+  # Hold the episode lock through delivery. Otherwise concurrent callers can
+  # both pass the state check and double-page before either records success.
+  if _quartet_notify_transport "$title" "$body"; then
+    local state_tmp=""
+    state_tmp="$(mktemp "$state_file.tmp.XXXXXX" 2>/dev/null || true)"
+    if [ -n "$state_tmp" ] && \
+       jq -c --arg key "$key" --argjson now "$now" \
+         '.episodes[$key] = $now' <<<"$state" >"$state_tmp" 2>/dev/null && \
+       mv "$state_tmp" "$state_file"; then
+      :
+    else
+      [ -n "$state_tmp" ] && rm -f "$state_tmp"
+      reason="state_write_failed"
+    fi
+    flock -u "$notify_lock_fd"
+    exec {notify_lock_fd}>&-
+    _quartet_notification_decision "$class" "$episode" delivered "$policy" "$reason"
+  else
+    # A failed transport never consumes the key; the next call may retry.
+    flock -u "$notify_lock_fd"
+    exec {notify_lock_fd}>&-
+    _quartet_notification_decision "$class" "$episode" suppressed "$policy" transport_failed
+  fi
+  return 0
 }

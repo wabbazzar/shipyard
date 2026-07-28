@@ -437,3 +437,8 @@ bats tests/
   control points and notification classification returned in ≤40 lines.
 - 2026-07-28 — Polished with exact phase gates, a stable cross-role episode
   handoff, flat-to-lifecycle ordering, and a non-fabricated 24-hour contract.
+- 2026-07-28 — Phase 1 built; `builder: subagent (1 agent)`. Failing-first
+  fixture: 1/9 passed before implementation, cases 2–9 failed. Final focused:
+  32/32; full: 370/370. Orchestrator review added the dedup-lock fail-open case:
+  an unavailable lock delivers with `reason=dedup_unavailable` rather than
+  swallowing an urgent alert.
