@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-27
 - **Owner:** wabbazzar
-- **Status:** Phases 7–8 open; phases 1–6 implemented (see hand-off Ledger)
+- **Status:** Polished — closeout evidence pending; no product changes planned
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 11 (4 phases, cap 5/phase)
@@ -151,23 +151,22 @@ This is the phase that makes the scheme real.
 
 ## Out of scope
 
-- Adding `lifecycle_dirs` to **aurora's** live config (user-decision class — see
-  Polish Notes; flag to the owner as a follow-up).
-- Mechanical enforcement of the move (`scripts/check-ticket-lifecycle.sh`) —
-  the move is enforced by instruction + gate class, as stated.
-- Migrating **shipyard's own** tickets to the folder layout (O4).
-- Retrofitting existing tickets on any project.
+- Reclassifying tickets created on Aurora's current ahead-of-main feature
+  branch. Phase 9 records that checkout's drift but does not alter its work.
+- Any new lifecycle behavior beyond the deterministic engine, installer,
+  doctor, pre-commit warning, and CI gate already shipped in Phases 1–6.
+- `caladan`, removed from fleet-migration scope by owner decision.
 - Any runner or systemd unit change.
 
 ## Definition of Done
 
-- [ ] A project setting the four config keys gets: new tickets born in `pending/`,
+- [x] A project setting the four config keys gets: new tickets born in `pending/`,
       ids resolved across all three folders, polish in place, and an automatic
       `git mv` to `complete/` in the final phase's commit.
-- [ ] A project setting none of them behaves **byte-for-byte** as it does today —
+- [x] A project setting none of them behaves **byte-for-byte** as it does today —
       proven by a bats case, not asserted.
-- [ ] `shipyard learn` stubs land in the project's configured ticket dir.
-- [ ] The installer can set the layout up, and new installs inherit the gate class.
+- [x] `shipyard learn` stubs land in the project's configured ticket dir.
+- [x] The installer can set the layout up, and new installs inherit the gate class.
 - [ ] `bats tests/`, `scripts/leak-check.sh`, `scripts/check-deck-fresh.sh` green.
 
 ## Reference implementation
@@ -549,17 +548,47 @@ This is why Phase 7 is one subagent per repo rather than a fleet-wide script.
 
 Commit: `ab2f04c`
 
-### Phase 7 — fleet migration — **HALTED, NOT DONE**
+### Phase 7 — fleet migration — **COMPLETE ON THE SIX ACTIVE TRUNKS**
 
-builder: subagent × 4 (aurora, bopthere, shredly, starbird) — **all four killed
-mid-run by a weekly API rate limit (resets 2026-07-29 01:00 America/Chicago)**.
+builder: subagent per repository; the owner explicitly removed `caladan` from
+scope because it is a disposable Shipyard fixture, not an active fleet repo.
 
-**No repo was migrated. Zero tickets moved.** Verified: no commits on any
-`chore/ticket-lifecycle-sanitize` branch, ticket counts unchanged everywhere
-(bopthere still archive=28/backlog=24, shredly 91, aurora 36, starbird 4).
-All four branches deleted, empty `pending/complete/freezer` dirs the agents had
-created in bopthere/shredly removed, every repo returned to `main`/`master`
-clean. **Nothing to un-migrate — the work simply did not happen.**
+The rate-limited attempt below was superseded by successful per-repository
+migrations. These commits are ancestors of their remote trunks:
+
+| Repository | Migration commit | Remote trunk |
+|---|---|---|
+| aurora | `088a183` | `origin/main` |
+| bopthere | `7da77e4` | `origin/main` |
+| shredly | `18958b2b` | `origin/master` |
+| starbird | `f0d5671` | `origin/main` |
+| wabbazzar-ice | `108ae32` | `origin/master` |
+| 2pizzaclub | `0b7081b` | `origin/main` |
+
+Cold verification (run from Shipyard; every line must print `LANDED`):
+
+```bash
+fleet_root="${SHIPYARD_FLEET_ROOT:-$HOME/code}"
+while read -r repo sha trunk; do
+  git -C "$fleet_root/$repo" merge-base --is-ancestor "$sha" "$trunk" &&
+    echo "LANDED $repo $sha $trunk"
+done <<'EOF'
+aurora 088a183 origin/main
+bopthere 7da77e4 origin/main
+shredly 18958b2b origin/master
+starbird f0d5671 origin/main
+wabbazzar-ice 108ae32 origin/master
+2pizzaclub 0b7081b origin/main
+EOF
+```
+
+On 2026-07-28, `ticket-lifecycle.sh --check` returned 0 in bopthere, shredly,
+starbird, wabbazzar-ice, and 2pizzaclub. Do not flatten that into “all checkouts
+clean”: Aurora's live checkout is on `publish/ticket-lifecycle`, 20 commits
+ahead of `origin/main`, and currently returns 1 because branch-only ticket 038
+has a completion-like status while still in `pending/`. That is live branch
+drift to resolve or explicitly exclude during closeout; it does not negate the
+remote-main ancestry proof above.
 
 ### ⚠ INCIDENT (found during cleanup, fixed) — worktree relinked the fleet
 
@@ -582,16 +611,22 @@ Ironic and worth stating: the isolation that protected the *other agent's* work
 is what caused this. A worktree is not free — it changes what repo-root-relative
 hooks resolve to.
 
-### Phase 8 — shipyard dogfoods the layout — NOT STARTED
+### Phase 8 — shipyard dogfoods the layout — **COMPLETE**
 
-Blocked behind Phase 7 by design (migrate the fleet, then this repo).
+builder: inline (single-repository ticket moves plus the orchestrator's full
+gate read)
 
-## Status at hand-off (2026-07-28)
+Shipyard adopted `docs/tickets/{pending,complete,freezer}` and enabled
+`lifecycle_dirs = true` in `.agents/config.toml` at `37074c9`. On 2026-07-28,
+`scripts/ticket-lifecycle.sh --project . --check` returned 0.
 
-Phases 1–6 built, gated, committed on `feat/ticket-lifecycle-folders`
-(`79b3d25`, `bad5ac0`, `a207503`, `ebac9e1`, `97c0d9f`, `ab2f04c`).
-`bats tests/` 355 passing / 0 failures at the last phase gate.
-Phases 7–8 open; Phase 7 resumable after the rate limit resets.
+## Closeout hand-off (2026-07-28)
+
+Phases 1–6 core: `79b3d25`, `bad5ac0`, `a207503`, `ebac9e1`, `97c0d9f`,
+`ab2f04c`. Phase 7 is on all six active remote trunks at the tabled commits.
+Phase 8 is `37074c9`. **No product implementation remains.** Execute only the
+bounded closeout phase below; do not re-sort tickets or recreate migration
+branches.
 
 ---
 
@@ -683,29 +718,70 @@ Pre-commit hook warns (never blocks). CI gets a lifecycle job.
 Read the target repo's own `ticket_dir` (note: `learn` operates on `$dir`, not
 always `$PROJECT_DIR`), fall back to `docs/tickets`. Real behavioral bats cases.
 
-### Phase 7 — fleet migration, one subagent per repo (5 pts)
-`Delegation: subagent PER REPO (sonnet) — 7 agents`
-Per D1/D2/D4. Each agent gets one repo, runs `ticket-lifecycle.sh --sort`
-(dry-run) for the status-line recommendation, makes the final call per ticket,
-renames folders to the standard vocabulary, and commits on a branch. Repos:
-aurora (rename none; add `lifecycle_dirs`), bopthere, shredly (62 flat + already
-half-migrated), starbird, ice, caladan, 2pizzaclub (folders only, no tickets).
-**No repo is pushed or merged without the owner's stamp** — each agent stops at
-a branch and reports.
+### Phases 7–8 — historical implementation record
 
-### Phase 8 — shipyard dogfoods it + full battery (2 pts)
-`Delegation: inline`
-shipyard adopts the layout for its own 11 tickets, reversing original O4 — a
-harness that doesn't run its own hygiene rule has no business shipping it.
-Full battery + CI green.
+Phase 7 migrated the six active fleet repositories at the commits recorded in
+the Ledger; `caladan` is excluded by owner decision. Phase 8 dogfooded the
+layout in Shipyard at `37074c9`. Neither phase is to be rebuilt.
+
+### Phase 9 — evidence-only closeout (1 pt)
+
+**Delegation: inline (the orchestrator must personally read the final gates and
+this is a single-ticket closeout with no product edit).**
+
+> Converge honestly or report the precise blocker with the actual evidence —
+> NEVER fake green, weaken a check, or hand-wave "should work". Run the real
+> command, read the real file, curl the real port, and report exact output
+> (exit codes, JSONL lines, HTTP codes), not adjectives.
+
+1. Run the remote-ancestry loop in the Phase 7 Ledger; require all six
+   `LANDED` lines.
+2. Run the lifecycle checker in bopthere, shredly, starbird, wabbazzar-ice, and
+   2pizzaclub:
+   ```bash
+   fleet_root="${SHIPYARD_FLEET_ROOT:-$HOME/code}"
+   for repo in bopthere shredly starbird wabbazzar-ice 2pizzaclub; do
+     scripts/ticket-lifecycle.sh --project "$fleet_root/$repo" --check
+   done
+   ```
+   Each must return 0. Run Aurora separately and record its actual branch,
+   ahead/behind count, exit code, and finding. Do not change or hide unrelated
+   work to manufacture green:
+   ```bash
+   fleet_root="${SHIPYARD_FLEET_ROOT:-$HOME/code}"
+   git -C "$fleet_root/aurora" status --short --branch
+   git -C "$fleet_root/aurora" rev-list --left-right --count \
+     HEAD...origin/main
+   scripts/ticket-lifecycle.sh --project "$fleet_root/aurora" --check
+   ```
+3. From Shipyard, run `scripts/ticket-lifecycle.sh --project . --check`,
+   `./install.sh --doctor --project .`, `bats tests/`,
+   `bash scripts/leak-check.sh`, `bash scripts/check-deck-fresh.sh`, and:
+   ```bash
+   bash -n install.sh agents/lib/*.sh agents/*/runner.sh \
+     agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit
+   python3 -m py_compile scripts/gen-deck-data.py
+   ```
+   Confirm CI for the current `main` SHA is completed/success:
+   ```bash
+   gh run list --workflow checks.yml --branch main --limit 1 \
+     --json databaseId,headSha,status,conclusion,url
+   ```
+4. Append exact command outputs/exit codes to this Ledger. If Aurora still
+   fails only on its ahead-of-main branch, record that as an external checkout
+   blocker; do not rewrite Phase 7 as unmerged. With every in-scope gate green,
+   graduate this ticket using `scripts/ticket-lifecycle.sh --graduate` in the
+   final closeout commit.
 
 ## Revised Definition of Done
 
-- [ ] `ticket-lifecycle.sh --check` exits non-zero on a misfiled ticket, proven by test
-- [ ] `--sort` is dry-run by default and never lands a ticket in `complete/` by guess
-- [ ] A project with no lifecycle config is byte-for-byte unaffected (proven, not asserted)
-- [ ] A fresh `install.sh` run yields the three folders, the config keys, and the gate class
-- [ ] `--doctor` fails on lifecycle drift; pre-commit warns; CI has a lifecycle job
-- [ ] All 7 fleet repos migrated on branches, one subagent each, filenames unchanged
-- [ ] shipyard's own tickets are foldered
-- [ ] `bats tests/`, leak-check, deck-fresh green; CI green on main
+- [x] `ticket-lifecycle.sh --check` exits non-zero on a misfiled ticket, proven by test.
+- [x] `--sort` is dry-run by default and never lands a ticket in `complete/` by guess.
+- [x] A project with no lifecycle config is byte-for-byte unaffected (proven, not asserted).
+- [x] A fresh `install.sh` run yields the three folders, config keys, and gate class.
+- [x] `--doctor` fails on lifecycle drift; pre-commit warns; CI has a lifecycle job.
+- [x] All six active fleet repositories have migration commits on remote trunks;
+      filenames were unchanged. `caladan` is excluded by owner decision.
+- [x] Shipyard's own tickets are foldered at `37074c9`.
+- [ ] Phase 9 records a current full-battery run, current CI state, and the honest
+      disposition of Aurora's ahead-of-main checkout before graduation.
