@@ -43,6 +43,9 @@ polish job is to pin down, per phase, exactly which of the project's gates apply
 everything. **Which gates exist, and their exact commands, live in the
 project's gate file — you read them, you never guess them.**
 
+For a UI-shaped ticket, consult the `ui-design` skill while hardening its gates.
+Require its declared viewports and rendered interaction states as proof.
+
 ## Step 0 — Discover current state (never assume; the system changes)
 
 Read/inspect, keep only compact notes. Delegate wide sweeps to subagents.

@@ -2,6 +2,9 @@
 
 setup() {
   SKILL="$BATS_TEST_DIRNAME/../skills/ui-design/SKILL.md"
+  FEATURE="$BATS_TEST_DIRNAME/../skills/feature/SKILL.md"
+  WRITE_TICKET="$BATS_TEST_DIRNAME/../skills/write-ticket/SKILL.md"
+  POLISH_TICKET="$BATS_TEST_DIRNAME/../skills/polish-ticket/SKILL.md"
 }
 
 @test "ui-design skill exists with the shared four-role frontmatter contract" {
@@ -50,4 +53,22 @@ setup() {
 @test "deferred naming-consistency policy is not smuggled into v1" {
   [ -f "$SKILL" ]
   ! grep -Eqi 'label[- ]family|naming[- ]consistency' "$SKILL"
+}
+
+@test "feature routes UI-shaped design intent through ui-design before write-ticket" {
+  grep -Fq '**UI-shaped features — design readiness.** For a UI-shaped feature, run the' "$FEATURE"
+  grep -Fq '`ui-design` skill before handing the scope to `write-ticket`.' "$FEATURE"
+  grep -Fq 'Carry its design thesis into the design-intent acceptance criteria.' "$FEATURE"
+  grep -Fq '**Skipping `ui-design` for a UI-shaped feature.**' "$FEATURE"
+  ! grep -q 'new-spec' "$FEATURE"
+}
+
+@test "write-ticket consults ui-design for UI acceptance and design thesis" {
+  grep -Fq 'For a UI-shaped scope, consult the `ui-design` skill before writing acceptance.' "$WRITE_TICKET"
+  grep -Fq 'Carry its design thesis and viewport-specific proof into the ticket.' "$WRITE_TICKET"
+}
+
+@test "polish-ticket consults ui-design for UI gates and rendered viewport proof" {
+  grep -Fq 'For a UI-shaped ticket, consult the `ui-design` skill while hardening its gates.' "$POLISH_TICKET"
+  grep -Fq 'Require its declared viewports and rendered interaction states as proof.' "$POLISH_TICKET"
 }

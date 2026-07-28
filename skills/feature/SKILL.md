@@ -124,11 +124,9 @@ gate commands, or read every touched file to `path:line` — that is
 `write-ticket`'s interrogation and `polish-ticket`'s hardening. You produce a
 verified assumption set + a concrete Objective, DoD checklist, and Boundaries.
 
-**Out of scope for v1 — aesthetic/design-readiness review.** For a UI-shaped
-feature, checking for a grounded aesthetic reference and running a design review
-before writing design-intent acceptance criteria (new-spec's ui-shaped step 4d)
-is deliberately **not** done here. Note the feature is UI-shaped so a human can
-run that pass separately; do not attempt it inline.
+**UI-shaped features — design readiness.** For a UI-shaped feature, run the
+`ui-design` skill before handing the scope to `write-ticket`.
+Carry its design thesis into the design-intent acceptance criteria.
 
 ## Step 3 — Hand off to write-ticket with a feature scope
 
@@ -193,9 +191,8 @@ this step.
   failure as guessing a load-bearing one.
 - **Reinventing the Definition of Done.** Use the project's existing DoD
   convention; do not invent a parallel acceptance shape.
-- **Doing new-spec's design-readiness pass.** Aesthetic reference + design
-  review before writing UI acceptance criteria is out of scope for v1 — note the
-  surface is UI-shaped, don't run it inline.
+- **Skipping `ui-design` for a UI-shaped feature.** Run that separate pass
+  before handing design intent to `write-ticket`; do not improvise it here.
 - **Building the feature.** Editing app code, running the change, implementing
   it — that's `execute-ticket`, behind the auto-gate. A `/feature` slice that
   starts editing app code has overreached; it writes and routes a ticket and

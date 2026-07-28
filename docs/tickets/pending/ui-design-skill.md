@@ -314,9 +314,16 @@ deferred/blocker notes.
   Commit: `4114c55`. Fleet relink gave Shipyard and six active repos both
   resolving discovery links, with zero worktree targets; doctor was clean and
   relink dry-run reported 0 repairs. CI `30394263137` caught one stale P0
-  assertion still expecting 7 installed skills; the scoped follow-up updates
-  it to 8 and must return the exact-SHA run to green before P2.
-- P2 — pending
+  assertion still expecting 7 installed skills; follow-up `cb0ccb2` updated it
+  to 8, passed 400/400 locally, and CI `30394625074` completed successfully.
+- P2 — ready for scoped commit. `builder: subagent (1 caller agent)` added
+  three failing-first caller contracts and referral-only changes in feature,
+  write-ticket, and polish-ticket. RED: existing 7 passed and all 3 new caller
+  tests failed on missing referrals. GREEN: focused 10/10; both dangling
+  `new-spec` references are gone; frontmatter and non-UI flow are unchanged;
+  full 403/403; syntax, `py_compile`, leak, lifecycle, deck
+  fresh/complete/render, doctor, and diff checks passed. Commit: this scoped P2
+  commit; SHA/CI are recorded in P3.
 - P3 — pending
 - P4 — pending
 

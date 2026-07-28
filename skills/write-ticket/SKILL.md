@@ -105,6 +105,9 @@ a code read would have answered is a tax on the user's time.
 reproduce-first or assumptions-and-verify — has already happened; don't repeat
 it. Take the scope they hand you.)
 
+For a UI-shaped scope, consult the `ui-design` skill before writing acceptance.
+Carry its design thesis and viewport-specific proof into the ticket.
+
 ## Step 3 — Interrogate the real code (carry file:line, not prose)
 
 Before writing the plan, read the actual source the work touches: the module,
