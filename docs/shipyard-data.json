@@ -74,6 +74,13 @@
           "detail": "The A–H checklist survives unchanged: self-containment (exact files, units, ports, dated numbers with the command that produced them), orchestration protocol with the verbatim anti-cheating brief, per-phase gate assembly, toolchain proof (§C2: never hand over a ticket whose verification method you haven't run while polishing), verification surfaces where a test that can't fail is a finding, decisions split locked / open-with-default / user-class, thin-slice phasing, ledger + observable DoD. What changes: the gate menu, dashboard port, notify path, and sibling-repo hazards stop being baked prose and become parameters from .agents/config.toml + a hub gate file. Callers: mentat headless after a proposal is stamped; the human operator in-session. [D-11]"
         },
         {
+          "name": "ui-design",
+          "disposition": "adapted · shared",
+          "source": "shipyard/skills/ui-design — shared design craft for UI-bearing tickets",
+          "summary": "Ground interface direction in subject, audience, and job.",
+          "detail": "Names the design thesis, palette and type roles, structural layout, signature element, responsive and accessibility floor, state copy, and critique loop before a UI ticket is handed to build."
+        },
+        {
           "name": "telemetry collectors",
           "disposition": "new",
           "source": "agents/design/",
@@ -114,6 +121,13 @@
           "detail": "Portable core: discover-state step 0, green-baseline-before-touching-anything, thin vertical slices with a safety patch before risky changes, verify-before-commit (never trust a subagent's green — re-run and read the actual output), the honest-blocker protocol (revert to last green + precise report beats faked green), and the user-decision class as the only reason to stop (money, outward-facing, destructive, overriding deliberate config, real design forks) with a Signal alert when stopping. Parameterized: gate menu, notify command, event-stream path. Callers: helldiver headless for ratified tickets; the human operator in-session. [D-11]"
         },
         {
+          "name": "ui-design",
+          "disposition": "adapted · shared",
+          "source": "shipyard/skills/ui-design — the build craft contract for UI surfaces",
+          "summary": "Build the declared visual system and inspect real viewports.",
+          "detail": "Carries the ticket's design thesis into layout, interaction states, keyboard and focus behavior, responsive recomposition, reduced motion, and rendered-viewport critique instead of accepting code-only proof."
+        },
+        {
           "name": "feedback triage → PRs",
           "disposition": "kept + hardened",
           "source": "agents/build/runner.sh + role.md",
@@ -139,6 +153,13 @@
       "headline": "Nightly re-runs of already-green tests catch nothing — the authoring session already optimized against that exact signal.",
       "gate": "block findings must be addressed before ship; delivered as in-session notes, never hard stops (D-2)",
       "skills": [
+        {
+          "name": "ui-design",
+          "disposition": "adapted · shared",
+          "source": "shipyard/skills/ui-design — cold-context UI craft rubric",
+          "summary": "Critique whether the shipped surface fulfills its design thesis.",
+          "detail": "Checks hierarchy, palette and type roles, signature restraint, responsive behavior, accessibility, state copy, and the actual rendered surface without imposing generic visual taste."
+        },
         {
           "name": "shoulder-mode critic",
           "disposition": "new",
@@ -528,6 +549,17 @@
           "human"
         ],
         "kind": "frontdoor"
+      },
+      {
+        "id": "ui-design",
+        "label": "ui-design",
+        "roles": [
+          "human",
+          "design",
+          "build",
+          "release"
+        ],
+        "kind": "shared"
       },
       {
         "id": "collectors",

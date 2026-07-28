@@ -44,12 +44,14 @@ agents_digest() { find "$P/.agents" -type f -exec md5sum {} \; | sort; }
   do_install
   [ -n "$(unit_set)" ]
   [ -L "$P/.claude/skills/execute-ticket" ]
+  [ -L "$P/.claude/skills/ui-design" ]
+  [ -L "$P/.agents/skills/ui-design" ]
 
   run_uninstall
   echo "$output"
   [ "$status" -eq 0 ]
   [ -z "$(unit_set)" ]                                  # every crew unit gone
-  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature; do
+  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard ui-design; do
     [ ! -L "$P/.claude/skills/$s" ]
     [ ! -L "$P/.agents/skills/$s" ]
   done
@@ -110,16 +112,19 @@ agents_digest() { find "$P/.agents" -type f -exec md5sum {} \; | sort; }
   [ "$(unit_set)" = "$fresh" ]
 }
 
-@test "uninstall keeps a real (non-symlink) skill dir" {
+@test "uninstall keeps real ui-design dirs in both discovery roots" {
   do_install
-  rm "$P/.claude/skills/bugfix"
-  mkdir -p "$P/.claude/skills/bugfix"
-  echo mine >"$P/.claude/skills/bugfix/keep.txt"
+  rm -f "$P/.claude/skills/ui-design" "$P/.agents/skills/ui-design"
+  mkdir -p "$P/.claude/skills/ui-design" "$P/.agents/skills/ui-design"
+  echo "claude owner content" >"$P/.claude/skills/ui-design/keep.txt"
+  echo "codex owner content" >"$P/.agents/skills/ui-design/keep.txt"
   run_uninstall
   echo "$output"
   [ "$status" -eq 0 ]
-  [ -f "$P/.claude/skills/bugfix/keep.txt" ]           # not clobbered
-  [[ "$output" == *"kept (real file/dir"* ]]
+  grep -Fxq "claude owner content" "$P/.claude/skills/ui-design/keep.txt"
+  grep -Fxq "codex owner content" "$P/.agents/skills/ui-design/keep.txt"
+  [[ "$output" == *"kept (real file/dir, not a symlink): $P/.claude/skills/ui-design"* ]]
+  [[ "$output" == *"kept (real file/dir, not a symlink): $P/.agents/skills/ui-design"* ]]
 }
 
 @test "uninstall keeps a skill symlink resolving OUTSIDE shipyard skills" {

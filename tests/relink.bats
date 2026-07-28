@@ -41,6 +41,17 @@ run_install() {
   ! echo "$output" | grep -q "codex skill: polish-ticket symlink missing"
 }
 
+@test "--relink repairs ui-design in both discovery roots" {
+  run_install
+  rm -f "$PROJ/.claude/skills/ui-design" "$PROJ/.agents/skills/ui-design"
+  run run_install --relink
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "relinked: $PROJ/.claude/skills/ui-design"
+  echo "$output" | grep -q "relinked: $PROJ/.agents/skills/ui-design"
+  [ "$(readlink -f "$PROJ/.claude/skills/ui-design")" = "$(readlink -f "$QUARTET_ROOT/skills/ui-design")" ]
+  [ "$(readlink -f "$PROJ/.agents/skills/ui-design")" = "$(readlink -f "$QUARTET_ROOT/skills/ui-design")" ]
+}
+
 @test "--relink repairs a BROKEN symlink (points nowhere)" {
   run_install
   ln -sfn /nonexistent/gone "$PROJ/.claude/skills/write-ticket"
@@ -71,6 +82,31 @@ run_install() {
   [ ! -e "$PROJ/.claude/skills/feature" ]          # nothing created
 }
 
+@test "--relink --dry-run reports ui-design drift in both roots and writes nothing" {
+  run_install
+  rm -f "$PROJ/.claude/skills/ui-design" "$PROJ/.agents/skills/ui-design"
+  run run_install --relink --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "would relink: $PROJ/.claude/skills/ui-design"
+  echo "$output" | grep -q "would relink: $PROJ/.agents/skills/ui-design"
+  [ ! -e "$PROJ/.claude/skills/ui-design" ]
+  [ ! -e "$PROJ/.agents/skills/ui-design" ]
+}
+
+@test "--relink never clobbers real ui-design dirs in either root" {
+  run_install
+  rm -f "$PROJ/.claude/skills/ui-design" "$PROJ/.agents/skills/ui-design"
+  mkdir -p "$PROJ/.claude/skills/ui-design" "$PROJ/.agents/skills/ui-design"
+  echo "claude owner content" >"$PROJ/.claude/skills/ui-design/local.md"
+  echo "codex owner content" >"$PROJ/.agents/skills/ui-design/local.md"
+  run run_install --relink
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "kept.*$PROJ/.claude/skills/ui-design"
+  echo "$output" | grep -q "kept.*$PROJ/.agents/skills/ui-design"
+  grep -Fxq "claude owner content" "$PROJ/.claude/skills/ui-design/local.md"
+  grep -Fxq "codex owner content" "$PROJ/.agents/skills/ui-design/local.md"
+}
+
 @test "--relink restores a missing AGENTS.md skill bridge" {
   run_install
   rm -f "$PROJ/AGENTS.md"
@@ -82,6 +118,7 @@ run_install() {
   [ "$status" -eq 0 ]
   [ -f "$PROJ/AGENTS.md" ]
   grep -q '.agents/skills/write-ticket/SKILL.md' "$PROJ/AGENTS.md"
+  grep -q '.agents/skills/ui-design/SKILL.md' "$PROJ/AGENTS.md"
 }
 
 @test "--relink --dry-run reports a missing bridge without creating it" {
@@ -97,7 +134,7 @@ run_install() {
   run_install
   run run_install --relink
   [ "$status" -eq 0 ]
-  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard; do
+  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard ui-design; do
     [ -L "$PROJ/.claude/skills/$s" ]
     [ -L "$PROJ/.agents/skills/$s" ]
     echo "$output" | grep -q "ok: $s"

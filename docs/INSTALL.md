@@ -63,8 +63,8 @@ grades against. Asked for at install time; never inferred.
 `<project>/.claude/skills/` for Claude/Hermes (both symlink into
 `<harness>/skills/`), plus the root `AGENTS.md` bridge.
 **What:** `write-ticket`, `bugfix`, `feature`, `polish-ticket`, `execute-ticket`,
-`coverage-audit`, `shipyard` — **the same files agents load headless and humans
-invoke in-session.** The installer creates `AGENTS.md` when absent and never
+`coverage-audit`, `shipyard`, `ui-design` — **the same files agents load
+headless and humans invoke in-session.** The installer creates `AGENTS.md` when absent and never
 changes a project-owned one; a core upgrade therefore reaches both discovery
 roots without an agent-only fork. Shipyard guarantees repository-local
 discovery, not registration or labeling in a host-managed/global skill-picker
@@ -101,7 +101,7 @@ recon  →  interview  →  write L2–L5  →  bake units  →  verify
    units with L1 env baked in, symlinks the L5 skills, enables the timers,
    removes legacy cron launchers.
 5. **Verify.** `medic --mode scan --dry-run` loads clean, the release gates
-   are green now, `list-timers` shows sane next-fires, the seven skill
+   are green now, `list-timers` shows sane next-fires, the eight skill
    symlinks resolve.
 
 ## Doctor — audit what an install owns

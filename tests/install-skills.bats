@@ -5,13 +5,13 @@
 # discovers repository skills from .agents/skills.
 #
 # Asserts:
-#   * --dry-run announces it WOULD symlink the six generic skills and WOULD
+#   * --dry-run announces it WOULD symlink the eight installed skills and WOULD
 #     drop gates.md, and writes NOTHING;
 #   * a real run creates every shared skill link in both discovery locations
 #     and writes .agents/gates.md;
 #   * re-running is idempotent (skills "unchanged", gates.md left as-is);
 #   * an existing gate file is NEVER clobbered;
-#   * a real (non-symlink) .claude/skills/<name> dir is NEVER clobbered.
+#   * a real skill dir in either discovery root is NEVER clobbered.
 #
 # systemctl/crontab/gh/claude are stubbed so the installer never touches the
 # host's real user units or crontab.
@@ -37,7 +37,7 @@ run_install() {
 @test "dry-run announces Claude/Hermes and Codex skill links + gates.md drop, writes nothing" {
   run run_install --dry-run
   [ "$status" -eq 0 ]
-  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard; do
+  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard ui-design; do
     echo "$output" | grep -q "would symlink: $PROJ/.claude/skills/$s"
     echo "$output" | grep -q "would symlink: $PROJ/.agents/skills/$s"
   done
@@ -52,7 +52,7 @@ run_install() {
 @test "real run symlinks every skill into both discovery roots and drops gates.md" {
   run run_install
   [ "$status" -eq 0 ]
-  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard; do
+  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard ui-design; do
     [ -L "$PROJ/.claude/skills/$s" ]
     [ "$(readlink -f "$PROJ/.claude/skills/$s")" = "$(readlink -f "$QUARTET_ROOT/skills/$s")" ]
     [ -f "$PROJ/.claude/skills/$s/SKILL.md" ]   # resolves to a real skill
@@ -75,14 +75,17 @@ run_install() {
   grep -q "OPERATOR EDIT" "$PROJ/.agents/gates.md"   # not clobbered
 }
 
-@test "an existing real .claude/skills/<name> dir is not clobbered" {
-  mkdir -p "$PROJ/.claude/skills/polish-ticket"
-  echo "mine" > "$PROJ/.claude/skills/polish-ticket/keep.txt"
+@test "existing real ui-design dirs in both discovery roots are not clobbered" {
+  mkdir -p "$PROJ/.claude/skills/ui-design" "$PROJ/.agents/skills/ui-design"
+  echo "claude owner content" > "$PROJ/.claude/skills/ui-design/keep.txt"
+  echo "codex owner content" > "$PROJ/.agents/skills/ui-design/keep.txt"
   run run_install
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "SKIP (exists, not a symlink"
-  [ -f "$PROJ/.claude/skills/polish-ticket/keep.txt" ]
-  [ ! -L "$PROJ/.claude/skills/polish-ticket" ]
-  # The other two still get symlinked.
+  echo "$output" | grep -q "SKIP.*$PROJ/.claude/skills/ui-design"
+  echo "$output" | grep -q "SKIP.*$PROJ/.agents/skills/ui-design"
+  [ -f "$PROJ/.claude/skills/ui-design/keep.txt" ]
+  [ -f "$PROJ/.agents/skills/ui-design/keep.txt" ]
+  [ ! -L "$PROJ/.claude/skills/ui-design" ]
+  [ ! -L "$PROJ/.agents/skills/ui-design" ]
   [ -L "$PROJ/.claude/skills/execute-ticket" ]
 }

@@ -120,7 +120,7 @@ esac
 
 # The installer-owned shared-skill set: the symlink manifest doctor (e) audits
 # and uninstall removes. Single source of truth (referenced again at step 4.5).
-GENERIC_SKILLS="polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard"
+GENERIC_SKILLS="polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard ui-design"
 
 ROLES_LIST="${AGENTS//,/ }" 
 PROJECT_DIR="$(cd "$PROJECT_DIR" 2>/dev/null && pwd)" || \

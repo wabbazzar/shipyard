@@ -65,6 +65,7 @@ _install() {
   [ -f "$p/AGENTS.md" ]
   grep -q '.agents/skills/execute-ticket/SKILL.md' "$p/AGENTS.md"
   grep -q '.agents/skills/write-ticket/SKILL.md'   "$p/AGENTS.md"
+  grep -q '.agents/skills/ui-design/SKILL.md'      "$p/AGENTS.md"
   # CWD guarantee: the unit runs with WorkingDirectory at the project root, so
   # the root AGENTS.md is auto-injected by codex/hermes.
   grep -Fxq "WorkingDirectory=$p" "$HOME/.config/systemd/user/abridge-build.service"
@@ -76,6 +77,7 @@ _install() {
   [ -f "$p/AGENTS.md" ]
   grep -q '.agents/skills/execute-ticket/SKILL.md' "$p/AGENTS.md"
   grep -q '.agents/skills/write-ticket/SKILL.md'   "$p/AGENTS.md"
+  grep -q '.agents/skills/ui-design/SKILL.md'      "$p/AGENTS.md"
 }
 
 @test "install: an existing AGENTS.md is never clobbered" {
@@ -83,4 +85,5 @@ _install() {
   printf 'MY OWN AGENTS FILE\n' > "$p/AGENTS.md"
   _install "$p" --agents build >/dev/null
   grep -Fxq 'MY OWN AGENTS FILE' "$p/AGENTS.md"
+  ! grep -q 'ui-design' "$p/AGENTS.md"
 }

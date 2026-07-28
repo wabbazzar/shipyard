@@ -265,13 +265,13 @@ Include the move in the final evidence commit and push it.
 
 - [x] Deterministic completeness check fails fixtures for all three omission
       classes, writes nothing, passes the real deck, and blocks in hook + CI.
-- [ ] `ui-design` is the eighth installed shared skill, self-contained and
+- [x] `ui-design` is the eighth installed shared skill, self-contained and
       model-agnostic, with the locked craft/accessibility content.
-- [ ] Both discovery roots install, doctor, relink, dry-run, uninstall, and
+- [x] Both discovery roots install, doctor, relink, dry-run, uninstall, and
       no-clobber behavior are covered by failing-first tests.
-- [ ] Deck has authored design/build/release entries and graph node; generated
+- [x] Deck has authored design/build/release entries and graph node; generated
       JSON is fresh, complete, and renders.
-- [ ] Existing canonical README/install prose names eight skills; no new guide.
+- [x] Existing canonical README/install prose names eight skills; no new guide.
 - [ ] Feature/write/polish/execute and the cold critic conditionally consult the
       skill; no dangling `new-spec`, runner, config, or non-UI behavior change.
 - [ ] Full suite exceeds the 380-test baseline; syntax, leak, lifecycle, deck
@@ -297,9 +297,21 @@ deferred/blocker notes.
   `scripts/gen-deck-data.py`, `scripts/check-deck-complete.sh`,
   `tests/deck-complete.bats`, `.githooks/pre-commit`,
   `.github/workflows/checks.yml`, `skills/gates.md.template`; mirrored live
-  `.agents/gates.md` without staging it. Commit: this scoped P0 commit; its SHA
-  is recorded in P1 after Git assigns it.
-- P1 — pending
+  `.agents/gates.md` without staging it. Commit: `45b50dd`; CI
+  `30393365020` completed successfully.
+- P1 — ready for scoped commit. `builder: subagent (1 reusable agent; 2
+  disjoint briefs)` authored the skill/7 contract tests, then five install
+  suites; the orchestrator registered it, authored three deck cards and one
+  graph node, regenerated JSON, and edited only existing README/INSTALL prose.
+  RED A: 0/7 while the skill was absent. RED B: 38/51, with all 13 failures
+  naming absent `ui-design` install/doctor/relink/uninstall/bridge behavior.
+  GREEN: focused 58/58; full 400/400; syntax, `py_compile`, leak, lifecycle,
+  deck fresh/complete/render, jq crew/graph assertions, and diff checks exited
+  0. Completeness reports 8 installed skills. The generic validator rejects
+  Shipyard's required extended frontmatter; Shipyard's own parser accepts it.
+  Pre-commit live doctor truthfully reports the two new links missing; the
+  post-commit fleet hook owns that transition, which is verified before P2.
+  Commit: this scoped P1 commit; SHA/CI and fleet evidence are recorded in P2.
 - P2 — pending
 - P3 — pending
 - P4 — pending

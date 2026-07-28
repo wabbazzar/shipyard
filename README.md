@@ -110,7 +110,9 @@ actually happening.
 
 ## Skills-parity
 
-The installer links all seven shared skills from this repo into
+The installer links all eight shared skills — `write-ticket`, `bugfix`,
+`feature`, `polish-ticket`, `execute-ticket`, `coverage-audit`, `shipyard`, and
+`ui-design` — into
 `<project>/.agents/skills/` for Codex and `<project>/.claude/skills/` for
 Claude/Hermes; both roots resolve to the same source files. It also creates a
 root `AGENTS.md` bridge when absent, but never changes a project-owned one.
