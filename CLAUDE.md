@@ -171,5 +171,4 @@ a context pack (`bopbop pack install …`), BopBop splices that file into the
 consuming assistant's context. It is written for the *operator's* assistant —
 "how do I check whether the agents ran, leave feedback, trigger a run" — not for
 someone editing this repo. Keep it short, operator-voiced, and current with the
-commands it names; note it still uses the older `packs/guardian-quartet/` path
-and quartet vocabulary and is due a refresh.
+commands it names, the `packs/shipyard/` path, and the five canonical role ids.
