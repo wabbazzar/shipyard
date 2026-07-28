@@ -311,7 +311,11 @@ deferred/blocker notes.
   Shipyard's required extended frontmatter; Shipyard's own parser accepts it.
   Pre-commit live doctor truthfully reports the two new links missing; the
   post-commit fleet hook owns that transition, which is verified before P2.
-  Commit: this scoped P1 commit; SHA/CI and fleet evidence are recorded in P2.
+  Commit: `4114c55`. Fleet relink gave Shipyard and six active repos both
+  resolving discovery links, with zero worktree targets; doctor was clean and
+  relink dry-run reported 0 repairs. CI `30394263137` caught one stale P0
+  assertion still expecting 7 installed skills; the scoped follow-up updates
+  it to 8 and must return the exact-SHA run to green before P2.
 - P2 — pending
 - P3 — pending
 - P4 — pending
