@@ -57,6 +57,57 @@ run_shipyard() { QUARTET_DIR="$QUARTET_ROOT" bash "$QUARTET_ROOT/$SH" "$@"; }
   [ "$output" -eq 1 ]
 }
 
+# --- draft stubs land in the CONFIGURED ticket_dir -------------------------
+# `learn` writes its draft stubs into [write_ticket] ticket_dir of the project
+# being written to, falling back to docs/tickets when the key (or the whole
+# config file) is absent. Fixtures stay inside $BATS_TEST_TMPDIR.
+
+# set_ticket_dir <project> <relpath> — append a [write_ticket] block.
+set_ticket_dir() {
+  printf '\n[write_ticket]\nticket_dir = "%s"\n' "$2" >>"$1/.agents/config.toml"
+}
+
+@test "generic stub honors a configured ticket_dir" {
+  P="$(make_fixture_project l9)"
+  set_ticket_dir "$P" "docs/tickets/pending"
+  run run_shipyard learn --to generic "cap every model call" --project "$P"
+  [ "$status" -eq 0 ]
+  run bash -c "ls '$P'/docs/tickets/pending/learned-*.md 2>/dev/null | wc -l"
+  [ "$output" -eq 1 ]
+  run bash -c "ls '$P'/docs/tickets/learned-*.md 2>/dev/null | wc -l"
+  [ "$output" -eq 0 ]
+}
+
+@test "installer-question stub honors a configured ticket_dir" {
+  P="$(make_fixture_project l10)"
+  set_ticket_dir "$P" "docs/tickets/pending"
+  run run_shipyard learn --to install "ask about theme at setup" --project "$P"
+  [ "$status" -eq 0 ]
+  run bash -c "ls '$P'/docs/tickets/pending/installer-question-*.md 2>/dev/null | wc -l"
+  [ "$output" -eq 1 ]
+  run bash -c "ls '$P'/docs/tickets/installer-question-*.md 2>/dev/null | wc -l"
+  [ "$output" -eq 0 ]
+}
+
+@test "no [write_ticket] block falls back to docs/tickets" {
+  P="$(make_fixture_project l11)"
+  run bash -c "grep -c write_ticket '$P/.agents/config.toml' || true"
+  [ "$output" -eq 0 ]
+  run run_shipyard learn --to generic "cap every model call" --project "$P"
+  [ "$status" -eq 0 ]
+  run bash -c "ls '$P'/docs/tickets/learned-*.md 2>/dev/null | wc -l"
+  [ "$output" -eq 1 ]
+}
+
+@test "missing .agents/config.toml does not crash and uses the fallback" {
+  P="$(make_fixture_project l12)"
+  rm -f "$P/.agents/config.toml"
+  run run_shipyard learn --to generic "cap every model call" --project "$P"
+  [ "$status" -eq 0 ]
+  run bash -c "ls '$P'/docs/tickets/learned-*.md 2>/dev/null | wc -l"
+  [ "$output" -eq 1 ]
+}
+
 @test "invalid --to value exits 2" {
   P="$(make_fixture_project l7)"
   run run_shipyard learn --to bogus "x" --project "$P"

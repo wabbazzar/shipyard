@@ -24,8 +24,19 @@ correct, verified work back with no quality babysitting. A ticket is "polished"
 when every way it could go wrong **on this project's live surfaces** has been
 pre-empted in writing.
 
-Tickets live in `docs/tickets/<name>.md` (header: Created / Owner / Status /
-Refs). A project's tickets routinely direct work into **sibling repos** and into
+Tickets live wherever the project's `[write_ticket]` config keys say they live —
+`ticket_dir`, and under a lifecycle layout also `archive_dir` (complete) and
+`backlog_dir` (freezer). **Read those keys; never guess a path and never assume
+a flat `docs/tickets/`.** Header: Created / Owner / Status / Refs.
+
+**Polish never moves a ticket.** You harden it *in place*, whatever folder it is
+in. Graduating a finished ticket to `archive_dir` is `execute-ticket`'s job, done
+deterministically by `scripts/ticket-lifecycle.sh --graduate` in the final
+phase's commit; parking one in `backlog_dir` is the owner's call alone. If you
+find a ticket in the wrong folder, say so in your report — do not silently
+relocate it.
+
+A project's tickets routinely direct work into **sibling repos** and into
 **live system state** (systemd user units, containers, firewall, cron). The
 polish job is to pin down, per phase, exactly which of the project's gates apply
 — because unlike a single-product repo, there is no one test command that covers

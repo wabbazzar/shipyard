@@ -46,6 +46,14 @@ parameters; do not assume them. Sources, in order:
    - `ticket_dir` — where tickets live (default `docs/tickets/`). May be split
      into `ticket_dir` + `backlog_dir` + `archive_dir`; **scan all of them**
      when resolving the next id.
+   - `lifecycle_dirs` — `true` when the project files tickets by **lifecycle
+     folder**, the folder being the status:
+     `ticket_dir` = not finished · `archive_dir` = built + verified ·
+     `backlog_dir` = parked by the owner. Absent `lifecycle_dirs`, everything
+     here behaves exactly as it does today — a flat ticket dir.
+     **A new ticket is always born in `ticket_dir`**, whatever the layout; you
+     never write directly into the archive or backlog folder, and you never move
+     a ticket (only `execute-ticket` graduates one, on completion).
    - `types` — the allowed `type` enum (default
      `feature | bug | refactor | chore | docs | test`). Normalize the
      `feat_`→`feature_` filename drift.
@@ -78,7 +86,10 @@ phase taxonomy.
 
 Scan the ticket dir (and any `backlog/` + `archive/` split), find the highest
 `XXX_` prefix across all of them, add 1, zero-pad to the project's width
-(default 3). If the dir doesn't exist yet, start at `001`. Never reuse a number.
+(default 3). If the dir doesn't exist yet, start at `001`. Never reuse a number,
+and never renumber an existing ticket — the id is the project's chronology, and
+under a lifecycle layout a ticket keeps its id and filename for life while only
+its folder changes.
 
 ## Step 2 — Clarify only what genuinely blocks (default-and-record)
 
