@@ -272,7 +272,7 @@ Include the move in the final evidence commit and push it.
 - [x] Deck has authored design/build/release entries and graph node; generated
       JSON is fresh, complete, and renders.
 - [x] Existing canonical README/install prose names eight skills; no new guide.
-- [ ] Feature/write/polish/execute and the cold critic conditionally consult the
+- [x] Feature/write/polish/execute and the cold critic conditionally consult the
       skill; no dangling `new-spec`, runner, config, or non-UI behavior change.
 - [ ] Full suite exceeds the 380-test baseline; syntax, leak, lifecycle, deck
       freshness/completeness/render, doctor, relink dry-run, and CI are green.
@@ -322,9 +322,16 @@ deferred/blocker notes.
   tests failed on missing referrals. GREEN: focused 10/10; both dangling
   `new-spec` references are gone; frontmatter and non-UI flow are unchanged;
   full 403/403; syntax, `py_compile`, leak, lifecycle, deck
-  fresh/complete/render, doctor, and diff checks passed. Commit: this scoped P2
-  commit; SHA/CI are recorded in P3.
-- P3 — pending
+  fresh/complete/render, doctor, and diff checks passed. Commit: `936f350`; CI
+  `30395237827` completed successfully.
+- P3 — ready for scoped commit. `builder: subagent (1 caller agent)` added two
+  failing-first contracts and additive referrals in execute-ticket and the cold
+  critic. RED: 33/35, with both new callers absent. GREEN: focused 35/35;
+  all 21 shoulder-mode and both hunk-safe cases pass; cold inputs, output
+  schema, non-UI flow, runners, config, events, and exit codes are unchanged.
+  Full 405/405; syntax, `py_compile`, leak, lifecycle, deck
+  fresh/complete/render, doctor, and diff checks pass. Commit: this scoped P3
+  commit; SHA/CI are recorded in P4.
 - P4 — pending
 
 ---

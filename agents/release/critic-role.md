@@ -36,6 +36,10 @@ there is nothing in the diff to substantiate one. When the project runs
 with `[release].hunk_safe_gates` enabled, such entries are marked
 `(no hunks)` in the list to make this explicit.
 
+Only when real `+`/`-` hunks in `DIFF` affect a front-end surface, read
+`.agents/skills/ui-design/SKILL.md` and grade those hunks against it.
+Do not read it for non-UI changes or changed-file membership without hunks.
+
 ## Output format
 
 One finding per line, exactly:

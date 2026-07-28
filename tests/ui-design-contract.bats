@@ -5,6 +5,8 @@ setup() {
   FEATURE="$BATS_TEST_DIRNAME/../skills/feature/SKILL.md"
   WRITE_TICKET="$BATS_TEST_DIRNAME/../skills/write-ticket/SKILL.md"
   POLISH_TICKET="$BATS_TEST_DIRNAME/../skills/polish-ticket/SKILL.md"
+  EXECUTE_TICKET="$BATS_TEST_DIRNAME/../skills/execute-ticket/SKILL.md"
+  RELEASE_CRITIC="$BATS_TEST_DIRNAME/../agents/release/critic-role.md"
 }
 
 @test "ui-design skill exists with the shared four-role frontmatter contract" {
@@ -71,4 +73,16 @@ setup() {
 @test "polish-ticket consults ui-design for UI gates and rendered viewport proof" {
   grep -Fq 'For a UI-shaped ticket, consult the `ui-design` skill while hardening its gates.' "$POLISH_TICKET"
   grep -Fq 'Require its declared viewports and rendered interaction states as proof.' "$POLISH_TICKET"
+}
+
+@test "execute-ticket consults installed ui-design only for UI-shaped implementation" {
+  grep -Fq 'For a UI-shaped phase, consult `.agents/skills/ui-design/SKILL.md` before' "$EXECUTE_TICKET"
+  grep -Fq 'implementation; non-UI phases follow their existing flow unchanged.' "$EXECUTE_TICKET"
+  grep -Fq 'Verify the real rendered surface at every ticket-declared viewport.' "$EXECUTE_TICKET"
+}
+
+@test "release critic reads ui-design only for real front-end diff hunks" {
+  grep -Fq 'Only when real `+`/`-` hunks in `DIFF` affect a front-end surface, read' "$RELEASE_CRITIC"
+  grep -Fq '`.agents/skills/ui-design/SKILL.md` and grade those hunks against it.' "$RELEASE_CRITIC"
+  grep -Fq 'Do not read it for non-UI changes or changed-file membership without hunks.' "$RELEASE_CRITIC"
 }

@@ -68,6 +68,11 @@ via `$QUARTET_NOTIFY_CMD` — resolving it up front is far cheaper than stalling
 mid-build. For everything else, apply the ticket's documented default and note
 it.
 
+For a UI-shaped phase, consult `.agents/skills/ui-design/SKILL.md` before
+implementation; non-UI phases follow their existing flow unchanged. Use its
+design contract while building.
+Verify the real rendered surface at every ticket-declared viewport.
+
 ## Step 2 — Build each phase as a thin vertical slice
 
 1. **Plan the slice + write it to the ticket Ledger** before working
