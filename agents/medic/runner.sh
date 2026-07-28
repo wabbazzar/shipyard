@@ -34,6 +34,7 @@ export QUARTET_SOURCE="${QUARTET_SOURCE:-system}"
 PROJECT_DIR=""
 MODE=""
 INCIDENT_SOURCE=""
+ORIGIN_EPISODE=""
 DRY_RUN=0
 CHECK_CONFIG=0
 SELF_TEST=0
@@ -42,6 +43,7 @@ while [ $# -gt 0 ]; do
     --project)         PROJECT_DIR="$2"; shift 2 ;;
     --mode)            MODE="$2"; shift 2 ;;
     --incident-source) INCIDENT_SOURCE="$2"; shift 2 ;;
+    --origin-episode)  ORIGIN_EPISODE="$2"; shift 2 ;;
     --dry-run)         DRY_RUN=1; shift ;;
     --check-config)    CHECK_CONFIG=1; shift ;;
     --self-test)       SELF_TEST=1; shift ;;
@@ -151,6 +153,8 @@ fi
 
 # ---------- config loader ---------------------------------------------------
 source "$QUARTET_DIR/agents/lib/load-config.sh"
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/post-run.sh"
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/spawn.sh"
 # shellcheck disable=SC1091
@@ -300,7 +304,12 @@ detect_post_run() {
   if [ -f "$log_file" ]; then
     log_tail="$(tail -200 "$log_file" 2>/dev/null || true)"
   fi
-  local id; id="$(stable_id "$INCIDENT_SOURCE" "$(now_iso)" "$PROJECT_NAME" post-run)"
+  local id
+  if [ -n "$ORIGIN_EPISODE" ]; then
+    id="$ORIGIN_EPISODE"
+  else
+    id="$(stable_id "$INCIDENT_SOURCE" "$PROJECT_NAME" post-run "$result_excerpt")"
+  fi
   push_incident "$(jq -n \
     --arg id "$id" \
     --arg src "$INCIDENT_SOURCE" \
@@ -375,7 +384,8 @@ detect_scan_runners() {
       [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" medic.incident.frozen \
         incident_id="$id" project="$PROJECT_NAME" frozen_until="$until_ts" \
         reason="self_failure" unit="$name" || true
-      quartet_notify "${DISPLAY^} $PROJECT_NAME (self_failure)" \
+      quartet_notify --class actionable --episode "$id" \
+        "${DISPLAY^} $PROJECT_NAME (self_failure)" \
         "$name systemd unit failed. Cannot self-escalate (forbidden_paths recursion). Frozen 24h — needs human inspection." || true
       i=$((i+1)); continue
     fi
@@ -827,7 +837,9 @@ if [ "$TOKENS_USED" -ge "$BUDGET_TOKENS" ]; then
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" medic.skipped \
     reason=budget tokens_used="$TOKENS_USED" budget="$BUDGET_TOKENS" \
     incidents="$INCIDENTS_DETECTED" || true
-  quartet_notify "${DISPLAY^} $PROJECT_NAME (budget)" \
+  BUDGET_EPISODE="$(agent_episode "$PROJECT_NAME" "$ROLE" "$MODE" budget "")"
+  quartet_notify --class routine --episode "$BUDGET_EPISODE" \
+    "${DISPLAY^} $PROJECT_NAME (budget)" \
     "over daily token budget ($TOKENS_USED/$BUDGET_TOKENS); $INCIDENTS_DETECTED incident(s) unclassified until tomorrow" || true
   jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --argjson n "$INCIDENTS_DETECTED" '{
     pass: true, mode: $mode, timestamp: $ts,
@@ -895,7 +907,15 @@ if [ ! -s "$RESULT_FILE" ]; then
     build_invocations: 0, build_lock_contention: 0,
     daily_cap_hit: false, errors: [$err]
   }' > "$RESULT_FILE"
-  quartet_notify "${DISPLAY^} ($PROJECT_NAME) FAILED" \
+  if [ -n "$ORIGIN_EPISODE" ]; then
+    NO_RESULT_EPISODE="$ORIGIN_EPISODE"
+  else
+    NO_RESULT_IDS="$(jq -r 'map(.incident_id) | sort | join(",")' <<<"$CANDIDATES")"
+    NO_RESULT_EPISODE="$(agent_episode "$PROJECT_NAME" "$ROLE" "$MODE" \
+      "classifier_no_result:$NO_RESULT_IDS" "")"
+  fi
+  quartet_notify --class actionable --episode "$NO_RESULT_EPISODE" \
+    "${DISPLAY^} ($PROJECT_NAME) FAILED" \
     "Medic detected $INCIDENTS_DETECTED incident(s) but claude did not classify. See $LOG_FILE."
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
     mode="$MODE" status="fail" exit_code="$CLAUDE_EXIT" tokens="$TOKENS" || true
@@ -949,6 +969,8 @@ while [ "$i" -lt "$N_CLASS" ]; do
   surface="$(jq -r '.surface' <<<"$inc")"
   source="$(jq -r '.source' <<<"$inc")"
   summary="$(jq -r '.incident_summary // .hypothesis // ""' <<<"$inc")"
+  notify_episode="$iid"
+  [ -n "$ORIGIN_EPISODE" ] && notify_episode="$ORIGIN_EPISODE"
 
   # Per-incident detail: probe name + HTTP status. Classification output may
   # strip evidence, so fall back to the detected-incidents file by id.
@@ -981,7 +1003,8 @@ while [ "$i" -lt "$N_CLASS" ]; do
 
     forbidden|infra|cap_hit)
       [ "$cls" = "cap_hit" ] && CAP_HIT=true
-      quartet_notify "${DISPLAY^} $PROJECT_NAME ($cls)" \
+      quartet_notify --class actionable --episode "$notify_episode" \
+        "${DISPLAY^} $PROJECT_NAME ($cls)" \
         "Incident: $summary"$'\n'"Action: notify-only ($cls)."
       # Freeze for 24h (cooldown).
       until_ts="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
@@ -1009,7 +1032,8 @@ while [ "$i" -lt "$N_CLASS" ]; do
         # 2026-07-24 alert storm); every sibling class freezes after notifying.
         # The id rolls at UTC midnight, so a persistent failure re-alerts once
         # per day, matching restart's one-per-UTC-day policy.
-        quartet_notify "${DISPLAY^} $PROJECT_NAME (transient→stuck)" \
+        quartet_notify --class actionable --episode "$notify_episode" \
+          "${DISPLAY^} $PROJECT_NAME (transient→stuck)" \
           "Retry didn't clear: $summary"
         push_action "$(jq -n --arg iid "$iid" '{incident_id:$iid, action:"retry", outcome:"still_failing"}')"
         until_ts="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
@@ -1031,6 +1055,11 @@ while [ "$i" -lt "$N_CLASS" ]; do
           rc=$?
           outcome=$([ "$rc" = "0" ] && echo "ok" || echo "fail")
           emit medic.action.restart "$iid" unit="$unit" outcome="$outcome"
+          if [ "$outcome" = "fail" ]; then
+            quartet_notify --class urgent --episode "$notify_episode" \
+              "${DISPLAY^} $PROJECT_NAME (restart failed)" \
+              "Incident: $summary"$'\n'"systemctl restart $unit failed."
+          fi
           push_action "$(jq -n --arg iid "$iid" --arg u "$unit" --arg o "$outcome" \
             '{incident_id:$iid, action:"restart", unit:$u, outcome:$o}')"
         elif [ -n "$RESTART_CMD" ]; then
@@ -1045,7 +1074,9 @@ while [ "$i" -lt "$N_CLASS" ]; do
           rc=$?
           outcome=$([ "$rc" = "0" ] && echo "ok" || echo "fail")
           emit medic.action.restart "$iid" via="restart_cmd" outcome="$outcome"
-          quartet_notify "${DISPLAY^} $PROJECT_NAME (restart)" \
+          if [ "$outcome" = "fail" ]; then restart_class="urgent"; else restart_class="routine"; fi
+          quartet_notify --class "$restart_class" --episode "$notify_episode" \
+            "${DISPLAY^} $PROJECT_NAME (restart)" \
             "Incident: $summary"$'\n'"Ran restart_cmd → $outcome. Re-fire suppressed until tomorrow (UTC)."
           until_ts="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
           state_set ".cooldowns[\"$iid\"] = {\"frozen_until\":\"$until_ts\",\"reason\":\"restart_cmd\"}"
@@ -1070,7 +1101,8 @@ while [ "$i" -lt "$N_CLASS" ]; do
       # restarts/reverts immediately; only the CODE FIX is rerouted.
       if [ "$DAILY_USED" -ge "$DAILY_CAP" ]; then
         CAP_HIT=true
-        quartet_notify "${DISPLAY^} $PROJECT_NAME (cap_hit)" \
+        quartet_notify --class actionable --episode "$notify_episode" \
+          "${DISPLAY^} $PROJECT_NAME (cap_hit)" \
           "Daily incident-repair cap ($DAILY_CAP) reached. Notify-only: $summary"
         push_action "$(jq -n --arg iid "$iid" \
           '{incident_id:$iid, action:"propose_repair", outcome:"cap_hit"}')"
@@ -1113,7 +1145,8 @@ while [ "$i" -lt "$N_CLASS" ]; do
         type="incident-repair" severity="high" tokens=0 || true
 
       # One page — the dispatch is where a human stamps it.
-      quartet_notify "${DISPLAY^} $PROJECT_NAME (incident-repair)" \
+      quartet_notify --class actionable --episode "$notify_episode" \
+        "${DISPLAY^} $PROJECT_NAME (incident-repair)" \
         "incident-repair proposed: $summary — awaiting stamp in the dispatch"
 
       DAILY_USED=$((DAILY_USED + 1))

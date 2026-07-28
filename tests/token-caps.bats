@@ -112,6 +112,16 @@ last_job_end() {
   [ "$status" -ne 0 ]
 }
 
+@test "conformance: every scheduled runner notification declares a class" {
+  run bash -c '
+    grep -hE "^[[:space:]]*quartet_notify " \
+      "$1"/agents/{build,release,scribe,medic,overseer}/runner.sh |
+      grep -v -- "--class"
+  ' _ "$QUARTET_ROOT"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
 # ---------------------------------------------------------------------------
 # 3. Medic daily token gate — svc-scoped
 # ---------------------------------------------------------------------------
@@ -131,6 +141,7 @@ last_job_end() {
   [ "$(stub_calls claude)" -eq 0 ]
   events_json | jq -e 'select(.event=="medic.skipped" and .reason=="budget")' >/dev/null
   last_job_end | jq -e '.status=="skipped" and .reason=="budget"' >/dev/null
+  events_json | jq -e 'select(.event=="notification.decision" and .class=="routine")' >/dev/null
 }
 
 @test "medic gate: foreign-svc tokens do NOT count -> claude still invoked" {

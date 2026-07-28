@@ -442,3 +442,9 @@ bats tests/
   32/32; full: 370/370. Orchestrator review added the dedup-lock fail-open case:
   an unavailable lock delivers with `reason=dedup_unavailable` rather than
   swallowing an urgent alert.
+- 2026-07-28 — Phase 2 built; `builder: subagent (1 agent)`. Both new
+  failing-first cases initially double-paged. Final focused: 76/76; full:
+  374/374. One result fingerprint now flows from the originating role through
+  `post-run.sh` into medic; identical classifier failures and origin→medic
+  escalation each produce `delivered,deduped` and one transport send. Failed
+  restart is urgent; passes, budget skips, and incomplete runs are routine.

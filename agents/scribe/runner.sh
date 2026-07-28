@@ -58,6 +58,8 @@ fi
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/load-config.sh"
 # shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/post-run.sh"
+# shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/spawn.sh"
 CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
@@ -137,7 +139,8 @@ if [ "$TOKENS_USED" -ge "$BUDGET_TOKENS" ]; then
   echo "[$SVC] skip: daily token budget reached ($TOKENS_USED >= $BUDGET_TOKENS)" >> "$LOG_FILE"
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" scribe.skipped \
     reason=budget tokens_used="$TOKENS_USED" budget="$BUDGET_TOKENS" || true
-  quartet_notify "$SVC (budget)" \
+  BUDGET_EPISODE="$(agent_episode "$PROJECT_NAME" "$ROLE" "$MODE" budget "")"
+  quartet_notify --class routine --episode "$BUDGET_EPISODE" "$SVC (budget)" \
     "over daily token budget ($TOKENS_USED/$BUDGET_TOKENS); run skipped until tomorrow" || true
   JOB_DUR=$(( $(date +%s) - JOB_START ))
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
@@ -248,18 +251,19 @@ fi
 
 # Notify only on failure — successful nightly refreshes are noise.
 if [ "$JOB_STATUS" = "fail" ] && true; then
-  quartet_notify "$SVC FAILED ($MODE)" \
+  RUN_EPISODE="$(agent_episode "$PROJECT_NAME" "$ROLE" "$MODE" result_failure "$RESULT_FILE")"
+  quartet_notify --class actionable --episode "$RUN_EPISODE" "$SVC FAILED ($MODE)" \
     "exit=$EXIT changed=$CHANGED — see $LOG_FILE" || true
+else
+  RUN_EPISODE="$(agent_episode "$PROJECT_NAME" "$ROLE" "$MODE" pass "$RESULT_FILE")"
 fi
 
 JOB_DUR=$(( $(date +%s) - JOB_START ))
 
 # Trailer — emits job.end. --no-escalate because scribe failures
 # aren't medic territory.
-# shellcheck disable=SC1091
-source "$QUARTET_DIR/agents/lib/post-run.sh"
 agent_finish "$SVC" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
-  --no-escalate \
+  --episode "$RUN_EPISODE" --no-escalate \
   mode="$MODE" exit_code="$EXIT" tokens="$TOKENS" changed="$CHANGED" \
   commit_outcome="$COMMIT_OUTCOME" >> "$LOG_FILE" 2>&1
 

@@ -57,6 +57,8 @@ fi
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/load-config.sh"
 # shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/post-run.sh"
+# shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/spawn.sh"
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/release-verdict.sh"
@@ -169,7 +171,8 @@ if [ "$TOKENS_USED" -ge "$BUDGET_TOKENS" ]; then
   echo "[$SVC] skip: daily token budget reached ($TOKENS_USED >= $BUDGET_TOKENS)" >> "$LOG_FILE"
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" release.skipped \
     reason=budget tokens_used="$TOKENS_USED" budget="$BUDGET_TOKENS" || true
-  quartet_notify "$SVC (budget)" \
+  BUDGET_EPISODE="$(agent_episode "$PROJECT_NAME" "$ROLE" "$MODE" budget "")"
+  quartet_notify --class routine --episode "$BUDGET_EPISODE" "$SVC (budget)" \
     "over daily token budget ($TOKENS_USED/$BUDGET_TOKENS); run skipped until tomorrow" || true
   JOB_DUR=$(( $(date +%s) - JOB_START ))
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
@@ -328,15 +331,24 @@ PY
 # from the events stream, not from the notification body.
 SUMMARY="$(tail -30 "$LOG_FILE" | grep -A20 -i "RELEASE RESULT" | head -10 || true)"
 [ -z "$SUMMARY" ] && SUMMARY="$SVC completed (mode=$MODE, exit=$EXIT). See $LOG_FILE."
-quartet_notify "$(release_notify_title "$PROJECT_NAME" "${DISPLAY^}" "$MODE" "$PASS" "$INCOMPLETE")" "$SUMMARY" || true
+if [ "$PASS" = "true" ]; then
+  RUN_CLASS="routine"; RUN_CAUSE="pass"
+elif [ "$INCOMPLETE" -eq 1 ]; then
+  RUN_CLASS="routine"; RUN_CAUSE="incomplete"
+else
+  RUN_CLASS="actionable"; RUN_CAUSE="gate_failure"
+fi
+RUN_EPISODE="$(agent_episode "$PROJECT_NAME" "$ROLE" "$MODE" "$RUN_CAUSE" "$RESULT_FILE")"
+quartet_notify --class "$RUN_CLASS" --episode "$RUN_EPISODE" \
+  "$(release_notify_title "$PROJECT_NAME" "${DISPLAY^}" "$MODE" "$PASS" "$INCOMPLETE")" \
+  "$SUMMARY" || true
 
 JOB_DUR=$(( $(date +%s) - JOB_START ))
 
 # Emit job.end + (on fail) escalate to medic, via shared trailer.
-# shellcheck disable=SC1091
-source "$QUARTET_DIR/agents/lib/post-run.sh"
 agent_finish "$SVC" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
-  mode="$MODE" exit_code="$EXIT" tokens="$TOKENS" category="$CATEGORY" >> "$LOG_FILE" 2>&1
+  --episode "$RUN_EPISODE" mode="$MODE" exit_code="$EXIT" tokens="$TOKENS" \
+  category="$CATEGORY" >> "$LOG_FILE" 2>&1
 
 echo "[$SVC] done pass=$PASS exit=$EXIT" >> "$LOG_FILE"
 exit "$EXIT"

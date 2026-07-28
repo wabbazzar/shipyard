@@ -66,6 +66,7 @@ job_end_status() { events_json | jq -r 'select(.event=="job.end" and (.svc|endsw
   [ "$(cat "$RELCOUNT")" -eq 2 ]                  # two release spawns
   [ "$(jq -r '.pass' "$PROJ/tmp/stallpass-release-result.json")" = "true" ]
   [ "$(job_end_status)" != "fail" ]               # ok/partial → medic NOT escalated
+  [ "$(events_json | jq -r 'select(.event=="notification.decision") | .class' | sort -u)" = "routine" ]
 }
 
 @test "stall_retries=2: a genuine pass:false verdict is NEVER retried" {
@@ -76,6 +77,7 @@ job_end_status() { events_json | jq -r 'select(.event=="job.end" and (.svc|endsw
   [ "$(n_retry_events)" -eq 0 ]         # a real verdict is not a stall
   [ "$(cat "$RELCOUNT")" -eq 1 ]        # one spawn only
   [ "$(job_end_status)" = "fail" ]
+  [ "$(events_json | jq -r 'select(.event=="notification.decision") | .class' | sort -u)" = "actionable" ]
 }
 
 @test "stall_retries=2: a persistent stall exhausts the retries then fails" {

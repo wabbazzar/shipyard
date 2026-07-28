@@ -50,6 +50,8 @@ CONFIG_FILE="$PROJECT_DIR/.agents/config.toml"
 
 source "$QUARTET_DIR/agents/lib/load-config.sh"
 # shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/post-run.sh"
+# shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/spawn.sh"
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
@@ -172,7 +174,8 @@ if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
     echo "[$SVC] skip: daily token budget reached ($TOKENS_USED >= $BUDGET_TOKENS)" >> "$LOG_FILE"
     [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" build.skipped \
       reason=budget tokens_used="$TOKENS_USED" budget="$BUDGET_TOKENS" || true
-    quartet_notify "$SVC (budget)" \
+    BUDGET_EPISODE="$(agent_episode "$PROJECT_NAME" "$ROLE" "$MODE" budget "")"
+    quartet_notify --class routine --episode "$BUDGET_EPISODE" "$SVC (budget)" \
       "over daily token budget ($TOKENS_USED/$BUDGET_TOKENS); run skipped until tomorrow" || true
     JOB_DUR=$(( $(date +%s) - JOB_START ))
     [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
@@ -259,20 +262,29 @@ $RUN_CONTEXT"
 
   SUMMARY="$(cat "$SUMMARY_FILE")"
   if [ "$PASS" = "true" ]; then
-    quartet_notify "$PROJECT_NAME ${DISPLAY^} ($MODE)" "$SUMMARY" || true
+    RUN_CAUSE="pass"
+    RUN_CLASS="routine"
     JOB_STATUS="ok"
   else
-    quartet_notify "$PROJECT_NAME ${DISPLAY^} FAILED ($MODE)" "$SUMMARY" || true
+    RUN_CAUSE="result_failure"
+    RUN_CLASS="actionable"
     JOB_STATUS="fail"
+  fi
+  RUN_EPISODE="$(agent_episode "$PROJECT_NAME" "$ROLE" "$MODE" "$RUN_CAUSE" "$RESULT_FILE")"
+  if [ "$PASS" = "true" ]; then
+    quartet_notify --class "$RUN_CLASS" --episode "$RUN_EPISODE" \
+      "$PROJECT_NAME ${DISPLAY^} ($MODE)" "$SUMMARY" || true
+  else
+    quartet_notify --class "$RUN_CLASS" --episode "$RUN_EPISODE" \
+      "$PROJECT_NAME ${DISPLAY^} FAILED ($MODE)" "$SUMMARY" || true
   fi
   # A nonzero claude exit with a usable result is a PARTIAL run — never ok.
   [ "$JOB_STATUS" = "ok" ] && [ "$EXIT" -ne 0 ] && JOB_STATUS="partial"
 
   JOB_DUR=$(( $(date +%s) - JOB_START ))
-  # shellcheck disable=SC1091
-  source "$QUARTET_DIR/agents/lib/post-run.sh"
   agent_finish "$SVC" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
-    mode="$MODE" exit_code="$EXIT" tokens="$TOKENS" >> "$LOG_FILE" 2>&1
+    --episode "$RUN_EPISODE" mode="$MODE" exit_code="$EXIT" tokens="$TOKENS" \
+    >> "$LOG_FILE" 2>&1
 
   echo "[$SVC] done pass=$PASS exit=$EXIT" >> "$LOG_FILE"
   exit "$EXIT"

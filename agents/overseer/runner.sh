@@ -36,6 +36,8 @@ export QUARTET_SOURCE="${QUARTET_SOURCE:-system}"
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/load-config.sh"   # load_config_json + quartet_notify
 # shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/post-run.sh"
+# shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/spawn.sh"         # spawn_model
 
 CODE_ROOT="${CODE_ROOT:-$HOME/code}"
@@ -115,6 +117,8 @@ assess() {
   svc="$name-overseer"
   result_file="$dir/tmp/overseer-result.json"
   mkdir -p "$dir/tmp" 2>/dev/null || true
+  # Dynamically scoped for the shared notification helper.
+  local CFG_JSON="$cfg_json" PROJECT_DIR="$dir" PROJECT_NAME="$name" SVC="$svc"
 
   # ---- gather the crew's recent output (bounded) --------------------------
   local ctx f
@@ -186,9 +190,11 @@ Return ONLY the JSON verdict, no prose."
 
   # ---- notify ONLY when something is wrong (silent + logged when healthy) --
   if [ "$status" != "ok" ]; then
-    local body
+    local body episode
     body="$(jq -r '(.findings // []) | map("• [\(.severity // "?")/\(.role // "?")] \(.issue // "")") | join("\n")' "$result_file" 2>/dev/null)"
-    quartet_notify "overseer: $name crew needs a look" "$summary${body:+
+    episode="$(agent_episode "$name" overseer assess "$status" "$result_file")"
+    quartet_notify --class actionable --episode "$episode" \
+      "overseer: $name crew needs a look" "$summary${body:+
 $body}"
     return 1
   fi

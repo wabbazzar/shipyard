@@ -76,6 +76,7 @@ n_assessed() { events_json | jq -c 'select(.event=="overseer.assessed")' | wc -l
   [ -s "$NOTIFY_LOG" ]
   grep -q "needs a look" "$NOTIFY_LOG"
   grep -q "false green" "$NOTIFY_LOG"
+  [ "$(events_json | jq -r 'select(.event=="notification.decision") | .class')" = "actionable" ]
 }
 
 @test "--project on a NON-autonomous repo is a no-op (exit 3, no assessment)" {

@@ -145,6 +145,27 @@ run_medic_scan() {
   [ ! -f "$MENTAT_RESULT" ]
 }
 
+@test "failed systemd restart is an urgent one-page episode" {
+  make_fake_quartet
+  p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
+  install_agents "$p" branch-present.toml rr2fail
+  topo_commit_all "$p"
+  prep_regression "$p" rr2fail restart
+  make_stub_script systemctl '
+case "$*" in
+  *list-units*) echo "'"$UNIT"' loaded failed"; exit 0 ;;
+  *restart*) exit 1 ;;
+  *) exit 0 ;;
+esac'
+
+  run_medic_scan "$p"
+  [ "$status" -eq 0 ]
+  decision="$(events_json | jq -c 'select(.event=="notification.decision")')"
+  [ "$(jq -r '.class' <<<"$decision")" = "urgent" ]
+  [ "$(jq -r '.outcome' <<<"$decision")" = "delivered" ]
+  [ "$(notify_log | grep -c 'restart failed')" = "1" ]
+}
+
 # ---------------------------------------------------------------------------
 # C. Retired build incident side-door
 # ---------------------------------------------------------------------------
