@@ -263,7 +263,7 @@ Include the move in the final evidence commit and push it.
 
 ## Definition of Done
 
-- [ ] Deterministic completeness check fails fixtures for all three omission
+- [x] Deterministic completeness check fails fixtures for all three omission
       classes, writes nothing, passes the real deck, and blocks in hook + CI.
 - [ ] `ui-design` is the eighth installed shared skill, self-contained and
       model-agnostic, with the locked craft/accessibility content.
@@ -285,7 +285,20 @@ Each phase appends: plan, `builder:` line, files, failing-first evidence,
 independently rerun commands with exit codes/test counts, commit SHA, and honest
 deferred/blocker notes.
 
-- P0 — pending
+- P0 — complete. `builder: subagent (1 gate agent)` owned
+  `gen-deck-data.py`, the wrapper, and nine fixture tests; the orchestrator
+  wired and reviewed hook/CI/gate references. RED on the pre-change generator:
+  focused suite 1/8 passed and 7/8 failed because `--check --root` was ignored.
+  GREEN: focused 9/9, including a byte-identical copied hook blocking a real
+  fixture commit with `GAP rogue: missing from GENERIC_SKILLS`; full suite
+  389/389. Syntax, `py_compile`, leak, lifecycle, deck fresh/complete/render,
+  doctor, and diff checks all exited 0. Real check reported
+  `deck-complete: 7 installed skills complete`. Files:
+  `scripts/gen-deck-data.py`, `scripts/check-deck-complete.sh`,
+  `tests/deck-complete.bats`, `.githooks/pre-commit`,
+  `.github/workflows/checks.yml`, `skills/gates.md.template`; mirrored live
+  `.agents/gates.md` without staging it. Commit: this scoped P0 commit; its SHA
+  is recorded in P1 after Git assigns it.
 - P1 — pending
 - P2 — pending
 - P3 — pending

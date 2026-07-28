@@ -18,6 +18,7 @@
 | Test suite | `<e.g. npm run test / .venv/bin/python -m pytest -q>` |
 | Typecheck / lint | `<e.g. npx tsc --noEmit / ruff check / py_compile core modules>` |
 | Build | `<e.g. npm run build / cargo build / n-a>` |
+| Shipyard deck completeness | `bash "$QUARTET_DIR/scripts/check-deck-complete.sh"` (only when changing the installed Shipyard skill/deck surface) |
 | Notify (owner alert) | `$QUARTET_NOTIFY_CMD` (baked into units at install; a wrapper that pages the owner — the ONLY notification path) |
 | Event stream dir | `$QUARTET_EVENTS_DIR` (append-only JSONL, one `job.*` / incident object per line) |
 

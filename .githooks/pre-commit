@@ -2,10 +2,10 @@
 # Pre-commit guard: block owner/machine-specific data from entering the
 # public repo. Enabled by install.sh via `git config core.hooksPath .githooks`.
 #
-# leak-check is the ONLY blocking part, and its exit status is this hook's exit
-# status. Ticket-lifecycle drift WARNS and never fails the commit (the blocking
-# enforcement lives in `install.sh --doctor` and in CI), so a misfiled ticket
-# can never wedge an unrelated commit.
+# Leak-check and deck completeness are blocking. Ticket-lifecycle drift WARNS
+# and never fails the commit (the blocking enforcement lives in
+# `install.sh --doctor` and in CI), so a misfiled ticket can never wedge an
+# unrelated commit.
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -22,4 +22,9 @@ if [ -f "$LC_ENGINE" ]; then
   fi
 fi
 
-exec "$ROOT/scripts/leak-check.sh" --staged
+"$ROOT/scripts/leak-check.sh" --staged || exit $?
+
+DECK_COMPLETE="$ROOT/scripts/check-deck-complete.sh"
+if [ -f "$DECK_COMPLETE" ]; then
+  bash "$DECK_COMPLETE" || exit $?
+fi

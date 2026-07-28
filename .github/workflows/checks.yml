@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: bash -n all scripts
         run: |
-          bash -n install.sh agents/lib/*.sh agents/*/runner.sh .githooks/pre-commit scripts/leak-check.sh scripts/check-deck-fresh.sh scripts/ticket-lifecycle.sh
+          bash -n install.sh agents/lib/*.sh agents/*/runner.sh .githooks/pre-commit scripts/*.sh
       - name: py_compile generators
         run: python3 -m py_compile scripts/gen-deck-data.py
 
@@ -27,6 +27,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: deck data is generated from the skills (not stale)
         run: bash scripts/check-deck-fresh.sh
+      - name: every installed skill and crew has authored deck content
+        run: bash scripts/check-deck-complete.sh
 
   ticket-lifecycle:
     runs-on: ubuntu-latest

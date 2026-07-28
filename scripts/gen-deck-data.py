@@ -17,6 +17,7 @@ Round-trip contract: running this script must reproduce docs/shipyard-data.json
 byte-for-byte against its committed state. scripts/check-deck-fresh.sh enforces
 it.
 """
+import argparse
 import collections
 import json
 import os
@@ -28,6 +29,9 @@ EDITORIAL = os.path.join(REPO, "docs", "deck-editorial.json")
 INSTALL_SH = os.path.join(REPO, "install.sh")
 SKILLS_DIR = os.path.join(REPO, "skills")
 OUT = os.path.join(REPO, "docs", "shipyard-data.json")
+# `install` is the hub-only installer workflow, not a project-installed skill
+# or crew/deck capability. Every other skills/*/SKILL.md must be represented.
+DECK_EXEMPT_SKILLS = {"install"}
 
 # Canonical ordering. The crews are the five loops; `human` is the operator and
 # is NOT a crew (it never gets a crew[] block), but it is a graph role.
@@ -78,13 +82,13 @@ def parse_frontmatter(path):
     return fm
 
 
-def load_skills():
+def load_skills(install_sh=INSTALL_SH, skills_dir=SKILLS_DIR):
     """id -> {roles, disposition, kind} from the frontmatter of every skill in
     GENERIC_SKILLS."""
-    ids = read_generic_skills(INSTALL_SH)
+    ids = read_generic_skills(install_sh)
     skills = collections.OrderedDict()
     for sid in ids:
-        p = os.path.join(SKILLS_DIR, sid, "SKILL.md")
+        p = os.path.join(skills_dir, sid, "SKILL.md")
         if not os.path.isfile(p):
             raise SystemExit("gen-deck-data: GENERIC_SKILLS lists %s but %s is missing" % (sid, p))
         skills[sid] = parse_frontmatter(p)
@@ -114,7 +118,84 @@ def crew_skill_entry(e):
     )
 
 
-def main():
+def check_deck(root):
+    """Validate that every installed skill has complete, authored deck coverage.
+
+    This path is deliberately read-only. It parses the same installer manifest,
+    frontmatter, crew membership, and editorial mappings as generation, but
+    never opens docs/shipyard-data.json.
+    """
+    install_sh = os.path.join(root, "install.sh")
+    skills_dir = os.path.join(root, "skills")
+    editorial = os.path.join(root, "docs", "deck-editorial.json")
+    skills = load_skills(install_sh, skills_dir)
+    generic_ids = set(skills)
+
+    with open(editorial, encoding="utf-8") as f:
+        ed = json.load(f, object_pairs_hook=collections.OrderedDict)
+
+    gaps = []
+    disk_ids = sorted(
+        entry.name
+        for entry in os.scandir(skills_dir)
+        if entry.is_dir()
+        and os.path.isfile(os.path.join(entry.path, "SKILL.md"))
+    )
+    for sid in disk_ids:
+        if sid not in generic_ids and sid not in DECK_EXEMPT_SKILLS:
+            gaps.append((sid, "missing from GENERIC_SKILLS"))
+
+    graph_counts = collections.Counter(
+        node.get("_file")
+        for node in ed.get("graph", {}).get("skills", [])
+        if node.get("_file") is not None
+    )
+    crew_cards = {}
+    for crew in ed.get("crew", []):
+        crew_cards[crew.get("id")] = collections.Counter(
+            card.get("_file")
+            for card in crew.get("skills", [])
+            if card.get("_file") is not None
+        )
+
+    for sid, fm in skills.items():
+        graph_count = graph_counts[sid]
+        if graph_count == 0:
+            gaps.append((sid, "missing graph.skills _file mapping"))
+
+        for crew_id in member_crews(fm["roles"]):
+            card_count = crew_cards.get(crew_id, {}).get(sid, 0)
+            if card_count == 0:
+                gaps.append((sid, "missing authored crew card for %s" % crew_id))
+
+    if gaps:
+        for sid, reason in sorted(gaps):
+            print("deck-complete: GAP %s: %s" % (sid, reason), file=sys.stderr)
+        return 1
+
+    print("deck-complete: %d installed skills complete" % len(skills))
+    return 0
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="validate skill/deck completeness without writing generated data",
+    )
+    parser.add_argument(
+        "--root",
+        metavar="PATH",
+        help="repository root to inspect (valid only with --check)",
+    )
+    args = parser.parse_args(argv)
+    if args.root and not args.check:
+        parser.error("--root requires --check")
+    return args
+
+
+def generate():
     skills = load_skills()
     with open(EDITORIAL, encoding="utf-8") as f:
         ed = json.load(f, object_pairs_hook=collections.OrderedDict)
@@ -210,6 +291,14 @@ def main():
     with open(OUT, "w", encoding="utf-8") as f:
         f.write(text)
     return 0
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.check:
+        root = os.path.abspath(args.root or REPO)
+        return check_deck(root)
+    return generate()
 
 
 if __name__ == "__main__":
