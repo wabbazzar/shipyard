@@ -1056,7 +1056,7 @@ after the explicit invocation marker lands.
   rc=0.
 - pending-path + lifecycle proof: lifecycle check rc=0; pending path exists and
   complete path does not.
-- commit: this Slice B commit.
+- commit: `1071281`.
 - notes / blockers: initial real smoke reported sessions=1, turns=1,
   agent_calls=0 after a post-marker `followup_task`; this exposed that the
   adapter counted only spawns. The explicit delegation-call set now covers
