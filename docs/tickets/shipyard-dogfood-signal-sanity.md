@@ -2,10 +2,10 @@
 
 - **Created:** 2026-07-28
 - **Owner:** wabbazzar
-- **Status:** Draft
+- **Status:** Polished — ready for autonomous execution
 - **Priority:** high
 - **Type:** chore
-- **Estimated Points:** 15 (5 phases, cap 5/phase)
+- **Estimated Points:** 18 (6 phases, cap 5/phase)
 - **Refs:** `docs/tickets/ticket-lifecycle-folders.md`,
   `docs/tickets/delegation-plan-pipeline.md`, `.agents/config.toml`,
   `.agents/gates.md`, `agents/lib/load-config.sh`,
@@ -80,7 +80,9 @@ BopBop conversation replies.
 
 1. Add `[notify].signal_level = "actionable"` to the active fleet. Unset keeps
    today's delivery behavior for backward compatibility.
-2. Notification calls declare a class explicitly. Existing two-argument
+2. Classified calls use
+   `quartet_notify --class <routine|actionable|urgent> [--episode <key>]`
+   `[--window <seconds>] <title> <body>`. Existing two-argument
    `quartet_notify <title> <body>` remains valid and preserves today's behavior.
 3. Deduplication is keyed by project + cause/fingerprint + a bounded window.
    Message text alone is not a stable key.
@@ -96,6 +98,28 @@ BopBop conversation replies.
 8. The delegation outcome is reported honestly. Add the exact cutoff and
    record an insufficient sample if fewer than five post-change executions
    exist; never blend pre-change sessions or invent runs.
+9. Levels are ordered `routine < actionable < urgent`; accepted policies are
+   `all`, `actionable`, `urgent`, and `off`. Unset means `all`. An invalid policy
+   fails open to `all` and records `reason=invalid_policy`, so a typo cannot
+   swallow an urgent page.
+10. Default dedup window is 86,400 seconds. Suppression never consumes a key;
+   a delivered notification consumes it only after transport exit 0. Urgent
+   messages are also deduped when they share an explicit episode.
+11. The stale backlog duplicate named before this ticket was drafted is already
+   absent: a basename scan across every active repo found no duplicate ticket.
+   Phase 5 records that evidence; it does not delete an unrelated file.
+12. `quartet_notify` reads the caller's already-loaded `CFG_JSON`; it does not
+    reread TOML on each send. Dedup state lives under the caller's project
+    `tmp/`, protected by `flock` around read/modify/write and atomic rename.
+13. Every classified decision emits `notification.decision` with class,
+    episode, and `delivered|suppressed|deduped`; legacy two-argument calls do not
+    gain new behavior. Existing job/incident/proposal events remain independent.
+14. The originating role derives one stable episode from project, role, mode,
+    cause, and result fingerprint, then `post-run.sh` passes that exact value to
+    medic. Medic never regenerates a timestamp-based key for the handoff.
+15. The release-critic owner fallback stays outside scheduled-noise filtering:
+    it is direct author feedback and must remain deliverable when a project
+    selects `signal_level = "actionable"`.
 
 ### User-decision class
 
@@ -130,13 +154,16 @@ Out of scope:
       unset config preserves existing behavior.
 - [ ] A pre-change failing Bats fixture proves repeated medic no-result scans
       emit one alert for the same project/cause/window, not one per timer tick.
-- [ ] Build, release, scribe, medic, overseer, and critic notification call
-      sites have explicit, reviewed classifications.
+- [ ] Build, release, scribe, medic, and overseer notification call sites have
+      explicit classifications; critic fallback remains a directly tested,
+      always-actionable exception.
 - [ ] A role failure followed by medic does not double-page the same episode.
 - [ ] Direct BopBop replies remain functional and release-critic fallback still
       delivers.
 - [ ] Suppressed routine activity still appears in the event stream and a real
       Ice Dispatch generation succeeds.
+- [ ] `notification.decision` distinguishes delivered, policy-suppressed, and
+      episode-deduped sends without replacing the underlying job/incident event.
 - [ ] The active non-dummy fleet uses the actionable Signal level.
 - [ ] A 24-hour measurement command reports zero routine Shipyard crew sends
       and no more than one actionable send per project/cause/window. If 24
@@ -157,8 +184,10 @@ Out of scope:
 
 ## Phases
 
-Each phase is one verified commit on `main`. Scope `git add` to named files,
-never `git add -A`. Every delegated brief includes:
+Each Shipyard phase is one verified commit on `main`. The fleet phase makes one
+scoped config commit per repository and records every SHA. Scope `git add` to
+named files, never `git add -A`. Subagents do not commit or push; the
+orchestrator reruns gates, commits, and pushes. Every delegated brief includes:
 
 > Converge honestly or report the precise blocker with the actual evidence —
 > NEVER fake green, weaken a check, or hand-wave "should work". Run the real
@@ -167,9 +196,12 @@ never `git add -A`. Every delegated brief includes:
 
 ### Phase 1 — Notification policy primitive (3 pts)
 
-**Delegation:** subagent — implement the backward-compatible classified
-notification API and hermetic Bats fixtures; return ≤40 lines: files changed,
-commands + exit codes, exact assertions, blockers.
+**Delegation:** subagent — allowed files:
+`agents/lib/load-config.sh`, `tests/helpers.bash`,
+`tests/harness.bats`, `tests/notification-policy.bats`; implement the locked
+classified API and failing-first fixtures. Do not edit runners, commit, or
+push. Return ≤40 lines: files changed, commands + exit codes, exact assertions,
+blockers.
 
 - Extend the shared notification helper with `routine`, `actionable`, and
   `urgent` classes plus an explicit episode key/window.
@@ -177,19 +209,33 @@ commands + exit codes, exact assertions, blockers.
   not require a new secret-bearing environment channel.
 - Keep the current two-argument call valid and byte-compatible when the setting
   is unset.
-- Store dedup state in a project-local ignored runtime path with atomic updates;
-  never place machine data in tracked files.
+- Store dedup state in the project-local ignored `tmp/`, with `flock` plus
+  temp-file/rename around the whole update; never place machine data in tracked
+  files.
 - Tests cover unset compatibility, each level, dedup expiry, different keys,
-  concurrent-safe state handling, and complete event logging.
+  urgent dedup, a failed transport that does not consume the key,
+  concurrent-safe state handling, invalid-policy fail-open, and
+  `notification.decision` events.
 
 **Phase gate:** focused notification Bats file, syntax sweep, leak-check, then
 the full gate battery from `.agents/gates.md`.
 
+```bash
+bats tests/harness.bats tests/notification-policy.bats
+bash -n agents/lib/load-config.sh
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bats tests/
+```
+
 ### Phase 2 — Classify call sites and stop the medic cascade (5 pts)
 
-**Delegation:** subagent — classify every Shipyard notification call site,
-implement the medic no-result cooldown and cross-role episode key, and return
-≤40 lines with a path:line classification table plus focused/full test results.
+**Delegation:** subagent — allowed files: `agents/{build,release,scribe,medic,
+overseer}/runner.sh`, `agents/lib/post-run.sh`,
+`tests/medic-no-result-cooldown.bats` and directly affected runner tests.
+Classify calls, implement the no-result cooldown and stable post-run episode;
+do not edit the critic, config, commit, or push. Return ≤40 lines with a
+path:line classification table, commands + exit codes, evidence, blockers.
 
 - Routine: successful scheduled runs, budget/rate-limit skips, and incomplete
   runs already represented in Dispatch.
@@ -197,46 +243,113 @@ implement the medic no-result cooldown and cross-role episode key, and return
   needs, overseer findings, and critic fallback.
 - Urgent: unsafe stop, outage, and failed recovery/restart.
 - Fix `agents/medic/runner.sh`'s no-result path with a stable failure
-  fingerprint and cooldown written before exit.
+  fingerprint and cooldown written before exit. Two identical scans send once;
+  a changed classifier exit/cause is a different episode.
 - Give an originating role failure and its post-run medic escalation the same
-  episode key so they cannot double-page.
+  episode key so they cannot double-page. Derive it once from the originating
+  result fingerprint and pass it through `post-run.sh`.
 - Preserve Scribe's no-escalate behavior and critic direct delivery order.
 
 **Phase gate:** focused runner/medic/critic Bats files, two-scan cascade fixture,
 syntax sweep, leak-check, then the full gate battery.
 
-### Phase 3 — Fleet policy and live notification verification (2 pts)
+```bash
+bats tests/notification-policy.bats tests/medic-no-result-cooldown.bats \
+  tests/harness.bats \
+  tests/incident-reroute.bats tests/medic-transient-cooldown.bats \
+  tests/release-incomplete-notify.bats tests/overseer.bats \
+  tests/shoulder-mode-harness.bats
+bash -n agents/lib/*.sh agents/*/runner.sh agents/release/critic-*.sh
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bats tests/
+```
 
-**Delegation:** subagent — audit the six active fleet configs and installed
-units, apply only the `actionable` policy, and return ≤40 lines: repo/commit,
-doctor rc, effective policy, notification probe evidence, blockers.
+### Phase 3 — Shipyard policy, documentation, and controlled probes (2 pts)
 
-- Configure Aurora, Bopthere, Shredly, Starbird, 2pizzaclub, Ice, and Shipyard;
-  exclude Caladan.
+**Delegation:** subagent — allowed files: `.agents/config.toml`, `README.md`,
+and notification tests only. Add Shipyard's actionable policy and document the
+API/settings. Do not touch downstream repos, commit, push, or contact Signal.
+Return ≤40 lines with scoped diff, focused/full gate exit codes, and evidence.
+
+- Configure Shipyard with `[notify].signal_level = "actionable"` and the
+  locked default dedup window.
+- Document the policy values, classified API, event record, and unset
+  compatibility.
+- Prove delivery/suppression/dedup with the hermetic transport stub. A real
+  Signal self-message is optional and requires a separate explicit owner
+  authorization; it is not an automated gate.
+- Confirm `--check-config` exposes the effective policy where role runners
+  already have that read-only surface.
+
+**Phase gate:**
+
+```bash
+bats tests/harness.bats tests/notification-policy.bats \
+  tests/medic-no-result-cooldown.bats
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bats tests/
+```
+
+### Phase 4 — Six downstream policies and Ice/BopBop verification (3 pts)
+
+**Delegation:** one subagent brief per downstream repository — only
+`.agents/config.toml` may change. Return ≤40 lines each: pre/post status,
+scoped diff, project gate rc, doctor rc, proposed commit; do not commit/push.
+The orchestrator serializes repos, re-verifies, makes one scoped commit per
+repo, and records/pushes every SHA.
+
+- Configure Aurora, Bopthere, Shredly, Starbird, 2pizzaclub, and Ice; Caladan
+  is excluded. With Shipyard from Phase 3, that is seven configured repos.
+- Begin with `git status --short --branch`. Aurora and Ice were observed on
+  local `publish/ticket-lifecycle` branches ahead of their remotes while this
+  ticket was polished. Reconcile and push those already-authorized migration
+  commits onto trunk first; never absorb unknown dirty files.
 - Reinstall only if the implementation actually requires generated-unit drift.
-- Prove an actionable fixture reaches the configured transport once, a routine
-  fixture does not, and direct BopBop conversation remains independent.
-- Generate Ice Dispatch with its service virtualenv and prove suppressed
-  routine activity remains represented.
-- Commit and push each repository's scoped config change; do not absorb
-  unrelated dirty files.
+- Prove BopBop conversation independence with its hermetic thread tests; do not
+  use a real inbound/outbound Signal message as a gate.
+- Generate Ice Dispatch with its service virtualenv and prove routine crew
+  activity remains represented.
 
-**Phase gate:** each repo's own gate/doctor plus Shipyard's full battery.
+Use each repo's `.agents/gates.md`. Primary project gates observed at polish:
+Aurora `.venv/bin/python -m pytest`; Bopthere `npx vitest run`; Shredly
+`npm test`; Starbird `npx vitest run && npx svelte-check --threshold error &&
+npm run build`; 2pizzaclub `node tools/rag-eval.mjs`; Ice has no monolithic
+suite, so use its named component gates.
 
-### Phase 4 — Shipyard lifecycle and Codex doctor dogfood (3 pts)
+```bash
+for repo in aurora bopthere shredly starbird 2pizzaclub wabbazzar-ice; do
+  git -C "$HOME/code/$repo" status --short --branch
+  bash "$HOME/code/shipyard/install.sh" --doctor --project "$HOME/code/$repo"
+done
+cd "$HOME/code/bopbop/server" &&
+  .venv/bin/pytest -q tests/test_api_thread_record.py tests/test_thread_awareness.py
+cd "$HOME/code/wabbazzar-ice" &&
+  .venv/bin/python scripts/newspaper.py --no-prose --stdout | jq .
+```
 
-**Delegation:** subagent — reconcile every current ticket against git
-reachability and acceptance evidence, propose the complete/pending/freezer map,
-then perform only the approved deterministic moves; return ≤40 lines with
-filename → class → evidence and doctor/gate results.
+### Phase 5 — Shipyard lifecycle and Codex doctor dogfood (3 pts)
+
+**Delegation:** subagent — allowed files: `.agents/config.toml`, `AGENTS.md`,
+and `docs/tickets/**`. First return all 13 current
+filename → complete/pending/freezer → header/ledger/git evidence in ≤40 lines;
+the orchestrator validates that map, then authorizes the deterministic moves.
+Do not edit installer/core scripts, commit, or push.
 
 - Change `[write_ticket]` to:
   `ticket_dir = "docs/tickets/pending"`,
   `archive_dir = "docs/tickets/complete"`,
   `backlog_dir = "docs/tickets/freezer"`,
   `scan_dirs` covering all three, and `lifecycle_dirs = true`.
-- Remove the stale backlog duplicate already authorized by the owner.
+- Record that the authorized stale backlog duplicate is absent across the
+  active fleet; remove one only if the basename audit identifies exact
+  duplicate paths and git history proves which copy is stale.
 - Reconcile ticket status/ledger text to shipped commits before moving files.
+- The lifecycle engine scans only configured lifecycle directories; it does not
+  discover legacy files in the flat root. Audit and `git mv` the current flat
+  files first, then enable the config, then run `--check`. Do not enable the
+  config first and mistake an empty scan for a successful migration.
 - Create/reconcile the root `AGENTS.md` via the installed bridge mechanism;
   do not hand-maintain a divergent skill list.
 - Run doctor on Shipyard and verify skill resolution from a real Codex session
@@ -245,24 +358,76 @@ filename → class → evidence and doctor/gate results.
 **Phase gate:** ticket lifecycle checker, install/doctor/skill tests,
 `install.sh --doctor --project .`, syntax/leak/deck checks, then full Bats.
 
-### Phase 5 — Measurable delegation cutoff and truthful closeout (2 pts)
+```bash
+find docs/tickets -type f -name '*.md' -printf '%f\n' | sort | uniq -d
+bats tests/ticket-lifecycle-script.bats tests/ticket-lifecycle-install.bats \
+  tests/install-skills.bats tests/relink.bats tests/doctor.bats
+bash install.sh --relink --project .
+bash scripts/ticket-lifecycle.sh --project . --check
+bash install.sh --doctor --project .
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bats tests/
+```
 
-**Delegation:** subagent — add an exact ISO-8601 `--since` boundary to the
-delegation reporter with fixtures, run it at the recorded pipeline cutover,
-and return ≤40 lines with sample size, metrics, ledger counts, and blockers.
+### Phase 6 — Measurable delegation cutoff and truthful closeout (2 pts)
 
-- `--since` is timezone-aware, inclusive, and mutually coherent with
-  `--days`/`--all`; invalid input exits 2 with a useful error.
-- Ticket discovery scans lifecycle directories after Phase 4.
+**Delegation:** subagent — allowed files:
+`scripts/delegation-report.py`, `tests/delegation-report.bats`, and the two
+pipeline tickets. Add the exact boundary and recursive lifecycle ledger scan;
+do not manufacture sessions, commit, or push. Return ≤40 lines with commands +
+exit codes, exact cutoff/sample/metrics/ledger counts, and blockers.
+
+- `--since` is timezone-aware and inclusive. It conflicts with either
+  explicitly supplied `--days` or `--all` and exits 2; invalid input also exits
+  2 with a useful error.
+- Naive ISO timestamps are invalid. Malformed transcript timestamps are skipped
+  and counted in the report instead of silently disappearing. A timestamp
+  exactly equal to the boundary is included.
+- Ticket discovery scans lifecycle directories after Phase 5.
 - Update `delegation-plan-pipeline.md` with the exact cutoff, current sample,
   and whether its five-session outcome gate is measurable.
 - Record the Signal baseline and exact 24-hour follow-up query in this Ledger.
-- Graduate this ticket only after every immediately executable acceptance item
-  is green. Time-deferred measurements remain explicitly scheduled evidence,
-  not fabricated completion claims.
+- Graduate this ticket after every immediately executable acceptance item is
+  green and the Ledger names the 24-hour follow-up owner, UTC due time, and
+  exact query. That named follow-up satisfies the time-deferred item; it is not
+  a claim that 24 hours already elapsed.
 
 **Phase gate:** delegation-report fixtures and real read-only run, lifecycle
 gate, syntax/leak/deck checks, full Bats, doctor, clean status, push.
+
+```bash
+bats tests/delegation-report.bats
+python3 scripts/delegation-report.py --since <recorded-UTC-cutover> --json
+bash scripts/ticket-lifecycle.sh --project . --check
+bash install.sh --doctor --project .
+bash -n install.sh agents/lib/*.sh agents/*/runner.sh \
+  agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit
+python3 -m py_compile scripts/gen-deck-data.py scripts/delegation-report.py
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+node scripts/check-deck-render.mjs  # rc 3 is the documented optional skip
+bats tests/
+```
+
+## Polish findings
+
+- Existing job, incident, proposal, and approval events—not Signal—are the
+  routine source of truth. Filtering must not gate those event writes.
+- Severity filtering alone cannot stop the observed storm because the medic
+  classifier failure is actionable and currently has no cooldown. Phase 2
+  therefore requires both classification and episode deduplication.
+- `post-run.sh` is the cross-role handoff. Pass a stable episode id into its
+  synchronous medic invocation instead of inferring identity from two titles.
+- The two-argument helper case is load-bearing because project-owned callers
+  may not adopt classified options in the same commit.
+- A 24-hour result cannot be manufactured in one execution. Acceptance is a
+  timestamped baseline, installed query, and immediate two-scan probes; the
+  elapsed result remains a named follow-up.
+- The lifecycle engine does not migrate flat roots, and the live fleet is not
+  uniformly on a clean trunk. Both operations need explicit ordering.
+- No open decision remains. The owner delegated the policy choice and requested
+  automatic progression to execute-ticket.
 
 ## Ledger
 
@@ -270,3 +435,5 @@ gate, syntax/leak/deck checks, full Bats, doctor, clean status, push.
 - 2026-07-28 — `builder: subagent (1 audit agent)` for investigation:
   123 sends observed; 70 repeated medic classification-failure pages; exact
   control points and notification classification returned in ≤40 lines.
+- 2026-07-28 — Polished with exact phase gates, a stable cross-role episode
+  handoff, flat-to-lifecycle ordering, and a non-fabricated 24-hour contract.
