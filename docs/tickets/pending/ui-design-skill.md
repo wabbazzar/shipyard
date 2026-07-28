@@ -1,426 +1,296 @@
-# UI/UX design skill + a hard deck-completeness gate
+# UI-design skill and a deterministic deck-completeness gate
 
-- **Status:** draft (ready for `polish-ticket`; awaiting human stamp)
+- **Created:** 2026-07-23
+- **Owner:** wabbazzar
+- **Status:** Polished — ready for `execute-ticket`
 - **Priority:** medium
 - **Type:** feature
-- **Estimated Points:** 17 (P0 3 · P1 5 · P2 3 · P3 5 · P4 1)
+- **Estimated Points:** 17 (P0 5 · P1 5 · P2 2 · P3 3 · P4 2)
+- **Refs:** `scripts/gen-deck-data.py`, `scripts/check-deck-fresh.sh`,
+  `install.sh` `GENERIC_SKILLS`, `docs/deck-editorial.json`,
+  `.agents/gates.md`, `.githooks/pre-commit`, `.github/workflows/checks.yml`.
 
-## Summary
+## Goal and measured baseline
 
-Two coupled deliverables:
+Ship one self-contained, model-agnostic `ui-design` skill used by the ticket
+pipeline and release critic whenever work has a front-end surface. Make it
+impossible for an installed skill to be absent or fallback-authored on the
+Shipyard deck while current gates remain green.
 
-1. **Phase 0 — a hard deck-completeness gate.** Land *first* a strict gate
-   (`scripts/check-deck-complete.sh`, wired into the pre-commit hook **and** CI)
-   that **fails the commit** if any skill is missing from the deck — not
-   registered in `GENERIC_SKILLS`, missing its graph node, or relying on
-   fallback prose. This closes the hole where a skill can be built and shipped
-   while silently absent from the deck with every existing gate green. It makes
-   "built the skill but forgot the deck" **impossible**, and it proves itself:
-   creating the ui-design skill in P1 turns it RED until registration turns it
-   green.
-2. **Phases 1–4 — the ui-design skill.** A self-contained, model-agnostic UI/UX
-   design skill at `skills/ui-design/SKILL.md` that distills the frontend-design
-   craft (palette, type, layout, signature, copy, restraint, self-critique) into
-   shipyard's skill format — registered on the deck, installed per project, and
-   referenced by the crew skills so **any role consults it whenever the surface
-   in question is a front-end**, at any stage. v1 ships the distilled craft only;
-   the label-family / naming-consistency rule is explicitly deferred.
+Measured on `main` at `54fa906`, 2026-07-28:
 
-The Phase 0 gate is **shipyard-repo-local** (the deck, `gen-deck-data.py`, and
-`checks.yml` are shipyard's own artifacts — not per-installed-project), so it is
-*not* a fleet-live runner change. The ui-design skill file + `install.sh` +
-caller edits (P1/P3) still are.
+- `skills/` has **8 directories**: 7 installed shared skills plus the
+  intentionally non-`GENERIC_SKILLS` installer workflow.
+- `GENERIC_SKILLS` has **7** entries. After this ticket: 9 directories and 8
+  installed shared skills.
+- `bats --count tests/` prints `380`.
+- `scripts/check-deck-complete.sh` is absent.
+- `python3 scripts/gen-deck-data.py --check` exits 0 with zero output because
+  argv is currently ignored; it is not a check.
+- Python 3.12.3, Bats 1.10.0, Node v24.12.0, `gh` 2.83.2, and jq 1.7 are
+  available. `py_compile`, current shell syntax, and deck freshness exit 0.
 
-## Build context & verified toolchain (baselined 2026-07-23)
+## Locked decisions
 
-Run on a **branch off `main`** — never on `main`. `skills/**` and `install.sh`
-are read live by every installed project on the next timer fire (merge-is-live;
-`.agents/gates.md` Traps "Fleet-live edits"), and `can_merge=false` + human
-stamp + green CI are the wall. Branch suggestion: `feat/ui-design-skill`.
-Rollback = delete the branch; nothing is live until merge.
+| Decision | Result |
+|---|---|
+| Skill | `skills/ui-design/SKILL.md`; roles `[design, build, release, human]`, `disposition: adapted`, `kind: shared`. |
+| Content | Subject/audience grounding; named palette; type roles; structural layout and one signature element; responsive/accessibility/reduced-motion floor; concise copy; critique loop. No provider, plugin, model, or named screenshot tool. |
+| Naming-consistency rule | Deferred; not smuggled into v1. |
+| Completeness | `gen-deck-data.py --check --root <repo>` owns the logic; a thin `check-deck-complete.sh` is justified as the stable hook/CI gate, not documentation. |
+| Exemption | Only `skills/install`; a named constant with a reason. |
+| Docs | Update existing `README.md` Skills-parity and `docs/INSTALL.md` L5 only. No new guide or heading. |
+| Deck | Authored entries under design/build/release plus one graph node; regenerate `docs/shipyard-data.json`; both published deck URLs must catch up after push. |
+| Work mode | This checkout on `main`; no branch/worktree. Scope every `git add`; full gates before every commit. |
 
-Every gate this ticket relies on was run during polishing and is green — use
-these as the baseline a regression is measured against:
+There are no open decisions. No spend, new dependency, service, port, or manual
+deployment is required. The bridge closeout ticket should land first because it
+also edits `README.md` and `docs/INSTALL.md`; this is file serialization, not a
+design blocker.
 
-| Gate | Command | Baseline (2026-07-23) |
-|------|---------|-----------------------|
-| bats suite | `bats tests/` | **138 tests, all pass**, exit 0 |
-| leak-check | `bash scripts/leak-check.sh` | `leak-check: clean`, exit 0 |
-| deck freshness | `bash scripts/check-deck-fresh.sh` | `deck is in sync`, exit 0 |
-| deck regen idempotent | `python3 scripts/gen-deck-data.py && git diff --stat docs/shipyard-data.json` | no diff, exit 0 |
-| shell syntax | `bash -n install.sh` | exit 0 |
+## Orchestration and fleet hazards
 
-So the bats suite grows across P0 (the completeness-gate cases) and P2 (the
-seven-skill install/doctor/uninstall assertions) from **138 → 138+N**, each new
-case shown **failing-first** against the pre-change code per the harness
-convention. `check-deck-complete.sh` does not exist yet — P0 creates it; its
-green baseline is "the current 6-skill deck is complete."
-
-## Build protocol (orchestrator + honesty)
-
-The builder is an **orchestrator**: delegate wide/heavy work (drafting the
-distilled skill body, sweeping the test enumerations) to subagents with tight
-briefs; keep the orchestrator lean; re-verify every gate personally. Embed this
-verbatim in every subagent brief:
+The orchestrator delegates the bounded briefs below, then independently reads
+every diff and reruns every named gate.
 
 > Converge honestly or report the precise blocker with the actual evidence —
 > NEVER fake green, weaken a check, or hand-wave "should work". Run the real
-> command, read the real file, and report exact output (exit codes, the bats
-> tally, the `git diff --stat`), not adjectives.
+> command, read the real file, curl the real port, and report exact output
+> (exit codes, JSONL lines, HTTP codes), not adjectives. If it needs a spend,
+> outward-facing action, or destructive change, stop and report instead.
 
-No model invocation is added by this ticket, so no `timeout`/token-cap surface
-changes — but if that assumption breaks, `tests/token-caps.bats` is law.
+`skills/**` and `install.sh` are fleet-live. A commit touching them triggers
+`.githooks/post-commit` → `reconcile-skills.sh --all`; never use a worktree
+because it would repoint the fleet at that worktree. Existing generated
+`AGENTS.md` files remain no-clobber; Codex discovers the new link natively under
+`.agents/skills/`, while `.claude/skills/` remains Claude/Hermes compatibility.
 
-## Problem / Background
+Generated `docs/shipyard-data.json` is never hand-edited. Prose belongs in
+`docs/deck-editorial.json`; structural data comes from frontmatter and
+`GENERIC_SKILLS`.
 
-The `/feature` intake already carves a seam it can't fill: `skills/feature/SKILL.md:116-119`
-defers "a grounded aesthetic reference and running a design review before writing
-design-intent acceptance criteria" to *"new-spec's ui-shaped step 4d"* — a
-skill/step that **does not exist** (`grep -rn new-spec skills/` returns only
-these forward-references at `feature/SKILL.md:116,118,119,179,181`). There is no
-UI/UX, frontend, or visual-design capability anywhere in the crew; the only
-"visual" mention is a bug-class row at `skills/coverage-audit/SKILL.md:122`
-("jsdom has no layout — needs a real browser"). So when a crew role touches a
-front-end — mentat writing a UI ticket, helldiver building one, proctor
-critiquing a shipped view — it has no shared craft standard to consult, and UI
-work regresses to templated defaults or misses (the aurora label-family miss
-that motivated this).
+## Common phase gate
 
-The source material is Claude's `frontend-design` plugin, a single
-self-contained `SKILL.md` (verified: the plugin cache is one `SKILL.md` +
-`LICENSE`, no reference files). shipyard is going **harness/model-agnostic**
-(see `docs/tickets/harness-agnostic-runners.md`), so the skill must be a
-**self-contained distillation** — no reference to the external plugin, no
-provider/tool/model name baked in — not a pointer to a Claude-only asset.
+Every phase, before its scoped commit:
 
-**Placement decision (settled at intake):** this is not a phase-bound add-on.
-The trigger is a *property of the work* ("a front-end is in question"), not a
-*stage*. So it is one **shared** skill with the same shape `coverage-audit`
-already uses (`skills/coverage-audit/SKILL.md:2-4`: `roles: [design, release,
-human]`, `disposition: adapted`, `kind: shared`), extended to build:
-`roles: [design, build, release, human]`, `disposition: adapted`, `kind: shared`.
+```bash
+bats tests/
+bash -n install.sh agents/lib/*.sh agents/*/runner.sh \
+  agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit
+python3 -m py_compile scripts/gen-deck-data.py
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bash scripts/check-deck-complete.sh
+scripts/ticket-lifecycle.sh --project . --check
+```
 
-## Decisions (default-and-record — veto at review)
+Run `node scripts/check-deck-render.mjs`; exit 0 is PASS and exit 3 is the
+documented Playwright SKIP. A red common gate blocks the phase commit.
 
-| # | Decision | Default locked in | Why |
-|---|----------|-------------------|-----|
-| D-1 | Skill id / dir | `ui-design` (`skills/ui-design/SKILL.md`) | Distinct from the source `frontend-design`; reads in a caller sentence ("consult the ui-design skill"). |
-| D-2 | Frontmatter | `roles: [design, build, release, human]`, `disposition: adapted`, `kind: shared` | Mirrors `coverage-audit`, the existing shared-skill precedent; extended to build. |
-| D-3 | v1 content | Distilled craft only; label-family rule **deferred** | Chosen at intake. Keeps v1 a clean distillation; the naming-consistency rule lands later or as a project trap. |
-| D-4 | Caller wiring scope (P3) | Minimal, additive references in the skills that touch a UI surface: `write-ticket` + `polish-ticket` (fills the `new-spec` seam), `execute-ticket`, and the release critic path | Every caller edit is fleet-live; keep the blast radius to one additive "if the surface is a front-end, consult ui-design" line per caller, non-UI path byte-unchanged. |
-| D-5 | Update `feature/SKILL.md`'s `new-spec` forward-ref? | **Yes** (P3) — repoint `feature/SKILL.md:118` and `:179` from the non-existent `new-spec` at the `ui-design` skill | The forward-ref currently dangles at a skill that doesn't exist; now it has a real target. Prose-only reword, no frontmatter/behavior change, so the deck stays fresh. |
-| D-6 | Deck-completeness gate strictness + shape | **Strict** — fail unless every non-exempt skill is in `GENERIC_SKILLS` **and** has a `graph.skills` node **and** an authored crew editorial entry in each member crew (no `default_prose` reliance). Implemented as a `--check` mode of `gen-deck-data.py` (reuses its own `read_generic_skills`/`load_skills`/`member_crews`/editorial parse — **zero logic drift**), wrapped by `scripts/check-deck-complete.sh`, wired into `.githooks/pre-commit` **and** `checks.yml`. Exempt allowlist: `install` (documented in the script). | User-chosen: "make it a very hard gate." Reusing the generator's logic guarantees the gate and the generator agree on placement. Repo-local scope. |
+## P0 — deterministic deck-completeness gate (5 points)
 
-## Technical Requirements
+**Delegation: subagent (1) — own only `scripts/gen-deck-data.py`,
+`scripts/check-deck-complete.sh`, and `tests/deck-complete.bats`. First add
+fixture tests and run them against current main: `--check --root` is ignored, so
+an unregistered fixture skill incorrectly exits 0; record that meaningful RED.
+Then implement the checker and wrapper. Return ≤40 lines: files changed;
+failing/passing commands and exit codes; exact diagnostics; blockers. Include
+the anti-cheating clause above.**
 
-**New file — `skills/ui-design/SKILL.md`** (self-contained, model-agnostic).
-Frontmatter per D-2, all three of `roles`/`disposition`/`kind` present (missing
-any hard-errors `scripts/gen-deck-data.py`, see `parse_frontmatter`). Body
-distills the source craft, harness-agnostically:
+Implementation:
 
-- **Ground it in the subject** — pin a concrete subject/audience/job before designing.
-- **Palette** — 4–6 named hex values; avoid the three documented AI-default looks.
-- **Type** — display + body + utility roles, deliberate scale/weights.
-- **Layout & signature** — a layout concept + the one memorable element; structure encodes content, not decoration.
-- **Motion / restraint** — deliberate, reduced-motion respected; "remove one accessory."
-- **Copy** — active voice, sentence case, name things by what the user controls; failure/empty states as direction.
-- **Self-critique loop** — brainstorm → plan → critique-against-generic → build → critique again; capability check for a screenshot pass phrased **generically** (no named tool).
-- **Quality floor** — responsive to mobile, visible keyboard focus, reduced motion.
+1. Add explicit CLI parsing: normal no-arg generation remains byte-identical;
+   `--check [--root <repo>]` writes nothing; unknown args exit 2.
+2. In check mode, sort and report every gap, exit 1 on gaps and 0 only when:
+   every `skills/*/SKILL.md` except named `DECK_EXEMPT_SKILLS = {"install"}` is
+   in `GENERIC_SKILLS`; every generic skill has one `graph.skills` `_file`
+   node; and every crew in `member_crews(roles)` has its own authored `_file`
+   entry (never `default_prose`).
+3. The wrapper only resolves repo root, invokes the Python check, and preserves
+   its status.
+4. Orchestrator wires the wrapper after staged leak-check in
+   `.githooks/pre-commit` (remove the final `exec` so both blocking gates run),
+   adds a dedicated CI step and syntax coverage in
+   `.github/workflows/checks.yml`, and adds the command to both
+   `.agents/gates.md` and `skills/gates.md.template`. The former is Shipyard's
+   gitignored live project gate: mirror the tracked template wording there and
+   record the line in the Ledger, but never try to stage it.
 
-No `frontend-design`/plugin/provider/model reference anywhere in the body
-(model-agnostic + leak-check clean).
+`tests/deck-complete.bats` covers unregistered skill, missing graph node,
+missing per-role editorial, only-`install` exemption, complete fixture, sorted
+multi-gap output, and no-write behavior. It must also execute a fixture commit
+with the copied hook and prove incomplete deck exit nonzero.
 
-**Registration (the 4 coupled edits — `.agents/gates.md:48-52` "Deck coupling"):**
+Phase-specific verification:
 
-1. `install.sh:110` — add `ui-design` to `GENERIC_SKILLS` (currently
-   `"polish-ticket execute-ticket coverage-audit write-ticket bugfix feature"`).
-   This one list drives install-symlink, `--doctor`, and uninstall.
-2. `docs/deck-editorial.json` — add a crew skill-block entry (`_file: ui-design`,
-   with `name`/`disposition`/`source`/`summary`/`detail`, mirroring the
-   `coverage-audit` entry) under **each** crew the roles resolve to (design,
-   build, release — `member_crews` in `gen-deck-data.py`), and a
-   `graph.skills` node `{ "_file": "ui-design", "label": "…" }`. Add graph
-   `edges` only if a caller relationship should render.
-3. `python3 scripts/gen-deck-data.py` — regenerate `docs/shipyard-data.json`
-   (no trailing newline; byte-identical round-trip) and commit it in the same change.
-4. `skills/gates.md.template` / `.agents/gates.md` — no change needed (the Deck
-   coupling class already covers this).
+```bash
+bats tests/deck-complete.bats
+python3 scripts/gen-deck-data.py --check --root .
+bash scripts/check-deck-complete.sh
+rg -n 'check-deck-complete' .githooks/pre-commit \
+  .github/workflows/checks.yml .agents/gates.md skills/gates.md.template
+```
 
-**Install / discovery** is automatic once in `GENERIC_SKILLS`: `install.sh`
-step 4.5 symlinks `$QUARTET_DIR/skills/ui-design` → `<project>/.claude/skills/ui-design`;
-`--doctor` audits it; uninstall removes only the symlink. Tests that count the
-generic skills must move from **six → seven**:
-`tests/install-skills.bats:7,9,39,52` (the `for s in …` loops and the "six"
-comments), plus any parallel enumeration in `tests/doctor.bats` /
-`tests/uninstall.bats`.
+Observable DoD: the real repo reports `deck-complete: 7 installed skills
+complete`; fixture gaps are named and fail; check mode leaves its output file
+hash unchanged; hook and CI invoke the wrapper.
 
-**Caller references (P3, additive only):** the skills that touch a UI surface
-name `ui-design` conditionally. Minimum set (D-4): `write-ticket` +
-`polish-ticket` UI-shaped handling, `execute-ticket`, and the release critic
-path. Each is a single additive "if the surface is a front-end, consult the
-ui-design skill" line — the non-UI path stays byte-identical.
+## P1 — skill, registration, deck, and discovery (5 points)
 
-**New gate — `scripts/check-deck-complete.sh` + `gen-deck-data.py --check` (P0):**
-Today `gen-deck-data.py:89` enforces `GENERIC_SKILLS → file exists`, and
-`check-deck-fresh.sh` (CI only; **not** in the pre-commit hook, which runs only
-`leak-check --staged`, `.githooks/pre-commit:4`) catches a *forgotten
-regeneration*. Neither enforces the reverse or completeness — a
-`skills/<id>/SKILL.md` never added to `GENERIC_SKILLS` is **silently invisible**
-with all gates green (`checks.yml:29` stays green). Missing graph node /
-authored editorial for a listed skill isn't hard-failed either (only *unknown*
-editorial ids error, `gen-deck-data.py:150,182`). The gate closes all three:
+**Delegation: subagent (2, disjoint ownership). Agent A owns only
+`skills/ui-design/SKILL.md` and `tests/ui-design-contract.bats`: add contract
+tests first, show them failing because the skill is absent, then author the
+self-contained skill. Agent B owns only `tests/install-skills.bats`,
+`tests/harness-install.bats`, `tests/relink.bats`, `tests/doctor.bats`, and
+`tests/uninstall.bats`: add explicit `ui-design` expectations and show them
+failing before registration. Each returns ≤40 lines with files, RED/GREEN
+commands and exact status, evidence, blockers; include the anti-cheating clause.
+Agents must not edit each other's files.**
 
-- Add a `--check` mode to `gen-deck-data.py` (it currently takes no argv — add a
-  minimal `sys.argv` branch in `main()`, `gen-deck-data.py:117`). In check mode
-  it **writes nothing**; it reuses `read_generic_skills`, `load_skills`,
-  `member_crews`, and the editorial parse to assert, for the resolved skill set:
-  (1) every non-exempt `skills/*/SKILL.md` id ∈ `GENERIC_SKILLS`; (2) every
-  listed id has a `graph.skills` node; (3) every listed id has an **authored**
-  crew editorial `_file` entry in each crew `member_crews` resolves it into (no
-  `default_prose` fallback). On any gap: print each missing (skill, reason) and
-  exit nonzero. Exempt allowlist `{install}` is a named constant with a comment.
-- The repo root must be overridable (env, e.g. `$DECK_ROOT`, default = the
-  script's own repo) so the P0 bats case can run the checker against a
-  synthesized fixture with a deliberately-unregistered skill and see it fail.
-- `scripts/check-deck-complete.sh` — thin wrapper (mirror `check-deck-fresh.sh`'s
-  shape) that runs `python3 scripts/gen-deck-data.py --check` and reports.
-- Wire it: append it to `.githooks/pre-commit` (after the leak-check `exec` —
-  restructure so both run), add a `- run: bash scripts/check-deck-complete.sh`
-  step to `checks.yml` beside the `check-deck-fresh` step (line ~29), and add
-  `scripts/check-deck-complete.sh` to the `bash -n` sweep list (`checks.yml:20`).
+The orchestrator adds `ui-design` as the eighth `GENERIC_SKILLS` entry, adds
+authored design/build/release entries and one graph node to
+`docs/deck-editorial.json`, updates only the existing skill-list prose in
+`README.md` and `docs/INSTALL.md`, then regenerates
+`docs/shipyard-data.json`. Preserve bridge-ticket wording already present.
 
-## Implementation Plan
+The contract test pins frontmatter and one-line anchors for every content area;
+provider/plugin/model terms are absent. Discovery tests pin both skill roots,
+new-fixture `AGENTS.md`, doctor drift, relink repair/dry-run, uninstall ownership,
+and no-clobber behavior. Update stale “six/seven skills” comments to the exact
+eight installed skills.
 
-### Phase 0 — Hard deck-completeness gate, wired into pre-commit + CI (3 pts)
-Steps:
-- Add the `--check` mode to `scripts/gen-deck-data.py` (writes nothing; strict
-  rules per D-6; `{install}` exempt).
-- Add `scripts/check-deck-complete.sh` wrapper.
-- Wire into `.githooks/pre-commit` and `checks.yml` (new step + `bash -n` sweep).
-- Add bats cases in a new `tests/deck-complete.bats`, **failing-first**: against
-  a fixture skill dir absent from `GENERIC_SKILLS` (and a listed skill missing
-  its graph node / editorial), the gate must **exit nonzero**; with a complete
-  set it exits 0.
+Phase-specific verification:
 
-Verification surface (exact commands):
-- Failing-first proof: point the checker at a fixture with an unregistered skill
-  → `bash scripts/check-deck-complete.sh` (or `DECK_ROOT=<fixture> python3
-  scripts/gen-deck-data.py --check`) **exits nonzero** and names the skill;
-  then against the real repo → **exits 0** ("6-skill deck complete"). Record both.
-- `bats tests/deck-complete.bats` green; `bats tests/` green (no regression).
-- `python3 -m py_compile scripts/gen-deck-data.py` → exit 0 (CI parity).
-- `bash -n scripts/check-deck-complete.sh .githooks/pre-commit` → exit 0.
-- Prove the wiring bites: with the real repo complete, a normal `git commit`
-  still succeeds (gate green); simulate an incomplete state on a throwaway
-  branch/fixture and confirm the pre-commit hook **blocks** it.
+```bash
+bats tests/ui-design-contract.bats tests/install-skills.bats \
+  tests/harness-install.bats tests/relink.bats tests/doctor.bats \
+  tests/uninstall.bats
+python3 scripts/gen-deck-data.py
+python3 scripts/gen-deck-data.py --check --root .
+bash scripts/check-deck-fresh.sh
+bash scripts/check-deck-complete.sh
+jq -e '[.crew[] | select(.id=="design" or .id=="build" or .id=="release") |
+  .skills[] | select(.name and (.name|ascii_downcase|contains("ui")))] |
+  length == 3' docs/shipyard-data.json
+jq -e '.graph.skills | any(.id=="ui-design")' docs/shipyard-data.json
+```
 
-Observable DoD: `check-deck-complete.sh` exits 0 on the current 6-skill deck and
-nonzero on a synthesized incomplete deck; the pre-commit hook and a
-`checks.yml` step both invoke it; `tests/deck-complete.bats` green;
-`bats tests/` green at the new count.
+After the scoped commit, verify the post-commit relink gave every active fleet
+repo a resolving `.agents/skills/ui-design` and `.claude/skills/ui-design`.
+Report, but do not overwrite, any real directory at either destination.
 
-### Phase 1 — Author the skill + register + deck (5 pts)
-Steps:
-- Write `skills/ui-design/SKILL.md` (self-contained distillation, D-1/D-2/D-3).
-- Add `ui-design` to `install.sh:110 GENERIC_SKILLS`.
-- Add editorial prose entries (design/build/release crew blocks) + a
-  `graph.skills` node in `docs/deck-editorial.json`.
-- `python3 scripts/gen-deck-data.py`; stage the regenerated
-  `docs/shipyard-data.json` in the **same** commit.
+## P2 — design-intake callers (2 points)
 
-Verification surface (exact commands, all must pass before commit):
-- `grep -nEi 'frontend-design|anthropic|claude|opus|sonnet|screenshot tool' skills/ui-design/SKILL.md` → **no** provider/tool/plugin leak (model-agnostic).
-- `bash scripts/leak-check.sh` → `leak-check: clean`, exit 0.
-- `python3 scripts/gen-deck-data.py && git diff --stat docs/shipyard-data.json` → the JSON changed *once* for this skill, then re-running leaves **no** further diff (idempotent).
-- `bash scripts/check-deck-fresh.sh` → `deck is in sync`, exit 0.
-- `bash scripts/check-deck-complete.sh` → exit 0 (**the P0 gate now proves
-  ui-design is fully on the deck** — registered, graphed, authored). Before
-  registration is finished it exits nonzero and the pre-commit hook blocks the
-  commit; that RED→green transition is the enforcement working. Record it.
-- `bash -n install.sh` → exit 0.
+**Delegation: subagent (1) — own `tests/ui-design-contract.bats` plus
+`skills/feature/SKILL.md`, `skills/write-ticket/SKILL.md`, and
+`skills/polish-ticket/SKILL.md`. Add caller assertions first and record RED;
+then add conditional, one-line referrals. Replace both dangling `new-spec`
+references with `ui-design`; preserve non-UI flow. Return ≤40 lines with scoped
+diff, commands/status, evidence, blockers; include the anti-cheating clause.**
 
-Observable DoD: `check-deck-fresh.sh`, `check-deck-complete.sh`, and
-`leak-check.sh` all exit 0; the leak grep returns nothing;
-`docs/shipyard-data.json` shows a `ui-design` entry under the
-design/build/release crews and a graph node.
+Phase-specific verification:
 
-### Phase 2 — Install / discovery coverage (3 pts)
-Steps:
-- Update the six→seven skill enumerations in `tests/install-skills.bats:7,9,39,52`
-  and any parallel enumeration in `tests/doctor.bats` / `tests/uninstall.bats`.
-- **Failing-first:** add/adjust the assertion, run it against the pre-change
-  `GENERIC_SKILLS` (or before the P1 install.sh edit is on the branch) and show
-  it RED, then green after — per the harness convention.
+```bash
+bats tests/ui-design-contract.bats
+! rg -n 'new-spec' skills/
+git diff HEAD -- skills/feature/SKILL.md skills/write-ticket/SKILL.md \
+  skills/polish-ticket/SKILL.md
+```
 
-Verification surface (exact commands):
-- Failing-first proof: `git stash -- install.sh && bats tests/install-skills.bats` → the seven-skill case FAILS; `git stash pop && bats tests/install-skills.bats` → PASSES. (Record both tallies.)
-- `bats tests/` → **138+N pass**, exit 0 (N = the assertions added).
-- `./install.sh --project <fixture> --dry-run` → announces it WOULD symlink `ui-design`; writes nothing.
-- `./install.sh --doctor --project .` → exit 0, audits the `ui-design` symlink.
+The diff must be referral-only, with no frontmatter change and all content
+assertions fitting within one hard-wrapped source line.
 
-Observable DoD: full `bats tests/` green at the new higher count; the
-failing-first transition recorded in the Ledger; `--doctor` exits 0.
+## P3 — build and cold-release callers (3 points)
 
-### Phase 3 — Caller references + repoint the dangling forward-ref (5 pts)
-Steps:
-- Add one conditional "if the surface is a front-end, consult the `ui-design`
-  skill" pointer to the D-4 caller set (`write-ticket`, `polish-ticket`,
-  `execute-ticket`, release-critic path). Additive only — the non-UI path stays
-  byte-identical.
-- **Repoint the dangling `new-spec` refs (D-5):** at `skills/feature/SKILL.md:118`
-  replace "(new-spec's ui-shaped step 4d)" with a reference to the `ui-design`
-  skill; at `skills/feature/SKILL.md:179` replace "Doing new-spec's
-  design-readiness pass." likewise. This is a **prose reword** of feature's
-  out-of-scope note — it keeps feature's *behavior* identical (the readiness
-  pass is still not run inline), only naming a real skill instead of a
-  nonexistent one. Do **not** touch feature's frontmatter (`name`/`roles`/
-  `disposition`/`kind`) — so the deck stays byte-fresh.
+**Delegation: subagent (1) — own `tests/ui-design-contract.bats`,
+`skills/execute-ticket/SKILL.md`, and `agents/release/critic-role.md`. Add
+caller assertions first and record RED; then add conditional referrals:
+execute-ticket applies the skill before UI implementation/real viewport
+verification, and the cold critic reads `.agents/skills/ui-design/SKILL.md`
+only when real diff hunks affect a front-end. Preserve the critic's hunk-safe
+rule and output schema. Return ≤40 lines with files, commands/status, evidence,
+blockers; include the anti-cheating clause.**
 
-Verification surface (exact commands):
-- `grep -rn 'new-spec' skills/` → **zero hits** after the edit (the forward-ref no longer dangles).
-- `git diff skills/write-ticket skills/polish-ticket skills/execute-ticket <release-critic-path>` → each caller pointer is a **pure addition** (no line removed/reworded on the non-UI path); `git diff skills/feature/SKILL.md` → touches only the two prose lines above, **no frontmatter line**.
-- `bats tests/` → still **138+N pass**, exit 0 (no existing case regressed — prose changes touch no tested behavior).
-- `bash scripts/leak-check.sh` → exit 0; `bash scripts/check-deck-fresh.sh` → `deck is in sync`, exit 0 (proves the feature reword left frontmatter untouched).
-- Fleet reasoning (write it in the Ledger): the caller pointers and the feature
-  reword are prose a role *may* consult; they add no config key, no new gate, no
-  changed exit code — so every installed project's non-UI runs are unaffected on
-  the next timer fire.
+Phase-specific verification:
 
-Observable DoD: `grep -rn new-spec skills/` returns nothing; `git diff` shows
-additive-only caller edits and a two-line feature reword with no frontmatter
-change; full suite green at the P2 count; leak-check + deck-fresh exit 0.
+```bash
+bats tests/ui-design-contract.bats tests/shoulder-mode.bats \
+  tests/hunk-safe-gates.bats
+git diff HEAD -- skills/execute-ticket/SKILL.md agents/release/critic-role.md
+bash scripts/check-deck-fresh.sh
+```
 
-### Phase 4 — End-to-end gate re-run (1 pt)
-Re-run the whole ticket's gate from a clean worktree:
-`bats tests/ && bash scripts/leak-check.sh && bash scripts/check-deck-fresh.sh
-&& bash scripts/check-deck-complete.sh && bash -n install.sh
-scripts/check-deck-complete.sh .githooks/pre-commit` → all exit 0. Confirm
-`git status` is clean and `docs/shipyard-data.json` is committed alongside its
-frontmatter source.
-Observable DoD: the one-liner above exits 0 end-to-end; worktree clean.
+The caller changes are additive instructions only: no runner, config, event,
+exit-code, or non-UI behavior changes.
 
-## Testing Strategy
+## P4 — end-to-end, Pages-current, and graduation (2 points)
 
-- `bats tests/` — the install/doctor/uninstall symlink cases updated to seven
-  skills, shown failing-first; hermetic (`make_stub` for systemctl/gh/claude, no
-  network/model).
-- `bash scripts/leak-check.sh` — the new SKILL.md carries no home path, private
-  email, key-shaped literal, or provider/tool name.
-- `tests/deck-complete.bats` (new, P0) — the completeness gate exits nonzero on
-  a synthesized incomplete deck (unregistered skill / missing graph node /
-  missing authored editorial) and 0 on a complete one; shown failing-first.
-- `bash scripts/check-deck-fresh.sh` — `docs/shipyard-data.json` regenerates
-  byte-identical after the frontmatter + `GENERIC_SKILLS` + editorial change.
-- `bash scripts/check-deck-complete.sh` — passes only when every non-exempt
-  skill is fully on the deck (P0's gate; run in pre-commit + CI).
-- `bash -n install.sh` and a `bash -n` sweep for any touched shell.
-- No new model invocation is added, so `tests/token-caps.bats` is unaffected
-  (assert it stays green).
+**Delegation: inline (the orchestrator must personally read the final gates,
+rendered deck result, fleet links, CI, and published bytes).**
 
-## Acceptance Criteria / Definition of Done
+Run the common gate, targeted suites, `./install.sh --doctor --project .`, and
+`./install.sh --relink --dry-run --project .`; require doctor 0 and dry-run
+`0 would be repaired`. Confirm `bats --count tests/` is greater than 380 and the
+full suite passes that exact count. Confirm the scoped diff contains no new
+prose guide.
 
-- [ ] `scripts/check-deck-complete.sh` + `gen-deck-data.py --check` exist and
-      **fail (nonzero)** when a `skills/*/SKILL.md` (non-exempt) is absent from
-      `GENERIC_SKILLS`, lacks a `graph.skills` node, or lacks an authored crew
-      editorial entry — proven by `tests/deck-complete.bats` cases shown
-      **failing-first**; the checker exits 0 on the current complete deck.
-      `install` is the only exempt skill, and that exemption is a documented
-      named constant.
-- [ ] The completeness gate is wired into **both** `.githooks/pre-commit` and a
-      `checks.yml` step, and appears in the `checks.yml` `bash -n` sweep. A
-      commit that would ship an incomplete deck is blocked locally and in CI
-      (demonstrated).
-- [ ] `skills/ui-design/SKILL.md` exists, self-contained and model-agnostic — no
-      reference to the `frontend-design` plugin or any provider/tool/model name
-      (leak-check clean) — with valid frontmatter `roles: [design, build,
-      release, human]`, `disposition: adapted`, `kind: shared`, plus `name` +
-      `description`.
-- [ ] Body distills the source craft: subject-grounding, palette (4–6 named
-      hex), type roles, layout + one signature element, motion/restraint, copy
-      guidance, and a build→critique→critique-again loop with the screenshot
-      capability check phrased **without naming a tool**.
-- [ ] `ui-design` is in `install.sh:110 GENERIC_SKILLS`; `docs/deck-editorial.json`
-      has a `_file: ui-design` crew entry under design/build/release and a
-      `graph.skills` node; `python3 scripts/gen-deck-data.py` regenerated
-      `docs/shipyard-data.json` and it is committed in the same change;
-      `check-deck-fresh.sh` green.
-- [ ] After a real `install.sh` run, `<project>/.claude/skills/ui-design` is a
-      symlink into `$QUARTET_DIR/skills/`; `install.sh --doctor` audits it and
-      exits 0; uninstall removes only the symlink. A bats case proves the
-      symlink is created, shown **failing against the pre-change `GENERIC_SKILLS`
-      first**.
-- [ ] The D-4 caller set names `ui-design` conditionally on a front-end surface;
-      each edit is additive and a non-UI invocation's behavior is byte-unchanged
-      (proven).
-- [ ] `bats tests/` fully green; `bash scripts/leak-check.sh` clean;
-      `bash scripts/check-deck-fresh.sh` green; `bash scripts/check-deck-complete.sh`
-      green; `bash -n` sweep green; `tests/token-caps.bats` still green.
+Commit on `main`, push normally, require current-SHA CI completed/success:
 
-## Dependencies
+```bash
+gh run list --workflow checks.yml --branch main --limit 1 \
+  --json databaseId,headSha,status,conclusion,url
+```
 
-- **External:** none. The distillation is authored from the already-cached
-  `frontend-design` SKILL.md; no binary or network access required.
-- **Internal ordering:** P1 is **blocked-by P0** — the completeness gate must be
-  live before the skill is authored, so registering ui-design is what turns the
-  gate green (the enforcement proving itself). P0 is self-contained (touches only
-  `gen-deck-data.py`, a new script, the hook, CI, and a new bats file).
-- **Blocks:** a future ticket that bakes the label-family / naming-consistency
-  rule (D-3) into this skill or a project trap. **Blocked-by:** none external.
+GitHub Pages deploys from `main:/docs`; the configured pre-push cascade mirrors
+the same deck. Poll both URLs for HTTP 200 and require each downloaded
+`shipyard-data.json` SHA-256 to equal local `docs/shipyard-data.json`:
 
-## Risks & Mitigations
+```text
+https://wabbazzar.com/shipyard/shipyard-data.json
+https://wabbazzar.com/writing/the-shipyard/shipyard-data.json
+```
 
-- **Fleet-live blast radius** — `skills/**` and `install.sh` are read by every
-  installed project on the next timer fire (`.agents/gates.md` Traps:
-  "Fleet-live edits"). The new file is purely additive; the P3 caller edits are
-  the risk → keep each an additive conditional line, prove the non-UI path
-  byte-unchanged, land on a branch, human stamp + green CI remain the wall.
-- **Deck drift / omission** — forgetting to regenerate `docs/shipyard-data.json`
-  → `check-deck-fresh.sh`; forgetting to register/graph/author a skill at all →
-  the **new P0 `check-deck-complete.sh`** (pre-commit + CI). Both are acceptance
-  items.
-- **Completeness gate too strict / false-positive** — a legitimate future
-  deck-exempt skill (like `install`) would trip it → the exemption is an
-  explicit, documented allowlist constant; adding a new exempt skill is a
-  one-line, reviewed change. The gate reuses `gen-deck-data.py`'s own placement
-  logic, so it cannot disagree with the generator about where a skill belongs.
-- **Pre-commit friction** — the hook now runs completeness on every commit; a
-  mid-authoring commit of a half-registered skill is blocked. That is the
-  intended behavior (the whole point), but if it proves noisy the CI step is the
-  hard wall and the hook line can be dropped without weakening the merge gate.
-- **Distillation smuggles a Claude-ism** — a provider/tool name or "if your
-  environment supports screenshots" phrased tool-specifically breaks
-  model-agnosticism / leak-check → acceptance requires generic phrasing;
-  leak-check + a manual read gate it.
-- **Missing frontmatter field** — omitting any of `roles`/`disposition`/`kind`
-  hard-errors `gen-deck-data.py` → caught immediately by P1's `check-deck-fresh`.
+If either remains stale after a bounded two-minute poll, stop with the HTTP
+codes/hashes; do not claim Pages current. Once gates, CI, and both URLs agree,
+append exact evidence to the Ledger and run:
 
-## Out of scope
+```bash
+scripts/ticket-lifecycle.sh --graduate \
+  docs/tickets/pending/ui-design-skill.md
+```
 
-- The label-family / naming-consistency rule (D-3) — explicitly deferred.
-- Any broader rewrite of `feature/SKILL.md` beyond repointing the two dangling
-  `new-spec` refs at `ui-design` (D-5) — feature's behavior stays identical.
-- Any new "UI-shaped detection" heuristic baked into a runner, any new config
-  key, any new module/dir outside `skills/ui-design/` + the known registration
-  points, and any new top-level dependency or runtime/browser tooling
-  requirement.
-- Building any actual UI — this ships the *skill*, not a front-end.
+Include the move in the final evidence commit and push it.
+
+## Definition of Done
+
+- [ ] Deterministic completeness check fails fixtures for all three omission
+      classes, writes nothing, passes the real deck, and blocks in hook + CI.
+- [ ] `ui-design` is the eighth installed shared skill, self-contained and
+      model-agnostic, with the locked craft/accessibility content.
+- [ ] Both discovery roots install, doctor, relink, dry-run, uninstall, and
+      no-clobber behavior are covered by failing-first tests.
+- [ ] Deck has authored design/build/release entries and graph node; generated
+      JSON is fresh, complete, and renders.
+- [ ] Existing canonical README/install prose names eight skills; no new guide.
+- [ ] Feature/write/polish/execute and the cold critic conditionally consult the
+      skill; no dangling `new-spec`, runner, config, or non-UI behavior change.
+- [ ] Full suite exceeds the 380-test baseline; syntax, leak, lifecycle, deck
+      freshness/completeness/render, doctor, relink dry-run, and CI are green.
+- [ ] Both published deck JSON hashes match local; ticket is graduated in the
+      final commit.
 
 ## Ledger
 
-_(builder appends per phase: plan taken, commit hash, gate output — the bats
-tally, the `git diff --stat`, exit codes — and honest notes on anything
-deferred.)_
+Each phase appends: plan, `builder:` line, files, failing-first evidence,
+independently rerun commands with exit codes/test counts, commit SHA, and honest
+deferred/blocker notes.
 
-- P0 —
-- P1 —
-- P2 —
-- P3 —
-- P4 —
+- P0 — pending
+- P1 — pending
+- P2 — pending
+- P3 — pending
+- P4 — pending
 
-## Run it
+---
 
-Hardened and ready for **`execute-ticket`** at
-`docs/tickets/ui-design-skill.md`. It carries no user-decision-class blocker
-(no spend, nothing outward-facing, nothing destructive; every open choice has a
-locked default in the Decisions table) — so a cold agent can build it start to
-finish once stamped. Land it on `feat/ui-design-skill`, not `main`.
+Run it with `execute-ticket`.
