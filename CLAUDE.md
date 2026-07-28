@@ -92,6 +92,38 @@ incident-repair proposal that waits for the same human stamp. When adding a
 capability, ship it behind a config key whose unset value is exactly today's
 behavior, and prove that with a test.
 
+## Work on `main`. No branches, no worktrees, in THIS repo.
+
+**This checkout IS the fleet's live install.** Units point directly at
+`~/code/shipyard`, and `.claude/skills/*` in every installed project are
+symlinks into `skills/` here. That makes the usual branch hygiene actively
+harmful:
+
+- `.githooks/post-commit` resolves `git rev-parse --show-toplevel` and runs
+  `reconcile-skills.sh --all`. Inside a **git worktree** that resolves to the
+  *worktree*, so committing `skills/` there silently repoints **every installed
+  project** at your temporary tree. This really happened (2026-07-27): five
+  projects ended up with 7/7 skill symlinks into `.worktrees/…`; removing the
+  worktree would have broken skills fleet-wide.
+- Long-lived branches also mean the working tree on disk — the thing the timers
+  execute — is whatever branch you last checked out, not `main`.
+
+So: **commit to `main`, in this checkout, in small verified steps.** Every gate
+still applies per commit (`bats tests/`, leak-check, deck-fresh, `bash -n`);
+"no branches" is not "no gates", and a red gate still never gets committed.
+
+**Two agents at once → coordinate, don't isolate.** Check `git status` and
+`git log --oneline -3` before you start and before every commit; if another
+session has uncommitted work in the tree, scope your `git add` to your own files
+(never `git add -A`) and say what you're touching. Serialize on the file, not on
+a branch.
+
+Recovery, if worktree links ever appear again:
+```bash
+ls -l ~/code/*/.claude/skills/ | grep -c worktrees   # must be 0
+bash scripts/reconcile-skills.sh --all               # from THIS checkout
+```
+
 ## How it's installed on this machine
 
 Checkout lives at `~/code/shipyard`; units point directly at it, so **an edit
