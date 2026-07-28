@@ -547,7 +547,51 @@ built and verified. **Folder vocabulary is per-repo semantics and must be
 established from each repo's own config/README/history before anything moves.**
 This is why Phase 7 is one subagent per repo rather than a fleet-wide script.
 
-Commit: _(this commit)_
+Commit: `ab2f04c`
+
+### Phase 7 — fleet migration — **HALTED, NOT DONE**
+
+builder: subagent × 4 (aurora, bopthere, shredly, starbird) — **all four killed
+mid-run by a weekly API rate limit (resets 2026-07-29 01:00 America/Chicago)**.
+
+**No repo was migrated. Zero tickets moved.** Verified: no commits on any
+`chore/ticket-lifecycle-sanitize` branch, ticket counts unchanged everywhere
+(bopthere still archive=28/backlog=24, shredly 91, aurora 36, starbird 4).
+All four branches deleted, empty `pending/complete/freezer` dirs the agents had
+created in bopthere/shredly removed, every repo returned to `main`/`master`
+clean. **Nothing to un-migrate — the work simply did not happen.**
+
+### ⚠ INCIDENT (found during cleanup, fixed) — worktree relinked the fleet
+
+Committing `skills/` changes **inside the git worktree** silently repointed
+**every installed project's skill symlinks at the worktree**.
+`.githooks/post-commit` resolves `git rev-parse --show-toplevel` — which in a
+worktree is the *worktree* — then runs `reconcile-skills.sh --all`. Measured
+blast radius: **aurora 7/9, bopthere 7/8, starbird 7/7, 2pizzaclub 7/15, ice 7/7**
+symlinks pointing into `.worktrees/ticket-lifecycle/`. Removing that worktree
+would have broken skills across the fleet.
+
+Recovered: `reconcile-skills.sh --all` from the canonical checkout, then
+`git checkout -- .claude/skills/` per project to restore committed link text
+(the committed `guardian-quartet/...` path is a compat symlink to shipyard and
+resolves fine — reconcile rewrites it to the direct path and needlessly dirties
+the tree). Verified afterwards: **0 worktree links fleet-wide, all skills
+resolve.** Trap recorded in `.agents/gates.md`.
+
+Ironic and worth stating: the isolation that protected the *other agent's* work
+is what caused this. A worktree is not free — it changes what repo-root-relative
+hooks resolve to.
+
+### Phase 8 — shipyard dogfoods the layout — NOT STARTED
+
+Blocked behind Phase 7 by design (migrate the fleet, then this repo).
+
+## Status at hand-off (2026-07-28)
+
+Phases 1–6 built, gated, committed on `feat/ticket-lifecycle-folders`
+(`79b3d25`, `bad5ac0`, `a207503`, `ebac9e1`, `97c0d9f`, `ab2f04c`).
+`bats tests/` 355 passing / 0 failures at the last phase gate.
+Phases 7–8 open; Phase 7 resumable after the rate limit resets.
 
 ---
 
