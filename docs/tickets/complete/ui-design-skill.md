@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-23
 - **Owner:** wabbazzar
-- **Status:** Polished — ready for `execute-ticket`
+- **Status:** Built + verified — all five phases complete
 - **Priority:** medium
 - **Type:** feature
 - **Estimated Points:** 17 (P0 5 · P1 5 · P2 2 · P3 3 · P4 2)
@@ -255,7 +255,7 @@ codes/hashes; do not claim Pages current. Once gates, CI, and both URLs agree,
 append exact evidence to the Ledger and run:
 
 ```bash
-scripts/ticket-lifecycle.sh --graduate \
+scripts/ticket-lifecycle.sh --project . --graduate \
   docs/tickets/pending/ui-design-skill.md
 ```
 
@@ -274,9 +274,9 @@ Include the move in the final evidence commit and push it.
 - [x] Existing canonical README/install prose names eight skills; no new guide.
 - [x] Feature/write/polish/execute and the cold critic conditionally consult the
       skill; no dangling `new-spec`, runner, config, or non-UI behavior change.
-- [ ] Full suite exceeds the 380-test baseline; syntax, leak, lifecycle, deck
+- [x] Full suite exceeds the 380-test baseline; syntax, leak, lifecycle, deck
       freshness/completeness/render, doctor, relink dry-run, and CI are green.
-- [ ] Both published deck JSON hashes match local; ticket is graduated in the
+- [x] Both published deck JSON hashes match local; ticket is graduated in the
       final commit.
 
 ## Ledger
@@ -299,7 +299,7 @@ deferred/blocker notes.
   `.github/workflows/checks.yml`, `skills/gates.md.template`; mirrored live
   `.agents/gates.md` without staging it. Commit: `45b50dd`; CI
   `30393365020` completed successfully.
-- P1 — ready for scoped commit. `builder: subagent (1 reusable agent; 2
+- P1 — complete. `builder: subagent (1 reusable agent; 2
   disjoint briefs)` authored the skill/7 contract tests, then five install
   suites; the orchestrator registered it, authored three deck cards and one
   graph node, regenerated JSON, and edited only existing README/INSTALL prose.
@@ -316,7 +316,7 @@ deferred/blocker notes.
   relink dry-run reported 0 repairs. CI `30394263137` caught one stale P0
   assertion still expecting 7 installed skills; follow-up `cb0ccb2` updated it
   to 8, passed 400/400 locally, and CI `30394625074` completed successfully.
-- P2 — ready for scoped commit. `builder: subagent (1 caller agent)` added
+- P2 — complete. `builder: subagent (1 caller agent)` added
   three failing-first caller contracts and referral-only changes in feature,
   write-ticket, and polish-ticket. RED: existing 7 passed and all 3 new caller
   tests failed on missing referrals. GREEN: focused 10/10; both dangling
@@ -324,15 +324,29 @@ deferred/blocker notes.
   full 403/403; syntax, `py_compile`, leak, lifecycle, deck
   fresh/complete/render, doctor, and diff checks passed. Commit: `936f350`; CI
   `30395237827` completed successfully.
-- P3 — ready for scoped commit. `builder: subagent (1 caller agent)` added two
+- P3 — complete. `builder: subagent (1 caller agent)` added two
   failing-first contracts and additive referrals in execute-ticket and the cold
   critic. RED: 33/35, with both new callers absent. GREEN: focused 35/35;
   all 21 shoulder-mode and both hunk-safe cases pass; cold inputs, output
   schema, non-UI flow, runners, config, events, and exit codes are unchanged.
   Full 405/405; syntax, `py_compile`, leak, lifecycle, deck
-  fresh/complete/render, doctor, and diff checks pass. Commit: this scoped P3
-  commit; SHA/CI are recorded in P4.
-- P4 — pending
+  fresh/complete/render, doctor, and diff checks pass. Commit: `1edccfe`; CI
+  `30395741159` completed successfully.
+- P4 — complete. `builder: inline (the orchestrator personally read the final
+  local/remote gates, published bytes, fleet links, and graduation move)`.
+  Full suite count and result: 405/405; targeted UI/install/shoulder/hunk suite:
+  86/86. Syntax, `py_compile`, leak, lifecycle, deck fresh/complete/render, and
+  doctor exited 0; relink dry-run reported `0 would be repaired, 17 already
+  ok`. Both discovery roots resolve `ui-design` in Shipyard plus six active
+  repos, and zero fleet links target a worktree. CI `30395741159` for P3
+  completed successfully. Both published URLs returned HTTP 200 and SHA-256
+  `5593c233e7f8e693596aa474694cd29237019390ee3dcd557297b4225c629817`,
+  matching local. The skill directory contains only `SKILL.md`; public prose
+  updated existing README/INSTALL/deck surfaces, with no new guide. Final
+  evidence/graduation commit: this commit; exact-SHA CI is verified after push.
+  The polished ticket's original graduation example omitted required
+  `--project`; it exited 2 without mutation, then the corrected form above
+  graduated the ticket successfully.
 
 ---
 
