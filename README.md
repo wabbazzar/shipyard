@@ -350,6 +350,44 @@ capture hook in the authoring harness's native config and writes
 `.agents/shoulder.env` from the `[notify]` block (`target`, `cmd`); with the
 opt-in unset the installer touches no harness config, exactly as before.
 
+### Notification policy
+
+Shipyard system notifications are an exception channel, separate from direct
+BopBop conversation replies. Routine scheduled-agent news remains available in
+the JSONL event stream and Ice/Daily Dispatch. Set the minimum class delivered
+by the configured notification transport in the project config:
+
+```toml
+[notify]
+signal_level = "actionable"
+```
+
+The ordered classes are `routine < actionable < urgent`; accepted policy
+values are `all`, `actionable`, `urgent`, and `off`. `all` sends every class,
+`actionable` sends actionable and urgent messages, `urgent` sends only urgent
+messages, and `off` suppresses all classified messages. An unset policy means
+`all`, preserving delivery for existing installations. An invalid value fails
+open to `all` and records `reason=invalid_policy`, so a typo cannot hide an
+urgent alert.
+
+Call the shared API as:
+
+```bash
+quartet_notify --class routine|actionable|urgent \
+  [--episode <stable-key>] [--window <seconds>] <title> <body>
+```
+
+The default deduplication window is 86,400 seconds. An explicit episode is
+deduped per project inside that window; a successful delivery consumes the
+episode key, while policy suppression or transport failure does not. The
+legacy `quartet_notify <title> <body>` form remains valid and retains its
+pre-policy behavior, including emitting no classification decision.
+
+Every classified call appends a `notification.decision` event with `class`,
+`episode`, effective `policy`, and an `outcome` of `delivered`, `suppressed`,
+or `deduped`. This decision record supplements rather than replaces the
+underlying job, incident, proposal, or approval event.
+
 The two `SPAWN_*` rows carry **built-in defaults inside `agents/lib/spawn.sh`**, so unlike
 the rows above they need no `install.sh` bake to take effect; set them in a
 unit's env only to tune or disable per project.

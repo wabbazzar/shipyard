@@ -448,3 +448,9 @@ bats tests/
   `post-run.sh` into medic; identical classifier failures and origin→medic
   escalation each produce `delivered,deduped` and one transport send. Failed
   restart is urgent; passes, budget skips, and incomplete runs are routine.
+- 2026-07-28 — Phase 3 built; `builder: subagent (1 agent)`. Shipyard's ignored
+  live `.agents/config.toml` now sets `signal_level = "actionable"`; it is not
+  force-added because it contains machine-local install state. Tracked README
+  and hermetic-test changes prove the policy without Signal contact. Focused:
+  35/35; full: 375/375. No dead `dedupe_window_sec` key was added: the consumed
+  default is 86,400 seconds and `--window` is the supported override.

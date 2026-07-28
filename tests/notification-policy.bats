@@ -22,6 +22,17 @@ decisions() {
   events_json | jq -c 'select(.event=="notification.decision")'
 }
 
+@test "actionable policy and default window give Shipyard a quiet exception channel" {
+  quartet_notify --class routine --episode shipyard-pass "routine" "pass"
+  quartet_notify --class actionable --episode shipyard-fail "actionable" "failed"
+  quartet_notify --class actionable --episode shipyard-fail "duplicate" "failed"
+  quartet_notify --class urgent --episode shipyard-outage "urgent" "outage"
+
+  [ "$(notify_log)" = $'actionable|failed\nurgent|outage' ]
+  [ "$(decisions | jq -r '.outcome')" = $'suppressed\ndelivered\ndeduped\ndelivered' ]
+  [ "$(decisions | jq -r '.policy' | uniq)" = "actionable" ]
+}
+
 @test "legacy two-argument notify is byte-compatible and emits no decision event" {
   quartet_notify "legacy title" "legacy body"
 
