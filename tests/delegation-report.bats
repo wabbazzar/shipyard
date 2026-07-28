@@ -350,6 +350,38 @@ TICKET
   [[ "$output" == *'"sub_agent_activity": 20'* ]]
 }
 
+@test "Codex counts explicit collaboration lifecycle calls without UI double-counting" {
+  local root="$BATS_TEST_TMPDIR/collaboration"
+  mkdir -p "$root/2026/07/01"
+  cat >"$root/2026/07/01/rollout-collaboration.jsonl" <<'JSONL'
+{"timestamp":"2026-07-01T12:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+{"timestamp":"2026-07-01T12:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<!-- shipyard-skill:execute-ticket:v1 -->"}]}}
+{"timestamp":"2026-07-01T12:00:02Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{}","call_id":"spawn-1"}}
+{"timestamp":"2026-07-01T12:00:03Z","type":"response_item","payload":{"type":"function_call","name":"collaboration.followup_task","arguments":"{}","call_id":"followup-1"}}
+{"timestamp":"2026-07-01T12:00:04Z","type":"response_item","payload":{"type":"function_call","name":"send_message","arguments":"{}","call_id":"send-1"}}
+{"timestamp":"2026-07-01T12:00:05Z","type":"response_item","payload":{"type":"function_call","name":"collaboration.interrupt_agent","arguments":"{}","call_id":"interrupt-1"}}
+{"timestamp":"2026-07-01T12:00:06Z","type":"response_item","payload":{"type":"function_call","name":"list_agents","arguments":"{}","call_id":"list-1"}}
+{"timestamp":"2026-07-01T12:00:07Z","type":"response_item","payload":{"type":"function_call","name":"collaboration.wait_agent","arguments":"{}","call_id":"wait-1"}}
+{"timestamp":"2026-07-01T12:00:08Z","type":"response_item","payload":{"type":"function_call","name":"sub_agent_activity","arguments":"{}","call_id":"activity-1"}}
+{"timestamp":"2026-07-01T12:00:09Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3,"reasoning_output_tokens":1,"total_tokens":14}}}}
+{"timestamp":"2026-07-01T12:00:10Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}
+JSONL
+
+  CODEX_SESSIONS_DIR="$root" \
+    run python3 "$REPORT" --source codex --all --json --tickets-dir "$TICKETS"
+  [ "$status" -eq 0 ]
+  [ "$(field sessions)" = "1" ]
+  [ "$(field zero_agent_sessions)" = "0" ]
+  [ "$(field agent_calls)" = "6" ]
+  [ "$(field spawn_agent)" = "1" ]
+  [ "$(field collaboration.followup_task)" = "1" ]
+  [ "$(field send_message)" = "1" ]
+  [ "$(field collaboration.interrupt_agent)" = "1" ]
+  [ "$(field list_agents)" = "1" ]
+  [ "$(field collaboration.wait_agent)" = "1" ]
+  [ "$(field sub_agent_activity)" = "1" ]
+}
+
 @test "Codex exposes byte proxy and unavailable cross-provider measurements honestly" {
   run_codex_fixture
   [[ "$output" == *'"filesystem_network_bytes": null'* ]]

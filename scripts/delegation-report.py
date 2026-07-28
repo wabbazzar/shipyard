@@ -43,6 +43,16 @@ BLOAT_CTX = 300_000
 # A single tool result above this is called out individually.
 BIG_RESULT = 60_000
 CODEX_MARKER = "<!-- shipyard-skill:execute-ticket:v1 -->"
+DELEGATION_CALLS = frozenset(
+    {
+        "spawn_agent",
+        "followup_task",
+        "send_message",
+        "interrupt_agent",
+        "list_agents",
+        "wait_agent",
+    }
+)
 
 
 def transcript_root() -> str:
@@ -361,7 +371,11 @@ def scan_codex(root: str, cutoff: datetime | None) -> dict:
                             continue
                         calls[call_id] = name
                         session_calls[name] += 1
-                        if name == "spawn_agent" or name.endswith(".spawn_agent"):
+                        # Count canonical collaboration calls, whether the
+                        # harness records a bare or namespace-qualified name.
+                        # sub_agent_activity remains visible in tool counts but
+                        # is a duplicate UI/activity signal, not another call.
+                        if name.rsplit(".", 1)[-1] in DELEGATION_CALLS:
                             agents += 1
                     elif event_type in ("function_call_output", "custom_tool_call_output"):
                         call_id = payload.get("call_id")

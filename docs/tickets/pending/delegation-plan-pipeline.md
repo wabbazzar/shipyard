@@ -2,8 +2,8 @@
 
 - **Created:** 2026-07-27
 - **Owner:** wabbazzar
-- **Status:** Phase 6.5 polished — ready to build; Phase 7 remains pending a
-  comparable sample; phases 1–6 implemented 2026-07-27
+- **Status:** Phase 6.5 implemented 2026-07-28; Phase 7 remains pending a
+  comparable forward-marked sample; phases 1–6 implemented 2026-07-27
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 17 (7 phases + Phase 6.5 prerequisite, cap 5/phase)
@@ -1018,22 +1018,52 @@ after the explicit invocation marker lands.
 - GREEN command / passing cases / exit: `python3 -m py_compile
   scripts/delegation-report.py` rc=0; focused bats 56/56 passed, rc=0; four
   legacy-golden `cmp` calls rc=0; scoped `git diff --check` rc=0.
-- commit: not committed (parent orchestrator owns the Slice A commit).
+- commit: `18dce2e`.
 - notes / blockers: stdlib-only/read-only adapters landed with hand-authored
   fixtures only; no personal transcript data. Independent review restored and
   pinned the legacy missing-Claude-root diagnostic. No blockers.
 
 #### Slice B Ledger placeholder
 
-- plan:
-- builder: subagent (<N> agents)
-- marker proof (source count / real attributed sessions):
+- plan: Add and contract-test the one-time Codex invocation marker, then emit it
+  in this live Codex run and prove attribution with a content-free local smoke
+  before the full gate.
+- builder: subagent (1 agent)
+- contract RED command / passing + failing / exit:
+  `bats tests/delegation-contract.bats` → 28 passed / 1 failed, rc=1; only
+  `execute-ticket: emits one hidden Codex invocation marker first` failed.
+- contract GREEN command / passing / exit:
+  `bats tests/delegation-contract.bats` → 29/29 passed, rc=0; scoped
+  `git diff --check` rc=0.
+- smoke-defect RED command / failing / exit:
+  `bats --filter 'explicit collaboration lifecycle'
+  tests/delegation-report.bats` → 0/1 passed, rc=1; `agent_calls` was not the
+  expected 6 because only `spawn_agent` counted.
+- adapter GREEN command / passing / exit: `python3 -m py_compile
+  scripts/delegation-report.py` rc=0; focused reporter + contract suites →
+  58/58 passed, rc=0; scoped `git diff --check` rc=0.
+- marker proof (source count / real attributed sessions): one literal in
+  `skills/execute-ticket/SKILL.md`; 2 real marked Codex sessions attributed.
 - content-free Codex smoke command / counts / exit:
-- leak tracked-file proof / exit:
-- final gate commands / counts / exits:
-- pending-path + lifecycle proof:
-- commit:
-- notes / blockers:
+  `delegation-report.py --source codex --since <Phase-6.5-start> --json` piped
+  to the locked `jq -e` predicate → sessions=2, turns=3, agent_calls=6,
+  zero-agent sessions=1, malformed records=0, malformed boundaries=2; rc=0.
+- leak tracked-file proof / exit: `bash scripts/leak-check.sh` → clean, rc=0;
+  Slice A fixtures were staged explicitly before this run.
+- final gate commands / counts / exits: `bats tests/` → 425/425, rc=0;
+  focused reporter + contract count=58; shell syntax + both Python compiles
+  rc=0; leak clean; deck fresh/complete/render rc=0; doctor clean; diff check
+  rc=0.
+- pending-path + lifecycle proof: lifecycle check rc=0; pending path exists and
+  complete path does not.
+- commit: this Slice B commit.
+- notes / blockers: initial real smoke reported sessions=1, turns=1,
+  agent_calls=0 after a post-marker `followup_task`; this exposed that the
+  adapter counted only spawns. The explicit delegation-call set now covers
+  spawn/follow-up/message and collaboration lifecycle calls while leaving
+  `sub_agent_activity` visible without double-counting it. Marker instruction
+  is a raw HTML comment and forbids visible repetition. The corrected real
+  smoke and full gate passed. No blocker.
 
 **Honest note on this build's own Delegation Plan.** The ticket specified
 `Delegation: subagent` for Phase 1; every phase was in fact built inline. Phases
@@ -1050,9 +1080,10 @@ prove, on runs that can actually delegate.
 
 Phases 1–6 built, gated, and committed on `feat/delegation-plan-pipeline`
 (`2baeaa2`, `64fbf87`, `63df470`, `3b9821d`, `5df83ae`, `8237985`).
-Phase 6.5 is now the prerequisite. Phase 7 remains open: its existing Claude
-post-cutover sample is 2 sessions, and Codex contributes only forward,
-explicitly marked sessions after Phase 6.5 lands.
+Phase 6.5 is implemented. Phase 7 remains open: its existing Claude
+post-cutover sample is 2 sessions, and the Codex cohort starts with 2
+forward-marked sessions; the outcome gate still waits for its comparable
+five-session sample.
 
 ---
 

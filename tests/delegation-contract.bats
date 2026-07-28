@@ -78,6 +78,16 @@ has() {
   has "$f" 'NEVER fake'
 }
 
+@test "execute-ticket: emits one hidden Codex invocation marker first" {
+  f="$SKILLS/execute-ticket/SKILL.md"
+  marker='<!-- shipyard-skill:execute-ticket:v1 -->'
+  [ "$(grep -oF -- "$marker" "$f" | wc -l)" -eq 1 ]
+  # Keep these assertions source-line-safe: each phrase must fit on one line.
+  has "$f" 'first assistant commentary'
+  has "$f" 'exactly once'
+  has "$f" 'HTML comment'
+}
+
 # ---------------------------------------------------------------------------
 # write-ticket
 # ---------------------------------------------------------------------------

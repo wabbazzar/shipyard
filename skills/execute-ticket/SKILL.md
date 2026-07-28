@@ -34,6 +34,14 @@ You are the **orchestrator**: keep your context lean, delegate heavy/wide
 work to subagents with tight briefs, and **re-verify everything yourself**
 before you commit.
 
+At the start of every invocation, put the marker below exactly once in the
+first assistant commentary:
+
+<!-- shipyard-skill:execute-ticket:v1 -->
+
+This is an HTML comment: do not repeat it or describe it in visible user
+messaging.
+
 ## Step 0 — Discover state (never assume)
 
 - Read the project's **`.agents/gates.md`** (which gate classes apply + the
