@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-27
 - **Owner:** wabbazzar
-- **Status:** Polished — closeout evidence pending; no product changes planned
+- **Status:** Built + verified — all nine phases complete
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 11 (4 phases, cap 5/phase)
@@ -167,7 +167,7 @@ This is the phase that makes the scheme real.
       proven by a bats case, not asserted.
 - [x] `shipyard learn` stubs land in the project's configured ticket dir.
 - [x] The installer can set the layout up, and new installs inherit the gate class.
-- [ ] `bats tests/`, `scripts/leak-check.sh`, `scripts/check-deck-fresh.sh` green.
+- [x] `bats tests/`, `scripts/leak-check.sh`, `scripts/check-deck-fresh.sh` green.
 
 ## Reference implementation
 
@@ -620,6 +620,27 @@ Shipyard adopted `docs/tickets/{pending,complete,freezer}` and enabled
 `lifecycle_dirs = true` in `.agents/config.toml` at `37074c9`. On 2026-07-28,
 `scripts/ticket-lifecycle.sh --project . --check` returned 0.
 
+### Phase 9 — evidence-only closeout — IN PROGRESS
+
+builder: inline (the orchestrator must personally read the final fleet and
+repository gates; no product implementation remains).
+
+Plan: prove all six migration commits are on their remote trunks, verify the
+five non-Aurora live checkouts plus Shipyard, record Aurora's unrelated
+ahead-of-main branch drift without mutating it, run the complete Shipyard gate
+battery, then graduate this ticket in the verified closeout commit.
+
+Result: all six ancestry probes printed `LANDED`; lifecycle checks returned 0
+for bopthere, shredly, starbird, wabbazzar-ice, 2pizzaclub, and Shipyard.
+Aurora's remote-main migration is landed, while its live checkout remains on
+`publish/ticket-lifecycle`, 20 commits ahead of `origin/main`, with unrelated
+tracked and untracked product work; its branch-only ticket 038 produces the
+sole lifecycle finding. That active branch drift is explicitly outside this
+migration closeout and was not modified. Shipyard doctor checks a–j, syntax,
+Python byte-compile, leak, deck freshness, deck render, and 380/380 Bats passed.
+GitHub checks run `30391199899` completed successfully for polished-ticket
+commit `3c88bee`.
+
 ## Closeout hand-off (2026-07-28)
 
 Phases 1–6 core: `79b3d25`, `bad5ac0`, `a207503`, `ebac9e1`, `97c0d9f`,
@@ -783,5 +804,5 @@ this is a single-ticket closeout with no product edit).**
 - [x] All six active fleet repositories have migration commits on remote trunks;
       filenames were unchanged. `caladan` is excluded by owner decision.
 - [x] Shipyard's own tickets are foldered at `37074c9`.
-- [ ] Phase 9 records a current full-battery run, current CI state, and the honest
+- [x] Phase 9 records a current full-battery run, current CI state, and the honest
       disposition of Aurora's ahead-of-main checkout before graduation.
