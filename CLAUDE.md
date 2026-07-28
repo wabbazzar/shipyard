@@ -61,6 +61,11 @@ frontmatter (`roles:`, `kind:`) + `install.sh`'s `GENERIC_SKILLS` line +
 `docs/deck-editorial.json`. Touch a SKILL.md's frontmatter or the skill list and
 you must `python3 scripts/gen-deck-data.py` and commit the regenerated JSON.
 Prose edits go in `deck-editorial.json`, never in the generated file.
+Avoid documentation bloat: update the existing canonical document instead of
+adding a parallel explainer unless it serves a genuinely different reader and
+job. When shipped behavior or public claims change, update the existing README
+and GitHub Pages deck in the same ticket; completion requires the published
+deck bytes to match the committed source.
 
 **Test convention:** new behavior lands with a bats case shown failing against
 the pre-change code first. `tests/helpers.bash` gives you a PATH shim

@@ -445,6 +445,10 @@ clone never touches anything external:
 
 Run it by hand with `scripts/sync-deck-mirror.sh [<sha>]` (defaults to `HEAD`);
 exit `0` = pushed, `2` = bad config/guard, `3` = no-op (unset or unchanged).
+The deck is the canonical public presentation: behavior or public-claim changes
+update its existing editorial and the relevant existing reference above, not a
+parallel explainer. Completion requires both published deck JSON files to match
+the committed local bytes.
 
 ## Docs
 
@@ -475,7 +479,7 @@ agents/
 ├── medic/      role.md + runner.sh + check-examples/      [spacetime: suk]
 ├── scribe/     role.md + runner.sh                        [spacetime: chronicler]
 └── lib/        load-config.sh, naming.sh, post-run.sh, log_event.sh, revert-merge.sh
-skills/         the seven shared skills + install + gates.md.template
+skills/         the eight shared skills + install + gates.md.template
 install.sh      per-project installer (idempotent; --theme names)
 docs/           INSTALL.md, ADAPTING.md, shoulder-mode.md, deck data
 pack.toml       BopBop pack manifest

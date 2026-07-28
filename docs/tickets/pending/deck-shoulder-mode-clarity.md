@@ -123,18 +123,18 @@ Record screenshot paths/hashes and graduate with
 
 ## Acceptance Criteria / Definition of Done
 
-- [ ] The shoulder-mode `detail` is **≤154 words** with no
+- [x] The shoulder-mode `detail` is **≤154 words** with no
       must-survive fact dropped.
-- [ ] The mechanism reads as a **scannable breakdown** (capture / critique /
+- [x] The mechanism reads as a **scannable breakdown** (capture / critique /
       delivery / optional teeth) through the locked escaped paragraph helper,
       not by embedding markup the renderer escapes.
-- [ ] Harness support names claude, codex, and hermes accurately.
-- [ ] All prose edits are in `deck-editorial.json`; `shipyard-data.json`
+- [x] Harness support names claude, codex, and hermes accurately.
+- [x] All prose edits are in `deck-editorial.json`; `shipyard-data.json`
       regenerated and byte-identical (`check-deck-fresh` green).
 - [ ] The drawer + skill graph render cleanly at the deck viewport, **verified by
       screenshot** — no overflow, no overlap.
-- [ ] Glossary terms remain anchored to shipped files with `path:line` sources.
-- [ ] Existing CLAUDE/README/deck surfaces carry the canonical no-bloat and
+- [x] Glossary terms remain anchored to shipped files with `path:line` sources.
+- [x] Existing CLAUDE/README/deck surfaces carry the canonical no-bloat and
       Pages-current policy/presentation; no new guide exists.
 - [ ] Full 405+ suite and syntax, `py_compile`, leak, lifecycle, deck
       fresh/complete/render, doctor, exact-SHA CI, and both Pages hashes green.
@@ -162,7 +162,17 @@ Record screenshot paths/hashes and graduate with
 - Re-polish — `builder: subagent (1 read-only audit agent)` measured 258 words,
   both render paths, current three-harness support, 405 tests, and the missing
   no-bloat policy. Ticket now has locked decisions and per-phase delegation.
-- P1 — pending
+  Commit `c7220cc`; CI `30397005141` completed successfully.
+- P1 — ready for scoped commit. `builder: subagent (1 render/prose agent)`
+  owned the two render paths, failing-first tests, concise editorial, generated
+  JSON, and a review-driven spacing correction; the orchestrator owned
+  canonical CLAUDE/README policy. RED: 3/8 before structure/prose, then 8/9
+  before paragraph spacing. GREEN: focused 9/9; 116 words in four paragraphs;
+  both drawer paths use the escaped helper with sibling spacing; all current
+  harness/critic facts and glossary anchors remain; browser render,
+  freshness/completeness, and diff checks pass. Full 411/411; syntax,
+  `py_compile`, leak, lifecycle, doctor, and diff checks pass. Commit: this
+  scoped P1 commit; SHA/CI are recorded in P2.
 - P2 — pending
 
 ---

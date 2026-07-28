@@ -212,6 +212,8 @@
     }
     .crew-drawer .skill-detail { font-size: 0.9rem; line-height: 1.6; color: var(--muted); margin: 0.4rem 0 0; }
     .crew-drawer .skill-detail p { margin: 0; }
+    .skill-body p + p,
+    .crew-drawer .skill-detail p + p { margin-top: 0.65rem; }
 
     /* Clickable glossary jargon in prose */
     .gloss {
@@ -578,6 +580,15 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
         return out;
       }
 
+      function renderParagraphs(text) {
+        return String(text ?? '')
+          .split(/\n\s*\n/)
+          .map(paragraph => paragraph.trim())
+          .filter(Boolean)
+          .map(paragraph => `<p>${linkGloss(esc(paragraph))}</p>`)
+          .join('');
+      }
+
       // Cast: the dummy project names, presented up front on the title slide.
       const castEl = document.getElementById('cast-block');
       if (castEl && data.cast && Array.isArray(data.cast.projects)) {
@@ -925,7 +936,7 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
                  <span class="disposition" data-d="${esc(s.disposition)}">${esc(s.disposition)}</span>
                  <span class="chev">&#9656;</span>
                </button>
-               <div class="skill-body"><span class="src">${esc(s.source || '')}</span><p>${linkGloss(esc(s.detail))}</p></div>
+               <div class="skill-body"><span class="src">${esc(s.source || '')}</span>${renderParagraphs(s.detail)}</div>
              </div>`).join('');
         drawer.classList.add('open');
         overlay.classList.add('open');
@@ -946,7 +957,7 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
              <div class="was">${esc(s.source || '')}</div>
              <span class="disposition" data-d="${esc(s.disposition)}">${esc(s.disposition)}</span>
              ${chips ? `<div class="role-chips">${chips}</div>` : ''}
-             <div class="skill-detail"><p>${linkGloss(esc(s.detail))}</p></div>`;
+             <div class="skill-detail">${renderParagraphs(s.detail)}</div>`;
         } else {
           const gl = (data.glossary || {})[label];
           const gdef = typeof gl === 'string' ? gl : (gl && gl.def) || '';
