@@ -2,7 +2,8 @@
 
 - **Created:** 2026-07-27
 - **Owner:** wabbazzar
-- **Status:** Phase 7 outcome verification open; phases 1–6 implemented 2026-07-27
+- **Status:** Phase 7 waiting on sample gate (2/5); phases 1–6 implemented
+  2026-07-27
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 14 (7 phases, cap 5/phase)
@@ -729,6 +730,14 @@ entry, found Ledger builders: subagent=5, inline=9, total=14.
 
 Re-run the exact command after at least three more real post-cutover sessions
 and compare the resulting ≥5-session sample to the locked Phase 7 thresholds.
+
+**Checkpoint 2026-07-28 after the five-ticket hygiene run:** the exact command
+still reports 2 sessions, so the ≥5 trigger remains unmet. The transcript
+reporter intentionally reads the Claude Code store; the UI-design and
+shoulder-clarity executions performed through Codex do not increment this
+sample. Current recursive Ledger evidence is subagent=5, inline=12, total=17
+(29.41% subagent), also provisional until the session trigger is met. No
+completion notification was sent and no threshold was weakened.
 
 **Honest note on this build's own Delegation Plan.** The ticket specified
 `Delegation: subagent` for Phase 1; every phase was in fact built inline. Phases
