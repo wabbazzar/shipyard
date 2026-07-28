@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-28
 - **Owner:** wabbazzar
-- **Status:** Polished — ready for autonomous execution
+- **Status:** Phase 5 in progress; Phase 6 open; phases 1–4 implemented
 - **Priority:** high
 - **Type:** chore
 - **Estimated Points:** 18 (6 phases, cap 5/phase)
@@ -468,3 +468,18 @@ bats tests/
   generated with 7 desks and 73 items, proving routine news remains available
   outside Signal. BopBop's independent conversation/thread fixtures passed
   17/17. Caladan remained excluded as the owner directed.
+- 2026-07-28 — Phase 5 planned; `builder: subagent (1 audit/build agent)`.
+  Read-only audit found 13 unique flat tickets and no stale backlog duplicate:
+  seven have complete commit-backed Ledgers; six are unfinished or lack enough
+  evidence and will remain pending. Nothing is authorized for `freezer/`.
+- 2026-07-28 — Phase 5 built. All 13 tickets are uniquely filed (7 complete,
+  6 pending, 0 freezer); the ignored live config enables lifecycle directories,
+  and installer-generated `AGENTS.md` advertises all seven skills. Focused
+  lifecycle/install/relink/doctor gates: 56/56; lifecycle check, doctor checks
+  a–j, duplicate scan, syntax, leak, deck freshness, and deck render: green.
+  A separate ephemeral Codex session discovered
+  `.agents/skills/shipyard/SKILL.md`, ran the skill's deterministic status
+  command, and reported doctor clean with exit 0. A deliberately `read-only`
+  Codex sandbox could not query the systemd user bus and therefore reported
+  five false disabled-timer findings; the normal full-permission installed
+  session is the verified operating surface.

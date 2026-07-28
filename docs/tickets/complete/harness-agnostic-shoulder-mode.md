@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-24
 - **Owner:** wabbazzar
-- **Status:** Polished — ready for `execute-ticket`; queued for a human stamp (not built)
+- **Status:** Built + verified — P0–P5 merged to `main` in `31fd1e6`
 - **Type:** feature
 - **Estimated Points:** 20 (P0 2 · P1 5 · P2 3 · P3 5 · P4 3 · P5 2)
 - **Refs:** `.agents/gates.md` (gate classes + Traps), `docs/shoulder-mode.md`

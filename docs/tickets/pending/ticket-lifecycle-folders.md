@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-27
 - **Owner:** wabbazzar
-- **Status:** Phase 1 built (`79b3d25`); SCOPE REVISED 2026-07-27 by owner decision — determinism + default-on + fleet migration (see Scope Revision)
+- **Status:** Phases 7–8 open; phases 1–6 implemented (see hand-off Ledger)
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 11 (4 phases, cap 5/phase)

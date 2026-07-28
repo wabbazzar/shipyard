@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-27
 - **Owner:** wabbazzar
-- **Status:** phases 1–6 built + verified 2026-07-27; **phase 7 open** (time-deferred outcome check)
+- **Status:** Phase 7 outcome verification open; phases 1–6 implemented 2026-07-27
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 14 (7 phases, cap 5/phase)

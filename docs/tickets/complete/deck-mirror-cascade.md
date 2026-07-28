@@ -1,6 +1,6 @@
 # Deck mirror cascade — push shipyard's deck to the wabbazzar.com writing mirror
 
-- **Status:** draft (ready for `polish-ticket`; awaiting human stamp)
+- **Status:** Built + verified — P1–P3 merged to `main` in `ba7032f`
 - **Priority:** medium
 - **Type:** feature
 - **Estimated Points:** 10 (P1 5 · P2 3 · P3 2)

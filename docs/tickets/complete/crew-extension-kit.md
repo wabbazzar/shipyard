@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-23
 - **Owner:** wabbazzar
-- **Status:** Built — all six phases green on `feat/crew-extension-kit`; awaiting human PR stamp (merge-is-live, `can_merge=false`)
+- **Status:** Built + verified — all six phases merged to `main` in `874b467`
 - **Type:** feature (P1 is a bugfix)
 - **Estimated Points:** 21 (P1 3 · P2 5 · P3 3 · P4 5 · P5 3 · P6 2)
 - **Refs:** motivated by a downstream install where an operator hand-built a

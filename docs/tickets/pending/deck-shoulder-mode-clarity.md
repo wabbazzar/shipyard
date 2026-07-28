@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-24
 - **Owner:** wabbazzar
-- **Status:** Polished — ready for `execute-ticket`; queued for a human stamp (not built)
+- **Status:** Polished — ready for `execute-ticket`; implementation not started
 - **Type:** docs
 - **Estimated Points:** 3 (P1 2 · P2 1)
 - **Refs:** `docs/deck-editorial.json` (prose source), `scripts/gen-deck-data.py`

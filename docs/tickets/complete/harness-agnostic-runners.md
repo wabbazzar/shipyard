@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-23
 - **Owner:** wabbazzar
-- **Status:** Polished — ready for `execute-ticket` (behind the human stamp)
+- **Status:** Built + verified — P1–P6 merged to `main` in `d304eea`
 - **Type:** feature
 - **Estimated Points:** 26 (P1 5 · P2 5 · P3 5 · P4 3 · P5 3 · P6 5)
 - **Refs:** `/feature` → `write-ticket` → `polish-ticket`; gate file `.agents/gates.md`.
