@@ -2,137 +2,192 @@
 
 - **Created:** 2026-07-27
 - **Owner:** wabbazzar
-- **Status:** Draft — local prototype validated; ready for `polish-ticket`
+- **Status:** Polished — documentation and closeout evidence pending
 - **Priority:** high
 - **Type:** bugfix
-- **Estimated Points:** 5 (3 phases, cap 5/phase)
-- **Refs:** `install.sh:120` (`GENERIC_SKILLS`), `install.sh:248-287`
-  (`--doctor`), `install.sh:410-459` (`--relink`),
-  `install.sh:744-826` (skill installation / bridge),
-  `tests/harness-install.bats`, `tests/relink.bats`, `tests/doctor.bats`,
-  `README.md` Skills-parity, `docs/INSTALL.md` L5.
+- **Estimated Points:** 1 remaining (evidence/documentation closeout)
+- **Refs:** `install.sh` (`write_skill_bridge`, `SKILLS_DESTS`, `--doctor`,
+  `--relink`), `tests/harness-install.bats`, `tests/relink.bats`,
+  `tests/doctor.bats`, `README.md` Skills-parity, `docs/INSTALL.md` L5.
 
-## Summary
+## Goal
 
-Shipyard correctly symlinks its seven shared skills into each project's
-`.claude/skills/`, but it only writes the Codex/Hermes `AGENTS.md` bridge when
-one of the *scheduled* roles is configured with a non-Claude harness. A project
-whose crew defaults to Claude therefore has the files but no way for an
-interactive Codex or Hermes session to discover them.
+An interactive Codex, Claude, or Hermes session opened in any Shipyard-installed
+repository discovers the same project-local Shipyard skill files. Installation
+and repair must remain universal, idempotent, and ownership-safe.
 
-Create and repair the bridge for every installed project, regardless of the
-scheduled harness. The bridge remains deliberately project-local: do not write
-global Codex or Hermes skill directories and do not clobber a project-owned
-`AGENTS.md`.
+The implementation is already landed. A cold agent must **not** rebuild it.
+The only remaining work is a concise clarification in the two existing
+canonical install documents, current verification evidence, and ticket
+graduation.
 
-## Problem / Background
+## Current truth
 
-The current installer derives `foreign_harness` from `[harness]` / per-role
-harness configuration and only then emits the root bridge. That assumption is
-wrong: a human can open Codex or Hermes in any installed repository, including
-one whose unattended Shipyard roles all use Claude.
+The original prototype landed at `6650518` and was merged by `e1a9b31`. It made
+the root `AGENTS.md` bridge unconditional, preserved an existing project-owned
+bridge, and added doctor/relink/dry-run coverage.
 
-The observed failing state is concrete:
+Codex does not use `.claude/skills/` as its native repository discovery root.
+Commit `60b75c9` corrected the prototype by installing the same shared skills
+under both:
 
-1. All seven links in `.claude/skills/` resolve into Shipyard's `skills/`.
-2. The project has no root `AGENTS.md` because its scheduled roles use the
-   default harness.
-3. Codex/Hermes consequently receive no in-repository list telling them to read
-   `.claude/skills/<name>/SKILL.md`; `write-ticket`, `execute-ticket`, and the
-   other shared workflows are present on disk but not discoverable.
+- `.agents/skills/` — Codex-native project discovery;
+- `.claude/skills/` — Claude/Hermes compatibility.
 
-This must not be solved by installing into a user's global Codex or Hermes
-home. Those locations are user- and machine-scoped, create cross-project
-leakage, and cannot make a repository self-contained. The supported Shipyard
-adapter is the root `AGENTS.md` bridge: Codex/Hermes load repository guidance,
-then read the same symlinked `SKILL.md` files as Claude.
+The generated root `AGENTS.md` names `.agents/skills/<name>/SKILL.md`.
+`write_skill_bridge` is shared by normal install and `--relink`; it never
+clobbers an existing file or symlink. `--doctor` detects a missing bridge and
+missing links in either root. `--relink --dry-run` reports drift and writes
+nothing.
 
-The host-provided "available skills" menu may still list only host-managed
-skills. This ticket guarantees repository discovery and use through
-`AGENTS.md`; it must not claim to mutate a host's remote skill catalog.
+On 2026-07-28, the targeted command below returned 35/35 passing:
 
-## Implementation Plan
+```bash
+bats tests/harness-install.bats tests/relink.bats tests/doctor.bats
+```
 
-### Phase 1 — Make bridge generation unconditional (2 points)
+## Locked decisions
 
-**Delegation: subagent — change the installer bridge predicate and return the
-focused diff plus targeted bats output.**
+| Decision | Locked result |
+|---|---|
+| Discovery scope | Project-local only; never install into a global Codex, Claude, or Hermes home. |
+| Codex root | `.agents/skills/`; `.claude/skills/` remains the compatibility root. |
+| Existing `AGENTS.md` | Project-owned; never overwrite, append, or reject its contents. |
+| Repair scope | Links plus a missing generated bridge only; no timer, unit, gate, or config rebake. |
+| Public explanation | Edit existing `README.md` and `docs/INSTALL.md` only; create no new document. |
+| Host UI boundary | Shipyard controls repository files, not a host-managed/global skill-picker catalog or UI. |
 
-- In `install.sh`, replace the `foreign_harness` gate around the skill bridge.
-  Every normal install creates the bridge when root `AGENTS.md` is absent,
-  including a Claude-only configuration.
-- Keep the generated body enumerating every item in `GENERIC_SKILLS` as
-  `.claude/skills/<skill>/SKILL.md` and saying to read and follow the named
-  skill before acting.
-- Preserve the existing ownership boundary: an existing file or symlink at
-  `AGENTS.md` is left byte-for-byte unchanged. Do not overwrite, append to, or
-  infer ownership of it.
-- Extract one small helper if needed so normal install and repair mode share an
-  identical generated body.
-- Extend `tests/harness-install.bats` with a failing-first regression for a
-  fixture with no `[harness]` configuration: normal installation creates the
-  bridge and it names `write-ticket` and `execute-ticket`.
+There are no open decisions and no spend, publication, destructive change, or
+live-automation change in the remaining phase.
 
-### Phase 2 — Detect and repair existing installs without timer side effects (2 points)
+## Historical implementation
 
-**Delegation: subagent — add doctor/relink coverage and return exact drift and
-repair output.**
+### Phases 1–2 — universal bridge and Codex-native discovery — complete
 
-- Add a `--doctor` finding for a missing root bridge, e.g.
-  `DOCTOR skill bridge: AGENTS.md missing`. Do not inspect or reject the
-  contents of an existing project-owned bridge.
-- Expand `--relink` to create only a missing bridge, alongside its existing
-  skill-symlink repair. It must not change systemd units, project config,
-  gates, or an existing `AGENTS.md`.
-- `--relink --dry-run` reports the bridge it would create and writes nothing.
-- Extend `tests/doctor.bats` and `tests/relink.bats` with failing-first cases
-  for detection, real repair, dry-run non-write, and preservation of an
-  existing project-owned file.
+Prototype builder: another agent (`6650518`, merged by `e1a9b31`).
+Codex-native correction builder: inline (`60b75c9`).
 
-### Phase 3 — Align public installer documentation (1 point)
+Acceptance already implemented:
 
-**Delegation: inline (documentation is coupled to the exact verified installer
-behavior).**
+- Claude-only and mixed-harness installs create the bridge when absent.
+- Existing `AGENTS.md` content remains byte-for-byte unchanged.
+- `.agents/skills/` and `.claude/skills/` link to the same Shipyard sources.
+- Doctor reports missing bridge/link drift.
+- Relink repairs missing links/bridge; dry-run writes nothing.
 
-- Update `README.md`, `docs/INSTALL.md`, and `skills/install/SKILL.md` to say
-  that the root bridge is installed for every project, not only for a project
-  with a currently non-Claude scheduled role.
-- Document the repair path: `install.sh --relink --project <project>` repairs
-  the missing bridge without rebaking timers or configuration.
-- Keep the scope precise: the bridge gives Codex/Hermes repository-local skill
-  discovery; it does not populate a host-managed skill picker.
+Do not modify `install.sh`, `skills/install/SKILL.md`, or the three targeted
+test files during closeout unless a real gate exposes a new regression. If one
+does, stop and report the exact failure; this ticket does not authorize an
+unplanned implementation pass.
 
-## Testing Strategy
+## Remaining phase — canonical docs, evidence, graduate (1 point)
 
-- `bash -n install.sh`
-- Targeted failing-first and green cases in
-  `tests/harness-install.bats`, `tests/relink.bats`, and `tests/doctor.bats`.
-- `bats tests/`
-- `bash scripts/leak-check.sh`
-- `bash scripts/check-deck-fresh.sh`
+**Delegation: inline (two tightly coupled canonical-doc sentences plus gate
+commands whose output the orchestrator must personally read).**
+
+> Converge honestly or report the precise blocker with the actual evidence —
+> NEVER fake green, weaken a check, or hand-wave "should work". Run the real
+> command, read the real file, curl the real port, and report exact output
+> (exit codes, JSONL lines, HTTP codes), not adjectives.
+
+### Change
+
+Edit only the existing Skills-parity paragraph in `README.md` and L5 in
+`docs/INSTALL.md`; add no heading and no new file. Add at most one concise
+three-sentence paragraph per file. Each location must state:
+
+1. Shipyard installs project-local links in `.agents/skills/` for Codex and
+   `.claude/skills/` for Claude/Hermes, all resolving to the same source files.
+2. The generated `AGENTS.md` is repository guidance and never clobbers an
+   existing project-owned file.
+3. Shipyard cannot add entries to a host-managed/global skill-picker catalog or
+   control how that UI labels repository-discovered skills.
+
+Do not promise that every host UI visibly lists these skills. The observable
+contract is repository discovery and readable symlink targets.
+
+### Verification
+
+From the Shipyard checkout:
+
+```bash
+bats tests/harness-install.bats tests/relink.bats tests/doctor.bats
+./install.sh --doctor --project .
+./install.sh --relink --dry-run --project .
+```
+
+Require 35/35 targeted tests, doctor exit 0, and relink dry-run exit 0 with
+`0 would be repaired` and `AGENTS.md: exists — leaving as-is`.
+
+Verify Codex's deterministic discovery surface without spending a model call:
+
+```bash
+for skill in write-ticket polish-ticket execute-ticket; do
+  test "$(readlink -f ".agents/skills/$skill")" = \
+    "$(readlink -f "skills/$skill")"
+  grep -Fq ".agents/skills/$skill/SKILL.md" AGENTS.md
+done
+```
+
+Then run the full project gates from `.agents/gates.md`:
+
+```bash
+bats tests/
+bash -n install.sh agents/lib/*.sh agents/*/runner.sh \
+  agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit
+python3 -m py_compile scripts/gen-deck-data.py
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+gh run list --workflow checks.yml --branch main --limit 1 \
+  --json databaseId,headSha,status,conclusion,url
+```
+
+The latest run for the current `main` SHA must be completed/success. Append
+exact exit codes, test counts, dry-run summary, resolved paths, and CI JSON to
+the Ledger. Finally run:
+
+```bash
+scripts/ticket-lifecycle.sh --graduate \
+  docs/tickets/pending/unconditional-cross-harness-skill-bridge.md
+```
+
+Include the ticket move in the same final closeout commit as the two
+documentation edits.
 
 ## Definition of Done
 
-- [ ] A Claude-only Shipyard project receives a generated root `AGENTS.md`
-      containing every `GENERIC_SKILLS` path.
-- [ ] A project with an existing `AGENTS.md` is unchanged.
-- [ ] `--doctor` reports a missing bridge and `--relink` restores it without
-      systemd or config changes; dry-run creates nothing.
-- [ ] The same seven Shipyard skill files remain the source of truth for
-      Claude, Codex, and Hermes.
-- [ ] Docs explain both the universal bridge and the host-catalog boundary.
-- [ ] All listed gates are green.
+- [x] Claude-only installs receive a generated root `AGENTS.md`.
+- [x] Existing project-owned `AGENTS.md` files are unchanged.
+- [x] Codex-native `.agents/skills/` and compatibility `.claude/skills/` links
+      resolve to the same Shipyard skill sources.
+- [x] Doctor detects missing bridge/link drift; relink repairs it; dry-run
+      creates nothing.
+- [x] Targeted bridge/install/doctor tests pass 35/35.
+- [ ] Existing canonical install docs state both discovery roots and the
+      host-managed/global skill-picker boundary, with no new documentation.
+- [ ] Current targeted, deterministic discovery, full-gate, doctor, dry-run,
+      and CI evidence is recorded below.
+- [ ] Ticket graduates to `complete/` in the documentation closeout commit.
 
-## Risks & Mitigations
+## Ledger
 
-| Risk | Mitigation |
-|---|---|
-| Overwriting a team's instructions | Treat any existing file or symlink as project-owned and leave it unchanged. |
-| Repair mode causes operational side effects | Limit `--relink` to symlinks and a missing bridge; pin with tests. |
-| Claiming the hosted Codex skill menu changed | Explicitly document that `AGENTS.md` provides repository discovery, not host catalog registration. |
+### Prototype and Codex-native correction
 
-## Out of scope
+builder: another agent for prototype; inline for native-root correction.
 
-- Global installation under Codex or Hermes user homes.
-- A Shipyard Codex plugin or marketplace publication.
-- Altering the scheduled harness, model, or systemd timers.
+- `6650518` — unconditional bridge, ownership boundary, doctor/relink coverage.
+- `e1a9b31` — prototype merged to `main`.
+- `60b75c9` — `.agents/skills/` Codex-native discovery added alongside
+  `.claude/skills/`.
+- Targeted verification on 2026-07-28: 35/35 passing.
+
+### Documentation and evidence closeout
+
+builder: pending — must be `inline` for the bounded reason above.
+
+Append exact evidence and final commit SHA here. No product implementation is
+planned.
+
+---
+
+Run the remaining phase with `execute-ticket`.
