@@ -2,8 +2,8 @@
 
 - **Created:** 2026-07-27
 - **Owner:** wabbazzar
-- **Status:** Phase 6.5 Codex-reporting prerequisite drafted; Phase 7 waiting on
-  a comparable sample; phases 1–6 implemented 2026-07-27
+- **Status:** Phase 6.5 polished — ready to build; Phase 7 remains pending a
+  comparable sample; phases 1–6 implemented 2026-07-27
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 17 (7 phases + Phase 6.5 prerequisite, cap 5/phase)
@@ -391,10 +391,22 @@ count in `CLAUDE.md` matches the actual `bats tests/` output.
 
 ### Phase 6.5 — Codex transcript cohort prerequisite (3 pts)
 
-**Delegation:** subagent — extend the reporter through a source adapter, add the
-forward-only invocation marker and synthetic fixtures, and return changed files,
-test counts, the unchanged Claude-output proof, one local Codex smoke summary,
-and blockers.
+**Delegation:** subagent — use this self-contained brief:
+
+> Own only `scripts/delegation-report.py`, `tests/delegation-report.bats`,
+> `tests/delegation-contract.bats`, synthetic files under
+> `tests/fixtures/delegation-report/`, `skills/execute-ticket/SKILL.md`, and this
+> ticket's Phase 6.5 Ledger. Start from the existing Claude adapter and its 16
+> green cases. Build Slice A then Slice B below; add the tests and immutable
+> pre-change Claude goldens before implementation and capture the meaningful RED.
+> Preserve the omitted-source Claude output byte-for-byte. Emit the invocation
+> marker once after its skill instruction lands, run the content-free Codex
+> smoke, and leave this ticket in `pending/` because Phase 7 remains open.
+> Return **≤40 lines**: files changed; commands + exit codes; RED/GREEN test
+> counts; both golden `cmp` results; smoke counts only; full-gate evidence;
+> blockers. Converge honestly or report the precise blocker with the actual
+> evidence — NEVER fake green, weaken a check, or hand-wave "should work". Run
+> the real command, read the real file, and report exact output, not adjectives.
 
 **Why this is a prerequisite.** Phase 7 currently sees only Claude Code
 transcripts. The 2026-07-28 checkpoint below records that real Codex
@@ -402,34 +414,172 @@ transcripts. The 2026-07-28 checkpoint below records that real Codex
 without first teaching the reporter about Codex would measure harness choice
 rather than delegation behavior.
 
-**Slice.**
-- Extend `scripts/delegation-report.py` with `--source
-  claude|codex|all`; default `claude` preserves the current output and
-  2026-07-27 baseline byte-for-byte.
-- Resolve Codex transcripts from `CODEX_SESSIONS_DIR` when set, otherwise
-  `${CODEX_HOME:-$HOME/.codex}/sessions`, whose canonical layout is
-  `YYYY/MM/DD/rollout-*.jsonl`. Keep `CLAUDE_PROJECTS_DIR` unchanged.
-- Parse canonical `response_item` records for user/assistant messages and
-  tool calls/results paired by `call_id`; do not double-count their duplicate
-  `event_msg/user_message` and `event_msg/agent_message` UI events. Recognize
-  `spawn_agent` and the other collaboration calls as delegation activity.
-- Attribute only forward runs whose assistant transcript emits the exact,
-  versioned marker `<!-- shipyard-skill:execute-ticket:v1 -->`.
-  `skills/execute-ticket/SKILL.md` must require that marker once at invocation.
-  Do not infer old invocations from ticket names, available-skill text, edited
-  paths, or natural-language prompts.
-- Report a separate Codex cohort with sessions, assistant turns, zero-subagent
-  sessions/delegation calls, per-tool serialized-result size, input/output/
-  cached-input/cache-write/reasoning tokens, context-window data, and malformed
-  record counts. A missing source metric remains explicit rather than zero.
-- In `--source all`, emit distinct Claude and Codex sections. Never pool raw
-  totals whose tokenization or cost weights differ. Serialized tool-result size
-  is a context-ingress proxy only, never filesystem or network read/write bytes.
-- Extend `tests/delegation-report.bats` using only hand-authored Codex rollout
-  JSONL under the test temp directory. No fixture may copy a real transcript,
-  prompt, session id, path, or user data.
-- Run one read-only smoke report against the local Codex store after the
-  forward marker exists; report counts only, never transcript content.
+#### Phase 6.5 decisions
+
+| Locked | Decision |
+|---|---|
+| C-L1 | `--source claude|codex|all`; omitted means Claude and preserves both current human and JSON output byte-for-byte. |
+| C-L2 | Codex root precedence is `CODEX_SESSIONS_DIR`, then `${CODEX_HOME}/sessions`, then `${HOME}/.codex/sessions`; Claude root semantics do not change. |
+| C-L3 | Codex attribution is forward-only and requires one assistant `response_item` containing `<!-- shipyard-skill:execute-ticket:v1 -->`; there is no historical heuristic. |
+| C-L4 | `--source all` has separate `claude` and `codex` sections and no pooled token, context, byte-proxy, or cost-equivalent total. |
+| C-L5 | Codex serialized tool-result size is labelled a context-ingress proxy; filesystem/network read/write bytes and cross-provider cost equivalents are unavailable, never zero. |
+| C-L6 | Fixtures are hand-authored synthetic JSONL only; no real transcript is copied or sanitized into the repo. |
+
+| Open decision | Default |
+|---|---|
+| **None** | The feature intake locked every build-shaping choice. |
+
+| User-decision class | State |
+|---|---|
+| **None** | No spend, public action, destructive change, configured-live override, or unresolved design fork. |
+
+#### Slice A — red-first source adapters + immutable Claude goldens
+
+1. Add one deterministic, hand-authored Claude fixture under
+   `tests/fixtures/delegation-report/claude/` with a real `Skill` invocation,
+   two usage turns, one paired tool result, fixed UTC timestamps, and an empty
+   synthetic ticket root. Before editing the reporter, generate and retain its
+   exact human and JSON output:
+   ```bash
+   fixture=tests/fixtures/delegation-report/claude
+   CLAUDE_PROJECTS_DIR="$fixture/projects" \
+     python3 scripts/delegation-report.py --all \
+       --tickets-dir "$fixture/tickets" >"$fixture/human.golden"
+   CLAUDE_PROJECTS_DIR="$fixture/projects" \
+     python3 scripts/delegation-report.py --all --json \
+       --tickets-dir "$fixture/tickets" >"$fixture/json.golden"
+   sha256sum "$fixture/human.golden" "$fixture/json.golden"
+   ```
+   The fixture and goldens are synthetic tracked test data, not personal
+   transcripts.
+2. Add tests **before implementation**, then run the focused files against the
+   pre-change reporter:
+   ```bash
+   bats tests/delegation-report.bats tests/delegation-contract.bats
+   ```
+   It must be meaningfully RED because `--source`/Codex support and the skill
+   marker do not exist. Record failing case names and counts in the Ledger.
+   Separately filter/run the two new legacy-golden guards and show they PASS
+   pre-change; a "preservation" guard that is red before the edit proves nothing.
+3. The new fixture cases independently pin:
+   - omitted `--source` and explicit `--source claude`; valid
+     `codex|all`; invalid source → argparse exit 2;
+   - root precedence using three distinct temp trees:
+     `CODEX_SESSIONS_DIR` > `CODEX_HOME/sessions` >
+     `HOME/.codex/sessions`, plus a missing Codex root → exit 2;
+   - canonical `response_item/message` user/assistant turns only; duplicate
+     `event_msg/user_message|agent_message` records with sentinel-large values
+     do not change counts;
+   - `function_call|custom_tool_call` paired to their corresponding output by
+     `call_id`, including deliberately out-of-order results;
+   - zero-subagent/session and delegation counts from `spawn_agent`; collaboration
+     calls remain visible in per-tool counts without double-counting
+     `sub_agent_activity`;
+   - token/cache/context totals from the final non-null
+     `token_count.info.last_token_usage` within each
+     `task_started`→matching `task_complete` boundary; an incomplete boundary is
+     counted malformed and not silently included;
+   - marker-only attribution: exact assistant marker includes; available-skill
+     text, user natural language, ticket paths, and a marker in a non-assistant
+     record all exclude;
+   - malformed JSON/schema records are counted and skipped;
+   - filesystem/network byte and cross-provider cost fields are explicitly
+     unavailable; serialized tool-result size is named as a proxy;
+   - JSON `--source all` is shaped as
+     `{"sources":{"claude":{...},"codex":{...}}}` with no combined/pool key;
+     human output has two source headings and no blended total.
+4. Implement the source adapter in `scripts/delegation-report.py`, keeping it
+   stdlib-only/read-only. For Codex, scan
+   `sessions/YYYY/MM/DD/rollout-*.jsonl`; count assistant turns from canonical
+   assistant `response_item/message` records. Never parse message text except
+   for the exact marker. Measure serialized result payloads as UTF-8 JSON bytes,
+   under a Codex-specific proxy field; do not rename or recompute Claude's
+   existing byte field.
+5. Prove the default and explicit Claude modes match both immutable goldens:
+   ```bash
+   fixture=tests/fixtures/delegation-report/claude
+   for mode in human json; do
+     json_arg=; [ "$mode" = json ] && json_arg=--json
+     CLAUDE_PROJECTS_DIR="$fixture/projects" \
+       python3 scripts/delegation-report.py --all $json_arg \
+         --tickets-dir "$fixture/tickets" >"/tmp/claude-$mode.default"
+     CLAUDE_PROJECTS_DIR="$fixture/projects" \
+       python3 scripts/delegation-report.py --source claude --all $json_arg \
+         --tickets-dir "$fixture/tickets" >"/tmp/claude-$mode.explicit"
+     cmp -s "$fixture/$mode.golden" "/tmp/claude-$mode.default"
+     cmp -s "$fixture/$mode.golden" "/tmp/claude-$mode.explicit"
+   done
+   ```
+   All four `cmp` calls exit 0; record the two golden SHA-256 values.
+6. Verify Slice A before its commit:
+   ```bash
+   python3 -m py_compile scripts/delegation-report.py
+   bats tests/delegation-report.bats tests/delegation-contract.bats
+   git diff --check -- scripts/delegation-report.py \
+     tests/delegation-report.bats tests/delegation-contract.bats \
+     tests/fixtures/delegation-report/
+   ```
+   Observable outcome: the focused suite is green; exact totals in every Codex
+   fixture match; both Claude formats are byte-identical to their pre-change
+   goldens. Commit only Slice A files and append its Ledger placeholder.
+
+#### Slice B — forward invocation marker + real content-free smoke
+
+1. Add one hard-wrapped instruction to `skills/execute-ticket/SKILL.md`: emit
+   `<!-- shipyard-skill:execute-ticket:v1 -->` exactly once in the first
+   assistant commentary of every invocation. Add a source-line-safe contract
+   assertion in `tests/delegation-contract.bats`; show it RED before the skill
+   edit and GREEN after.
+2. In the active Codex `execute-ticket` run, emit that marker exactly once after
+   the instruction lands. Set the smoke cutoff to the phase start, then run:
+   ```bash
+   CODEX_SESSIONS_DIR="${CODEX_HOME:-$HOME/.codex}/sessions" \
+     python3 scripts/delegation-report.py --source codex \
+       --since "$PHASE_65_START_UTC" --json |
+     jq -e '.sessions >= 1 and .turns >= 1 and .agent_calls >= 1' >/dev/null
+   ```
+   This emits no transcript content. If the builder is not running under Codex,
+   the honest result is a blocker: do not inject a marker into a stored file and
+   do not replace the smoke with a synthetic case.
+3. Independently prove the skill carries exactly one marker instruction and the
+   reporter attributed a real assistant marker:
+   ```bash
+   test "$(rg -nF '<!-- shipyard-skill:execute-ticket:v1 -->' \
+     skills/execute-ticket/SKILL.md | wc -l)" -eq 1
+   CODEX_SESSIONS_DIR="${CODEX_HOME:-$HOME/.codex}/sessions" \
+     python3 scripts/delegation-report.py --source codex \
+       --since "$PHASE_65_START_UTC" --json |
+     jq -e '.sessions >= 1' >/dev/null
+   ```
+4. New fixture/golden files must enter the leak firewall before it runs:
+   ```bash
+   git add -N tests/fixtures/delegation-report/
+   bash scripts/leak-check.sh
+   ```
+   `leak-check.sh` uses `git ls-files`; without `git add -N`, a clean result for
+   brand-new untracked fixtures is vacuous. Stage/commit later with explicit
+   pathspecs only, never `git add -A`.
+5. Run the final gate personally before the Slice B/final Phase 6.5 commit:
+   ```bash
+   bats tests/
+   bash -n install.sh agents/lib/*.sh agents/*/runner.sh \
+     agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit
+   python3 -m py_compile scripts/gen-deck-data.py \
+     scripts/delegation-report.py
+   bash scripts/leak-check.sh
+   bash scripts/check-deck-fresh.sh
+   bash scripts/check-deck-complete.sh
+   PLAYWRIGHT_MODULE_DIR="${PLAYWRIGHT_MODULE_DIR:-$HOME/code/node_modules}" \
+     node scripts/check-deck-render.mjs
+   bash scripts/ticket-lifecycle.sh --project . --check
+   ./install.sh --doctor --project .
+   git diff --check
+   test -f docs/tickets/pending/delegation-plan-pipeline.md
+   test ! -e docs/tickets/complete/delegation-plan-pipeline.md
+   ```
+   Render exit 3 is the documented Playwright-unavailable skip; every other
+   command must exit 0. Phase 6.5 commits its code, tests, skill, goldens, and
+   Ledger entry, but **does not graduate the ticket**: Phase 7 is still pending.
 
 **Boundaries.**
 - **Always:** stdlib-only, read-only, hermetic fixtures; source-labelled output;
@@ -440,9 +590,18 @@ rather than delegation behavior.
   historical Codex invocation; pool source-specific cost weights/totals; label
   serialized result size as filesystem or network bytes; add a dependency.
 
-**Gate classes:** Python syntax, hermetic bats, public-repo hygiene, and a
-read-only local smoke apply. `polish-ticket` must supply the exact commands and
-the byte-for-byte Claude golden procedure.
+**Measured toolchain baseline (2026-07-28, before implementation).**
+- `Python 3.12.3`; `Bats 1.10.0`.
+- `python3 -m py_compile scripts/delegation-report.py` → exit 0.
+- `bats tests/delegation-report.bats` → 16/16 passing, exit 0.
+- Current `delegation-report.py --help` has no `--source`, the expected
+  failure-first gap.
+- Local Codex root contains 49 `rollout-*.jsonl` files; a schema-only `jq` probe
+  found canonical user/assistant `response_item/message` records, exit 0.
+- Full baseline: `bats tests/` 411/411; syntax + both Python compiles exit 0;
+  leak clean; deck fresh/in sync; deck complete (8 skills); browser render all
+  assertions pass; lifecycle check exit 0; doctor says
+  `shipyard crew install clean (checks a-j)`.
 
 **Observable DoD:**
 - `--source` accepts `claude`, `codex`, and `all`; omitted means `claude`, with
@@ -838,6 +997,29 @@ The requirements slice above was appended rather than opening a duplicate
 ticket because it directly unblocks this ticket's only unfinished outcome gate.
 Existing Codex sessions are intentionally not backfilled: measurement starts
 after the explicit invocation marker lands.
+
+#### Slice A Ledger placeholder
+
+- plan:
+- builder: subagent (<N> agents)
+- RED command / failing cases / exit:
+- pre-change Claude golden guard command / passing cases / exit:
+- golden SHA-256 (human / JSON):
+- GREEN command / passing cases / exit:
+- commit:
+- notes / blockers:
+
+#### Slice B Ledger placeholder
+
+- plan:
+- builder: subagent (<N> agents)
+- marker proof (source count / real attributed sessions):
+- content-free Codex smoke command / counts / exit:
+- leak tracked-file proof / exit:
+- final gate commands / counts / exits:
+- pending-path + lifecycle proof:
+- commit:
+- notes / blockers:
 
 **Honest note on this build's own Delegation Plan.** The ticket specified
 `Delegation: subagent` for Phase 1; every phase was in fact built inline. Phases
