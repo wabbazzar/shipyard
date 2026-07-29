@@ -78,6 +78,14 @@ CONSUMERS = (
     ("medic_runner", "medic"),
     ("scribe_runner", "scribe"),
 )
+PRIORITY_CATEGORIES = (
+    "confirmed_failure",
+    "human_gate",
+    "recurring_failure",
+    "evidenced_opportunity",
+    "instrumentation_gap",
+    "hygiene",
+)
 
 
 class InspectInvocationError(ValueError):
@@ -1048,18 +1056,27 @@ def _jq_gate_filter(consumer: str) -> str:
     )
 
 
-def compute_gate_operand(path: str | Path, consumer: str, svc: str) -> int | None:
-    """Reproduce the runners' two-stage jq budget operand without shell source."""
+def _gate_decode_cache_key(path: str | Path) -> str:
+    target = Path(path)
+    try:
+        return str(target.resolve(strict=False))
+    except (OSError, RuntimeError):
+        return str(target)
+
+
+def _compute_gate_decode(
+    path: str | Path,
+) -> tuple[str, str | None, str | None]:
     target = Path(path)
     if not target.is_file():
-        return 0
+        return "zero", None, None
     jq = shutil.which("jq")
     if jq is None:
-        return None
+        return "missing_dependency", None, None
     try:
         raw = target.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
-        return 0
+        return "zero", None, None
     first = subprocess.run(
         [jq, "-R", "fromjson?"],
         input=raw,
@@ -1068,14 +1085,37 @@ def compute_gate_operand(path: str | Path, consumer: str, svc: str) -> int | Non
         check=False,
     )
     if first.returncode != 0:
+        return "zero", None, None
+    return "decoded", jq, first.stdout
+
+
+def compute_gate_operand(
+    path: str | Path,
+    consumer: str,
+    svc: str,
+    decode_cache: dict[str, tuple[str, str | None, str | None]] | None = None,
+) -> int | None:
+    """Reproduce the runners' two-stage jq budget operand without shell source."""
+    if decode_cache is None:
+        state, jq, decoded = _compute_gate_decode(path)
+    else:
+        cache_key = _gate_decode_cache_key(path)
+        if cache_key not in decode_cache:
+            decode_cache[cache_key] = _compute_gate_decode(path)
+        state, jq, decoded = decode_cache[cache_key]
+    if state == "zero":
         return 0
+    if state == "missing_dependency":
+        return None
+    if jq is None or decoded is None:
+        raise AssertionError("decoded jq gate state is incomplete")
     argv = [jq, "-s"]
     if consumer not in {"design_runner", "release_shoulder_critic"}:
         argv.extend(["--arg", "svc", svc])
     argv.append(_jq_gate_filter(consumer))
     second = subprocess.run(
         argv,
-        input=first.stdout,
+        input=decoded,
         text=True,
         capture_output=True,
         check=False,
@@ -1093,6 +1133,7 @@ def _cached_gate_operand(
     consumer: str,
     svc: str,
     cache: dict[tuple[str, str, str], int | None],
+    decode_cache: dict[str, tuple[str, str | None, str | None]],
 ) -> int | None:
     selector = (
         consumer
@@ -1102,7 +1143,9 @@ def _cached_gate_operand(
     service_key = "" if selector != "exact_service" else svc
     key = (str(Path(path)), selector, service_key)
     if key not in cache:
-        cache[key] = compute_gate_operand(path, consumer, svc)
+        cache[key] = compute_gate_operand(
+            path, consumer, svc, decode_cache=decode_cache
+        )
     return cache[key]
 
 
@@ -3294,6 +3337,9 @@ def _pressure_adapter(
     started_at: datetime,
     event_evidence: list[dict[str, Any]],
     gate_cache: dict[tuple[str, str, str], int | None],
+    gate_decode_cache: dict[
+        str, tuple[str, str | None, str | None]
+    ],
     strict_cache: dict[str, tuple[int | None, bool]],
 ) -> list[str]:
     usable_events = events_coverage["state"] in {"available", "partial"}
@@ -3417,7 +3463,11 @@ def _pressure_adapter(
         else:
             gate_path = Path(gate_root) / f"{started_at.date().isoformat()}.jsonl"
             gate_tokens = _cached_gate_operand(
-                gate_path, consumer_name, svc, gate_cache
+                gate_path,
+                consumer_name,
+                svc,
+                gate_cache,
+                gate_decode_cache,
             )
             gate_invalid, parser_difference = _cached_strict_gate_invalid_count(
                 gate_path, strict_cache
@@ -3604,6 +3654,521 @@ def _fleet_record(
     }
 
 
+def _priority_id(
+    rule_id: str,
+    scope: str,
+    project_ids: list[str],
+    evidence_ids: list[str],
+) -> str:
+    payload = (
+        rule_id
+        + "\0"
+        + scope
+        + "\0"
+        + ",".join(sorted(set(project_ids)))
+        + "\0"
+        + ",".join(sorted(set(evidence_ids)))
+    ).encode("utf-8")
+    return "pri_" + hashlib.sha256(payload).hexdigest()[:16]
+
+
+def _priority_record(
+    *,
+    category: str,
+    scope: str,
+    claim_kind: str,
+    rule_id: str,
+    title: str,
+    project_ids: list[str],
+    evidence_ids: list[str],
+    evidence_by_id: dict[str, dict[str, Any]],
+    operands: dict[str, Any],
+    confidence_basis: str,
+    limitations: list[str],
+) -> dict[str, Any] | None:
+    projects = sorted(set(project_ids))
+    evidence = sorted(
+        evidence_id
+        for evidence_id in set(evidence_ids)
+        if evidence_id in evidence_by_id
+    )
+    if not evidence:
+        return None
+    timestamps = [
+        evidence_by_id[evidence_id]["observed_at"]
+        for evidence_id in evidence
+        if evidence_by_id[evidence_id]["observed_at"] is not None
+    ]
+    return {
+        "id": _priority_id(rule_id, scope, projects, evidence),
+        "rank": 0,
+        "category": category,
+        "scope": scope,
+        "claim_kind": claim_kind,
+        "rule_id": rule_id,
+        "title": title,
+        "project_ids": projects,
+        "evidence_count": len(evidence),
+        "newest_ts": max(timestamps, default=None),
+        "evidence_ids": evidence,
+        "operands": operands,
+        "confidence_basis": confidence_basis,
+        "limitations": sorted(set(limitations)),
+    }
+
+
+def _project_provenance_ids(
+    project: dict[str, Any],
+    *,
+    role: str | None = None,
+    evidence: list[dict[str, Any]],
+) -> list[str]:
+    result = list(project["safety"]["evidence_ids"])
+    for unit in project["units"]:
+        if role is None or unit["role"] == role:
+            result.extend(unit["evidence_ids"])
+    if role == "release":
+        result.extend(
+            item["id"]
+            for item in evidence
+            if item["project_id"] == project["project_id"]
+            and item["kind"] == "shoulder_watcher_identity"
+        )
+    return sorted(set(result))
+
+
+def _is_recurrence_failure(item: dict[str, Any]) -> bool:
+    if item["kind"] == "doctor_finding":
+        return True
+    if item["kind"] == "job_end":
+        return item["fields"].get("status") in {"fail", "partial"}
+    if item["kind"] == "critique_event":
+        return item["fields"].get("event") in {
+            "release.critique.spawn_failed",
+            "release.critique.delivery_failed",
+        }
+    return False
+
+
+def _derive_priorities(document: dict[str, Any]) -> list[dict[str, Any]]:
+    evidence = list(document["evidence"])
+    evidence_by_id = {item["id"]: item for item in evidence}
+    projects = {item["project_id"]: item for item in document["fleet"]}
+    core_ids = {
+        item["project_id"]
+        for item in document["fleet"]
+        if item["project_path"] == document["meta"]["core_root"]
+    }
+    candidates: list[dict[str, Any]] = []
+
+    direct_rules = {
+        "core_doctor_drift_v1": [],
+        "core_job_failure_v1": [],
+        "core_restart_failure_v1": [],
+        "core_critic_failure_v1": [],
+    }
+    for item in evidence:
+        if item["project_id"] not in core_ids:
+            continue
+        fields = item["fields"]
+        if item["kind"] == "doctor_finding":
+            direct_rules["core_doctor_drift_v1"].append(item["id"])
+        elif (
+            item["kind"] == "job_end"
+            and fields.get("status") in {"fail", "partial"}
+        ):
+            direct_rules["core_job_failure_v1"].append(item["id"])
+        elif (
+            item["kind"] == "incident_event"
+            and fields.get("event") == "medic.action.restart"
+            and fields.get("outcome") in {"fail", "failed"}
+        ):
+            direct_rules["core_restart_failure_v1"].append(item["id"])
+        elif (
+            item["kind"] == "critique_event"
+            and fields.get("event")
+            in {
+                "release.critique.spawn_failed",
+                "release.critique.delivery_failed",
+            }
+        ):
+            direct_rules["core_critic_failure_v1"].append(item["id"])
+    direct_titles = {
+        "core_doctor_drift_v1": "Repair observed Shipyard core install drift",
+        "core_job_failure_v1": "Repair observed Shipyard core job failure",
+        "core_restart_failure_v1": "Repair failed Shipyard core restart",
+        "core_critic_failure_v1": "Repair Shipyard core critic failure",
+    }
+    for rule_id, ids in direct_rules.items():
+        record = _priority_record(
+            category="confirmed_failure",
+            scope="shipyard_core",
+            claim_kind="fact",
+            rule_id=rule_id,
+            title=direct_titles[rule_id],
+            project_ids=[
+                evidence_by_id[evidence_id]["project_id"]
+                for evidence_id in ids
+            ],
+            evidence_ids=ids,
+            evidence_by_id=evidence_by_id,
+            operands={"failure_records": len(set(ids))},
+            confidence_basis="Direct evidence names the canonical Shipyard core project.",
+            limitations=[],
+        )
+        if record is not None:
+            candidates.append(record)
+
+    for item in document["attention"]:
+        if (
+            item["project_id"] in core_ids
+            and item["kind"] in {"open_proposal", "owner_decision"}
+        ):
+            record = _priority_record(
+                category="human_gate",
+                scope="shipyard_core",
+                claim_kind=item["claim_kind"],
+                rule_id="core_human_gate_v1",
+                title=item["title"],
+                project_ids=[item["project_id"]],
+                evidence_ids=item["evidence_ids"],
+                evidence_by_id=evidence_by_id,
+                operands={
+                    "attention_id": item["id"],
+                    "attention_kind": item["kind"],
+                },
+                confidence_basis="Persisted core attention requires an operator decision.",
+                limitations=item["limitations"],
+            )
+            if record is not None:
+                candidates.append(record)
+
+    recurrence_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in evidence:
+        if item["recurrence_key"] is not None and _is_recurrence_failure(item):
+            recurrence_groups[item["recurrence_key"]].append(item)
+    for recurrence_key, items in sorted(recurrence_groups.items()):
+        project_ids = sorted(
+            {
+                item["project_id"]
+                for item in items
+                if item["project_id"] is not None
+            }
+        )
+        if len(project_ids) < 2:
+            continue
+        record = _priority_record(
+            category="recurring_failure",
+            scope="core_candidate",
+            claim_kind="assessment",
+            rule_id="cross_project_recurrence_v1",
+            title=f"Investigate recurring fleet failure: {recurrence_key}",
+            project_ids=project_ids,
+            evidence_ids=[item["id"] for item in items],
+            evidence_by_id=evidence_by_id,
+            operands={
+                "recurrence_key": recurrence_key,
+                "project_count": len(project_ids),
+            },
+            confidence_basis="Exact L19 recurrence appears in at least two projects.",
+            limitations=["cross_project_recurrence_is_not_core_proof"],
+        )
+        if record is not None:
+            candidates.append(record)
+
+    for item in document["attention"]:
+        if (
+            item["project_id"] in core_ids
+            and item["kind"] == "open_proposal"
+            and "unresolved_signal_ids" not in item["limitations"]
+            and len(set(item["evidence_ids"])) > 1
+        ):
+            record = _priority_record(
+                category="evidenced_opportunity",
+                scope="shipyard_core",
+                claim_kind="assessment",
+                rule_id="core_evidenced_opportunity_v1",
+                title=item["title"],
+                project_ids=[item["project_id"]],
+                evidence_ids=item["evidence_ids"],
+                evidence_by_id=evidence_by_id,
+                operands={
+                    "attention_id": item["id"],
+                    "resolved_signal_count": len(set(item["evidence_ids"])) - 1,
+                },
+                confidence_basis="Every persisted signal ID resolves to exact core evidence.",
+                limitations=item["limitations"],
+            )
+            if record is not None:
+                candidates.append(record)
+
+    historical_keys = {
+        "bugs_caught_and_fixed",
+        "usage_assessed_projects",
+        "features_shipped_end_to_end",
+        "consequential_decisions_surfaced",
+        "critique_actionability",
+    }
+    for item in document["effectiveness"]:
+        if item["key"] not in historical_keys:
+            continue
+        if item["state"] != "measured" and item["evidence_ids"]:
+            record = _priority_record(
+                category="instrumentation_gap",
+                scope="shipyard_core",
+                claim_kind="derived",
+                rule_id="historical_benchmark_gap_v1",
+                title=f"Close benchmark linkage: {item['key']}",
+                project_ids=[
+                    evidence_by_id[evidence_id]["project_id"]
+                    for evidence_id in item["evidence_ids"]
+                    if evidence_id in evidence_by_id
+                    and evidence_by_id[evidence_id]["project_id"] is not None
+                ],
+                evidence_ids=item["evidence_ids"],
+                evidence_by_id=evidence_by_id,
+                operands={
+                    "effectiveness_key": item["key"],
+                    "state": item["state"],
+                    "missing_link": item["reason"],
+                },
+                confidence_basis="Observed benchmark components cannot prove the historical outcome.",
+                limitations=item["limitations"],
+            )
+            if record is not None:
+                candidates.append(record)
+
+    coverage_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in evidence:
+        if item["kind"] == "coverage_gap" and item["recurrence_key"] is not None:
+            coverage_groups[item["recurrence_key"]].append(item)
+    for recurrence_key, items in sorted(coverage_groups.items()):
+        project_ids = sorted(
+            {
+                item["project_id"]
+                for item in items
+                if item["project_id"] is not None
+            }
+        )
+        if len(project_ids) < 2:
+            continue
+        record = _priority_record(
+            category="instrumentation_gap",
+            scope="core_candidate",
+            claim_kind="derived",
+            rule_id="cross_project_coverage_gap_v1",
+            title=f"Close repeated fleet coverage gap: {recurrence_key}",
+            project_ids=project_ids,
+            evidence_ids=[item["id"] for item in items],
+            evidence_by_id=evidence_by_id,
+            operands={
+                "recurrence_key": recurrence_key,
+                "project_count": len(project_ids),
+            },
+            confidence_basis="The same exact coverage reason blocks at least two projects.",
+            limitations=["cross_project_gap_scope_not_core_proof"],
+        )
+        if record is not None:
+            candidates.append(record)
+
+    shared_groups: dict[tuple[str, str], list[tuple[dict[str, Any], dict[str, Any]]]] = (
+        defaultdict(list)
+    )
+    for project in document["fleet"]:
+        for consumer in project["pressure"]["daily_budget_consumers"]:
+            if (
+                consumer["consumer"]
+                in {"design_runner", "release_shoulder_critic"}
+                and consumer["applicability"] == "applicable"
+                and consumer["gate_scope"] == "unscoped_event_root"
+                and consumer["event_root"] is not None
+                and consumer["event_root_state"]
+                in {
+                    "runner_manifest",
+                    "core_fallback",
+                    "configured",
+                    "project_default",
+                }
+            ):
+                shared_groups[
+                    (consumer["consumer"], consumer["event_root"])
+                ].append((project, consumer))
+    shared = [
+        (key, members)
+        for key, members in sorted(shared_groups.items())
+        if len({project["project_id"] for project, _ in members}) > 1
+    ]
+    if shared:
+        shared_projects: list[str] = []
+        shared_evidence: list[str] = []
+        consumers: list[str] = []
+        roots: list[str] = []
+        shared_operands: list[dict[str, Any]] = []
+        for (consumer_name, root), members in shared:
+            consumers.append(consumer_name)
+            roots.append(root)
+            for project, consumer in members:
+                shared_projects.append(project["project_id"])
+                shared_operands.append(
+                    {
+                        "project_id": project["project_id"],
+                        "consumer": consumer_name,
+                        "event_root": root,
+                        "attributed_tokens_today": consumer[
+                            "attributed_tokens_today"
+                        ],
+                        "gate_tokens_today": consumer["gate_tokens_today"],
+                    }
+                )
+                shared_evidence.extend(consumer["evidence_ids"])
+                shared_evidence.extend(
+                    _project_provenance_ids(
+                        project,
+                        role=consumer["role"],
+                        evidence=evidence,
+                    )
+                )
+        record = _priority_record(
+            category="instrumentation_gap",
+            scope="shipyard_core",
+            claim_kind="derived",
+            rule_id="budget_gate_scope_mismatch_v1",
+            title="Scope shared budget gates to attributed projects",
+            project_ids=shared_projects,
+            evidence_ids=shared_evidence,
+            evidence_by_id=evidence_by_id,
+            operands={
+                "consumers": sorted(set(consumers)),
+                "event_roots": sorted(set(roots)),
+                "members": sorted(
+                    shared_operands,
+                    key=lambda item: (
+                        item["consumer"],
+                        item["project_id"],
+                    ),
+                ),
+            },
+            confidence_basis="Applicable unscoped gates share a resolved root across projects.",
+            limitations=["gate_operand_is_unscoped"],
+        )
+        if record is not None:
+            candidates.append(record)
+
+    mismatch_projects: list[str] = []
+    mismatch_evidence: list[str] = []
+    mismatch_consumers: list[str] = []
+    mismatch_operands: list[dict[str, Any]] = []
+    for project in document["fleet"]:
+        project_manifests = [
+            item
+            for item in evidence
+            if item["project_id"] == project["project_id"]
+            and item["kind"] == "manifest_identity"
+        ]
+        manifest_by_role = {
+            item["fields"]["role"]: item for item in project_manifests
+        }
+        emitted_core_fallback = bool(project_manifests) and all(
+            item["fields"]["event_root_env"] is None
+            for item in project_manifests
+        )
+        for consumer in project["pressure"]["daily_budget_consumers"]:
+            if (
+                consumer["consumer"]
+                in {
+                    "build_runner",
+                    "release_runner",
+                    "medic_runner",
+                    "scribe_runner",
+                }
+                and consumer["applicability"] == "applicable"
+                and consumer["event_root_state"] == "unset_sentinel"
+                and emitted_core_fallback
+                and consumer["role"] in manifest_by_role
+            ):
+                mismatch_projects.append(project["project_id"])
+                mismatch_consumers.append(consumer["consumer"])
+                mismatch_operands.append(
+                    {
+                        "project_id": project["project_id"],
+                        "consumer": consumer["consumer"],
+                        "emitted_event_root_state": "core_fallback",
+                        "gate_event_root_state": "unset_sentinel",
+                        "attributed_tokens_today": consumer[
+                            "attributed_tokens_today"
+                        ],
+                        "gate_tokens_today": consumer["gate_tokens_today"],
+                    }
+                )
+                mismatch_evidence.extend(consumer["evidence_ids"])
+                mismatch_evidence.extend(
+                    _project_provenance_ids(
+                        project,
+                        role=consumer["role"],
+                        evidence=evidence,
+                    )
+                )
+    if mismatch_projects:
+        record = _priority_record(
+            category="instrumentation_gap",
+            scope="shipyard_core",
+            claim_kind="derived",
+            rule_id="budget_gate_root_mismatch_v1",
+            title="Align unset runner budget roots with emitted events",
+            project_ids=mismatch_projects,
+            evidence_ids=mismatch_evidence,
+            evidence_by_id=evidence_by_id,
+            operands={
+                "consumers": sorted(set(mismatch_consumers)),
+                "members": sorted(
+                    mismatch_operands,
+                    key=lambda item: (
+                        item["consumer"],
+                        item["project_id"],
+                    ),
+                ),
+            },
+            confidence_basis="Runner gates use /nonexistent while emitted events use core fallback.",
+            limitations=["unset_sentinel_differs_from_emitted_event_root"],
+        )
+        if record is not None:
+            candidates.append(record)
+
+    manifests: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for item in evidence:
+        if item["kind"] == "manifest_identity":
+            manifests[(item["project_id"], item["fields"]["role"])].append(item)
+    for (project_id, role), items in sorted(manifests.items()):
+        if len(items) < 2:
+            continue
+        record = _priority_record(
+            category="hygiene",
+            scope="shipyard_core",
+            claim_kind="derived",
+            rule_id="duplicate_matching_manifest_v1",
+            title=f"Remove duplicate matching {role} manifests",
+            project_ids=[project_id],
+            evidence_ids=[item["id"] for item in items],
+            evidence_by_id=evidence_by_id,
+            operands={"role": role, "manifest_count": len(items)},
+            confidence_basis="Multiple accepted manifests map to one project and canonical role.",
+            limitations=[],
+        )
+        if record is not None:
+            candidates.append(record)
+
+    category_rank = {
+        category: index for index, category in enumerate(PRIORITY_CATEGORIES)
+    }
+    candidates.sort(key=lambda item: item["id"])
+    candidates.sort(key=lambda item: item["newest_ts"] or "", reverse=True)
+    candidates.sort(key=lambda item: item["evidence_count"], reverse=True)
+    candidates.sort(key=lambda item: category_rank[item["category"]])
+    for rank, item in enumerate(candidates, 1):
+        item["rank"] = rank
+    return candidates
+
+
 def build_document(
     *, core_root: str, unit_dir: str, started_at: datetime, days: int
 ) -> dict[str, Any] | None:
@@ -3750,7 +4315,7 @@ def build_document(
         overseer_coverage, overseer_evidence = _overseer_adapter(project)
         coverage_by_key[(project["project_id"], "overseer")] = overseer_coverage
         evidence.extend(overseer_evidence)
-        project["limitations"] = [LATER_PHASE_LIMITATION]
+        project["limitations"] = []
 
     (
         events_coverage,
@@ -3781,6 +4346,9 @@ def build_document(
     evidence.extend(watcher_evidence)
 
     gate_operand_cache: dict[tuple[str, str, str], int | None] = {}
+    gate_decode_cache: dict[
+        str, tuple[str, str | None, str | None]
+    ] = {}
     strict_gate_cache: dict[str, tuple[int | None, bool]] = {}
     for project in fleet:
         project_path = project["project_path"]
@@ -3816,6 +4384,7 @@ def build_document(
             started_at=started_at,
             event_evidence=events_evidence,
             gate_cache=gate_operand_cache,
+            gate_decode_cache=gate_decode_cache,
             strict_cache=strict_gate_cache,
         )
         exact_pressure_ids[project_id].extend(pressure_ids)
@@ -4031,7 +4600,7 @@ def build_document(
         )
         if state_counts[state]
     )
-    return {
+    document = {
         "schema_version": 1,
         "meta": {
             "inspection_started_at": started_text,
@@ -4061,9 +4630,47 @@ def build_document(
             "top_priority_ids": [],
         },
     }
+    priorities = _derive_priorities(document)
+    document["priorities"] = priorities
+    document["summary"]["priority_count"] = len(priorities)
+    document["summary"]["top_priority_ids"] = [
+        item["id"] for item in priorities[:3]
+    ]
+    return document
 
 
 def render_human(document: dict[str, Any]) -> str:
+    def scalar(value: Any) -> str:
+        if value is None:
+            return "unavailable"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    def budget_pressure(project: dict[str, Any]) -> str:
+        members = []
+        deferrals = project["pressure"]["budget_deferrals_by_consumer"]
+        for consumer in project["pressure"]["daily_budget_consumers"]:
+            name = consumer["consumer"]
+            if consumer["applicability"] != "applicable":
+                members.append(f"{name}:{consumer['applicability']}")
+                continue
+            members.append(
+                f"{name}:{scalar(consumer['gate_tokens_today'])}/"
+                f"{scalar(consumer['configured_daily_budget'])}"
+                f"(deferred={scalar(deferrals[name])})"
+            )
+        return "[" + ",".join(members) + "]"
+
+    def open_pressure(project: dict[str, Any]) -> str:
+        pressure = project["pressure"]
+        return (
+            f"{scalar(pressure['undecided_open_proposals'])}/"
+            f"{scalar(pressure['configured_max_open_proposals'])}"
+            f"(remaining={scalar(pressure['open_cap_remaining'])},"
+            f"deferred={scalar(pressure['open_cap_deferrals'])})"
+        )
+
     meta = document["meta"]
     lines = [
         "shipyard inspect — fleet observation",
@@ -4073,13 +4680,79 @@ def render_human(document: dict[str, Any]) -> str:
         ),
         f"fleet: {meta['project_count']} project(s), {meta['role_count']} role(s)",
         f"state: {document['summary']['fleet_state']}",
+        "",
+        "FLEET",
     ]
     for project in document["fleet"]:
         roles = ",".join(project["roles"])
+        safety = project["safety"]
         lines.append(
-            f"  - {project['project_name']}: {project['state']} roles={roles}"
+            f"  - {project['project_id']} {project['project_name']}: "
+            f"state={project['state']} roles={len(project['roles'])}({roles}) "
+            f"doctor={project['doctor']['state']} "
+            f"budget={budget_pressure(project)} "
+            f"open-cap={open_pressure(project)} "
+            f"gates=merge:{scalar(safety['can_merge'])},"
+            f"no-ci:{scalar(safety['allow_no_ci'])},"
+            f"verify:{scalar(safety['release_verify_gate'])},"
+            f"branch:{scalar(safety['configured_branch'])}"
         )
-    lines.append("limitations: manifest discovery only in Phase 1")
+    if not document["fleet"]:
+        lines.append("  none")
+
+    lines.extend(["", "ATTENTION"])
+    if document["attention"]:
+        for item in document["attention"]:
+            limitations = ",".join(item["limitations"]) or "none"
+            lines.append(
+                f"  - [{item['id']}] {item['kind']} project={item['project_id']} "
+                f"{item['title']} limitations={limitations}"
+            )
+    else:
+        lines.append("  none")
+
+    lines.extend(["", "EFFECTIVENESS"])
+    if document["effectiveness"]:
+        for item in document["effectiveness"]:
+            limitations = ",".join(item["limitations"]) or "none"
+            lines.append(
+                f"  - {item['key']}: {item['state']} "
+                f"value={scalar(item['value'])} evidence={len(item['evidence_ids'])} "
+                f"reason={scalar(item['reason'])} limitations={limitations}"
+            )
+    else:
+        lines.append("  none")
+
+    lines.extend(["", "NEXT SHIPYARD PR"])
+    if document["priorities"]:
+        for item in document["priorities"]:
+            limitations = ",".join(item["limitations"]) or "none"
+            lines.append(
+                f"  - [{item['id']}] {item['category']}/{item['scope']} "
+                f"{item['title']} rule={item['rule_id']}"
+            )
+            lines.append(
+                f"    why: evidence={item['evidence_count']}; "
+                f"limitations={limitations}"
+            )
+    else:
+        lines.append("  none")
+
+    lines.extend(["", "COVERAGE"])
+    gaps = [
+        item for item in document["coverage"] if item["state"] != "available"
+    ]
+    if gaps:
+        for item in gaps:
+            owner = item["project_id"] or "global"
+            limitations = ",".join(item["limitations"]) or "none"
+            lines.append(
+                f"  - {owner}/{item['source']}: {item['state']} "
+                f"reason={item['reason']} valid={item['records_valid']}/"
+                f"{item['records_total']} limitations={limitations}"
+            )
+    else:
+        lines.append("  none")
     return "\n".join(lines)
 
 

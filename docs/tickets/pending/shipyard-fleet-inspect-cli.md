@@ -2197,3 +2197,65 @@ execute-ticket docs/tickets/pending/shipyard-fleet-inspect-cli.md
   resolved.
 - Commit: `feat: measure fleet effectiveness honestly` (orchestrator;
   subagent was instructed not to commit).
+
+### Phase 6 Ledger — explainable priorities and human rendering
+
+- Plan: derive the six locked priority categories with deterministic,
+  evidence-bounded scope and render the complete operator console from the
+  same JSON document.
+- Prior phase commit: `f32fa44`.
+- `builder: subagent (1 agent)`.
+- RED: the ticket-literal filter selected four cases and passed 2/4, rc=1;
+  the expanded exact named filter selected all 14 and passed 4/14, rc=1.
+  Project-local attention, unresolved-signal non-promotion, unknown-shoulder
+  non-promotion, and JSON stdout/stderr separation were the four pre-existing
+  guards already green.
+- Focused GREEN: the ticket-literal filter passed 4/4 and the expanded Phase 6
+  filter passed 14/14, both rc=0; `py_compile` passed rc=0. The fixture emitted
+  all six categories and 11 formula-verified IDs in locked
+  category/evidence/recency/ID order. Reversing completed-document input arrays
+  preserved priority order and IDs. Human output contained the same 14
+  attention and 11 priority IDs as JSON.
+- Observable evidence: direct core failure was a `shipyard_core` fact; exact
+  two-project recurrence was only a `core_candidate` assessment; a unique app
+  failure stayed attention; unresolved proposal evidence was not promoted.
+  Historical linkage, shared design/shoulder roots, and unset non-design roots
+  produced explainable instrumentation priorities with attributed/gate
+  operands; unknown shoulder roots did not. Empty sections printed `none`, and
+  fleet lines exposed IDs/state/roles/doctor/budget/open-cap plus configured
+  merge/no-ci/verify/branch posture. JSON success wrote 24,850 stdout bytes and
+  zero stderr; bad days wrote zero stdout and the diagnostic only to stderr.
+- Common Per-Commit Gate: `bats tests/` passed 512/512, rc=0, in 89.15s;
+  syntax/compile, leak-check, deck freshness, deck completeness, and
+  `git diff --check` all passed rc=0.
+- Runtime blocker: two real read-only JSON runs completed rc=0 in 15.24s and
+  15.17s, exceeding the 15.0s ceiling. Re-deriving priorities 1,000 times took
+  4.13s total (about 4ms/report), localizing the overage to the existing fleet
+  scan rather than Phase 6 ranking. No runtime claim is marked green.
+- Runtime repair evidence: live profiling measured 16.806s in document build
+  and 10.829s cumulative in pressure aggregation; 28 unique gate operands
+  repeated jq's identical `-R fromjson?` stage for shared physical files.
+  The strengthened existing operand gate was RED at 0/1, rc=1, in 0.52s, then
+  GREEN at 1/1, rc=0, in 0.52s. Its real subprocess counters prove two exact
+  paths invoke the first jq stage twice total, while four selector/service
+  keys invoke the second stage four times; uncached direct behavior remains
+  five first/five second calls and both paths return `[4,4,6,0,11]`.
+  Cached missing paths and a forced first-stage rc=23 each remain zero without
+  invoking a second stage. The cache is inspection-local and stores only the
+  first jq stage by canonical physical path; selectors, services, evidence,
+  reporters, and the second jq stage are unchanged. Expanded Phase 6 passed
+  14/14; the final inspector suite passed 73/73, rc=0, in 14.36s. The real
+  JSON command passed rc=0 in 9.84s, closing the 15.0s blocker without a
+  semantic/output deviation.
+- Independent audit: PASS for all six category/scope rules, exact IDs/order,
+  renderer parity, and explicit unavailable/empty output. A second audit
+  passed exact jq semantics, physical-path and inspection-local cache scope,
+  distinct selectors/services, missing-jq behavior, and unchanged evidence
+  and invalid-record accounting.
+- Orchestrator live proof: three consecutive JSON runs were 9.93s, 9.90s, and
+  9.76s; human rendering was 10.06s, all rc=0 and below 15.0s. The live report
+  emitted 18 priorities with no unresolved evidence references; all 137
+  attention and 18 priority IDs appeared exactly once in human output and
+  matched JSON. All five required human sections were present.
+- Commit: `feat: rank fleet priorities and render operator view` (orchestrator;
+  subagent was instructed not to commit).

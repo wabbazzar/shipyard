@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
 # shipyard-inspect.bats — hermetic contract for the read-only fleet inspector.
 
+bats_require_minimum_version 1.5.0
+
 setup() {
   load helpers
   quartet_setup
@@ -1389,7 +1391,19 @@ spec = importlib.util.spec_from_file_location("shipyard_inspect", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 gate_cache = {}
+decode_cache = {}
 strict_cache = {}
+real_run = mod.subprocess.run
+first_stage_calls = 0
+second_stage_calls = 0
+def counting_run(argv, *args, **kwargs):
+    global first_stage_calls, second_stage_calls
+    if argv[1:3] == ["-R", "fromjson?"]:
+        first_stage_calls += 1
+    elif argv[1:2] == ["-s"]:
+        second_stage_calls += 1
+    return real_run(argv, *args, **kwargs)
+mod.subprocess.run = counting_run
 cases = [
     (sys.argv[2], "design_runner", "svc-a"),
     (sys.argv[2], "design_runner", "svc-b"),
@@ -1398,12 +1412,48 @@ cases = [
     (sys.argv[3], "build_runner", "fixture-build"),
 ]
 cached = [
-    mod._cached_gate_operand(path, consumer, svc, gate_cache)
+    mod._cached_gate_operand(
+        path, consumer, svc, gate_cache, decode_cache
+    )
     for path, consumer, svc in cases
 ]
+cached_counts = (first_stage_calls, second_stage_calls, len(decode_cache))
+first_stage_calls = second_stage_calls = 0
 direct = [
     mod.compute_gate_operand(path, consumer, svc)
     for path, consumer, svc in cases
+]
+direct_counts = (first_stage_calls, second_stage_calls)
+failed_first_calls = 0
+failed_second_calls = 0
+def failing_first_stage(argv, *args, **kwargs):
+    global failed_first_calls, failed_second_calls
+    if argv[1:3] == ["-R", "fromjson?"]:
+        failed_first_calls += 1
+        return mod.subprocess.CompletedProcess(argv, 23, "", "fixture failure")
+    failed_second_calls += 1
+    return real_run(argv, *args, **kwargs)
+mod.subprocess.run = failing_first_stage
+failed_cache = {}
+failed = [
+    mod.compute_gate_operand(
+        sys.argv[2], consumer, svc, decode_cache=failed_cache
+    )
+    for consumer, svc in (
+        ("design_runner", "fixture-design"),
+        ("build_runner", "fixture-build"),
+    )
+]
+mod.subprocess.run = real_run
+missing_cache = {}
+missing = [
+    mod.compute_gate_operand(
+        sys.argv[2] + ".missing",
+        "build_runner",
+        "fixture-build",
+        decode_cache=missing_cache,
+    )
+    for _ in range(2)
 ]
 strict = [
     mod._cached_strict_gate_invalid_count(sys.argv[2], strict_cache),
@@ -1412,10 +1462,13 @@ strict = [
 ]
 print(cached)
 print(direct)
+print(cached_counts, direct_counts)
+print(failed, failed_first_calls, failed_second_calls, len(failed_cache))
+print(missing, len(missing_cache))
 print(len(gate_cache), strict, len(strict_cache))
 PY
   [ "$status" -eq 0 ]
-  [ "$output" = $'[4, 4, 6, 0, 11]\n[4, 4, 6, 0, 11]\n4 [(3, True), (3, True), (2, True)] 2' ]
+  [ "$output" = $'[4, 4, 6, 0, 11]\n[4, 4, 6, 0, 11]\n(2, 4, 2) (5, 5)\n[0, 0] 1 0 1\n[0, 0] 1\n4 [(3, True), (3, True), (2, True)] 2' ]
 }
 
 @test "inspect: duplicate keys affect gate compatibility but never evidence" {
@@ -2442,4 +2495,347 @@ PY
         "turns","zero_agent_pct","zero_agent_sessions"
       ]))
   ' <<<"$output"
+}
+
+make_phase6_project_at() {
+  local project="$1" name="$2" roles="$3" event_root="${4:-}"
+  mkdir -p "$project/.agents" "$project/data/usage" "$project/tmp"
+  cat >"$project/.agents/config.toml" <<EOF
+project_name = "$name"
+branch = "main"
+[paths]
+result_dir = "tmp"
+[design]
+budget_tokens_daily = 100
+max_open_proposals = 4
+[build]
+budget_tokens_daily = 100
+allow_no_ci = false
+[release]
+budget_tokens_daily = 100
+verify_gate = true
+test_cmd = "true"
+typecheck = "true"
+[medic]
+budget_tokens_daily = 100
+can_merge = false
+[scribe]
+budget_tokens_daily = 100
+EOF
+  local role
+  for role in $roles; do
+    write_phase3_service "$name-$role" "$role" "$project" "$event_root"
+  done
+  P3_PROJECT="$project"
+}
+
+make_phase6_priority_fixture() {
+  make_phase3_core
+  PHASE6_ROOT="$BATS_TEST_TMPDIR/events-phase6"
+  mkdir -p "$PHASE6_ROOT"
+  make_phase6_project_at "$P3_CORE" core "design build" "$PHASE6_ROOT"
+  PHASE6_CORE="$P3_PROJECT"
+  make_phase6_project_at "$BATS_TEST_TMPDIR/projects/app-one" app-one \
+    "build" "$PHASE6_ROOT"
+  PHASE6_APP_ONE="$P3_PROJECT"
+  make_phase6_project_at "$BATS_TEST_TMPDIR/projects/app-two" app-two \
+    "build" "$PHASE6_ROOT"
+  PHASE6_APP_TWO="$P3_PROJECT"
+  write_phase3_service core-build-duplicate build "$PHASE6_CORE" "$PHASE6_ROOT"
+  cat >"$PHASE6_CORE/data/fyi-requests.jsonl" <<'EOF'
+{"id":"core-signal","ts":"2026-07-28T07:00:00Z","text":"PHASE6_REDACTED"}
+EOF
+  cat >"$PHASE6_CORE/tmp/core-design-result.json" <<'EOF'
+{"ts":"2026-07-28T08:00:00Z","project":"core","proposals":[
+ {"id":"resolved","type":"feature","title":"Improve core dispatch","severity":"high","status":"open","signal_ids":["core-signal"]},
+ {"id":"unresolved","type":"bug","title":"Unresolved core ask","severity":"med","status":"open","signal_ids":["missing-signal"]}
+]}
+EOF
+  : >"$PHASE6_CORE/data/decisions.jsonl"
+  cat >"$PHASE6_ROOT/2026-07-28.jsonl" <<'EOF'
+{"ts":"2026-07-28T09:00:00Z","svc":"core-build","role":"build","event":"job.end","status":"fail","reason":"core_break","tokens":3}
+{"ts":"2026-07-28T09:10:00Z","svc":"app-one-build","role":"build","event":"job.end","status":"fail","reason":"provider_down","tokens":4}
+{"ts":"2026-07-28T09:20:00Z","svc":"app-two-build","role":"build","event":"job.end","status":"fail","reason":"provider_down","tokens":5}
+{"ts":"2026-07-28T09:30:00Z","svc":"app-one-build","role":"build","event":"job.end","status":"fail","reason":"app_only","tokens":6}
+EOF
+}
+
+make_phase6_shared_budget_fixture() {
+  make_phase3_core
+  PHASE6_ROOT="$BATS_TEST_TMPDIR/events-shared-budget"
+  mkdir -p "$PHASE6_ROOT"
+  make_phase6_project_at "$BATS_TEST_TMPDIR/projects/shared-a" shared-a \
+    "design release" "$PHASE6_ROOT"
+  local first="$P3_PROJECT"
+  write_phase3_watcher "$first" "$PHASE6_ROOT"
+  make_phase6_project_at "$BATS_TEST_TMPDIR/projects/shared-b" shared-b \
+    "design release" "$PHASE6_ROOT"
+  write_phase3_watcher "$P3_PROJECT" "$PHASE6_ROOT"
+  : >"$PHASE6_ROOT/2026-07-29.jsonl"
+}
+
+make_phase6_empty_fixture() {
+  make_phase3_core
+  PHASE6_ROOT="$BATS_TEST_TMPDIR/events-empty-priorities"
+  mkdir -p "$PHASE6_ROOT"
+  make_phase6_project_at "$BATS_TEST_TMPDIR/projects/quiet" quiet \
+    "design" "$PHASE6_ROOT"
+  : >"$PHASE6_ROOT/2026-07-29.jsonl"
+  : >"$P3_PROJECT/data/fyi-requests.jsonl"
+  : >"$P3_PROJECT/data/usage/empty.jsonl"
+  : >"$P3_PROJECT/data/decisions.jsonl"
+  printf '[]\n' >"$P3_PROJECT/tmp/medic-incidents-current.json"
+  cat >"$P3_PROJECT/tmp/quiet-design-result.json" <<'EOF'
+{"ts":"2026-07-28T08:00:00Z","project":"quiet","proposals":[]}
+EOF
+}
+
+run_phase3_human() {
+  SHIPYARD_INSPECT_NOW=2026-07-29T12:00:00Z \
+    python3 "$QUARTET_ROOT/skills/shipyard/inspect.py" \
+      --core-root "$P3_CORE" --unit-dir "$UNIT_DIR" --days "${1:-7}"
+}
+
+@test "inspect: priorities obey category evidence recency id order" {
+  make_phase6_priority_fixture
+  run run_phase3
+  [ "$status" -eq 0 ]
+  priority_json="$BATS_TEST_TMPDIR/phase6-priorities.json"
+  printf '%s\n' "$output" >"$priority_json"
+  python3 - "$priority_json" <<'PY'
+import hashlib
+import json
+import sys
+
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+names = (
+    "confirmed_failure", "human_gate", "recurring_failure",
+    "evidenced_opportunity", "instrumentation_gap", "hygiene",
+)
+order = {name: index for index, name in enumerate(names)}
+priorities = doc["priorities"]
+assert {item["category"] for item in priorities} == set(names)
+for before, after in zip(priorities, priorities[1:]):
+    if order[before["category"]] != order[after["category"]]:
+        assert order[before["category"]] < order[after["category"]]
+    elif before["evidence_count"] != after["evidence_count"]:
+        assert before["evidence_count"] > after["evidence_count"]
+    elif before["newest_ts"] != after["newest_ts"]:
+        assert after["newest_ts"] is None or (
+            before["newest_ts"] is not None
+            and before["newest_ts"] > after["newest_ts"]
+        )
+    else:
+        assert before["id"] < after["id"]
+for rank, item in enumerate(priorities, 1):
+    payload = (
+        item["rule_id"] + "\0" + item["scope"] + "\0"
+        + ",".join(sorted(set(item["project_ids"]))) + "\0"
+        + ",".join(sorted(set(item["evidence_ids"])))
+    ).encode()
+    assert item["id"] == "pri_" + hashlib.sha256(payload).hexdigest()[:16]
+    assert item["rank"] == rank
+assert doc["summary"]["priority_count"] == len(priorities)
+assert doc["summary"]["top_priority_ids"] == [
+    item["id"] for item in priorities[:3]
+]
+PY
+  printf 'ORDERED_PRIORITY_IDS=%s\n' \
+    "$(jq -c '[.priorities[].id]' "$priority_json")"
+}
+
+@test "inspect: attention and priority ids survive input reordering" {
+  make_phase6_priority_fixture
+  run run_phase3
+  [ "$status" -eq 0 ]
+  document="$BATS_TEST_TMPDIR/phase6-reorder.json"
+  printf '%s\n' "$output" >"$document"
+  run python3 - "$QUARTET_ROOT/skills/shipyard/inspect.py" "$document" <<'PY'
+import importlib.util
+import json
+import sys
+
+spec = importlib.util.spec_from_file_location("shipyard_inspect", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+doc = json.load(open(sys.argv[2], encoding="utf-8"))
+expected_attention = sorted(item["id"] for item in doc["attention"])
+expected_priorities = [item["id"] for item in doc["priorities"]]
+for key in ("fleet", "coverage", "evidence", "attention", "effectiveness"):
+    doc[key].reverse()
+actual = module._derive_priorities(doc)
+assert sorted(item["id"] for item in doc["attention"]) == expected_attention
+assert [item["id"] for item in actual] == expected_priorities
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "inspect: direct core failure is shipyard_core" {
+  make_phase6_priority_fixture
+  run run_phase3
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.priorities[] | select(.rule_id=="core_job_failure_v1")][0]
+      | .category=="confirmed_failure" and .scope=="shipyard_core"
+        and .claim_kind=="fact" and .evidence_count==1)
+  ' <<<"$output"
+}
+
+@test "inspect: exact cross-project recurrence is core_candidate assessment" {
+  make_phase6_priority_fixture
+  run run_phase3
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.priorities[] | select(.rule_id=="cross_project_recurrence_v1"
+      and .operands.recurrence_key=="job:build:fail:provider_down")][0]
+      | .category=="recurring_failure" and .scope=="core_candidate"
+        and .claim_kind=="assessment" and (.project_ids|length)==2
+        and (.limitations|index("cross_project_recurrence_is_not_core_proof"))!=null)
+  ' <<<"$output"
+}
+
+@test "inspect: project-local failure stays attention" {
+  make_phase6_priority_fixture
+  run run_phase3
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.evidence[] | select(.recurrence_key=="job:build:fail:app_only")][0].id) as $id
+    | ([.attention[] | select(.kind=="observed_fault"
+        and (.evidence_ids|index($id))!=null)]|length)==1
+      and ([.priorities[] | select((.evidence_ids|index($id))!=null)]|length)==0
+  ' <<<"$output"
+}
+
+@test "inspect: unresolved proposal signal cannot become opportunity" {
+  make_phase6_priority_fixture
+  run run_phase3
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.attention[] | select(.title=="Unresolved core ask")][0]
+      | (.limitations|index("unresolved_signal_ids"))!=null) and
+    ([.priorities[] | select(.category=="evidenced_opportunity"
+      and .title=="Unresolved core ask")]|length)==0
+  ' <<<"$output"
+}
+
+@test "inspect: benchmark gap becomes explainable instrumentation priority" {
+  make_phase6_priority_fixture
+  run run_phase3
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.priorities[] | select(.rule_id=="historical_benchmark_gap_v1")]|length)>0
+    and ([.priorities[] | select(.rule_id=="historical_benchmark_gap_v1")][0]
+      | .category=="instrumentation_gap" and .scope=="shipyard_core"
+        and .claim_kind=="derived" and .operands.effectiveness_key!=null
+        and .evidence_count>0 and (.confidence_basis|length)>0)
+  ' <<<"$output"
+}
+
+@test "inspect: shared-root budget gate becomes Shipyard instrumentation priority" {
+  make_phase6_shared_budget_fixture
+  run run_phase3
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.priorities[] | select(.rule_id=="budget_gate_scope_mismatch_v1")][0]
+      | .category=="instrumentation_gap" and .scope=="shipyard_core"
+        and .claim_kind=="derived" and (.project_ids|length)==2
+        and (.operands.consumers|sort)
+          ==["design_runner","release_shoulder_critic"]
+        and (.operands.members|length)==4
+        and (.operands.members
+          | all(has("attributed_tokens_today") and has("gate_tokens_today"))))
+  ' <<<"$output"
+}
+
+@test "inspect: unset non-design gate becomes Shipyard instrumentation priority" {
+  make_phase3_core
+  make_phase6_project_at "$BATS_TEST_TMPDIR/projects/unset-root" unset-root \
+    "build"
+  run run_phase3
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.priorities[] | select(.rule_id=="budget_gate_root_mismatch_v1")][0]
+      | .category=="instrumentation_gap" and .scope=="shipyard_core"
+        and .operands.consumers==["build_runner"]
+        and .operands.members[0].emitted_event_root_state=="core_fallback"
+        and .operands.members[0].gate_event_root_state=="unset_sentinel")
+  ' <<<"$output"
+}
+
+@test "inspect: unknown shoulder root cannot become shared-root priority" {
+  make_phase3_core
+  PHASE6_ROOT="$BATS_TEST_TMPDIR/events-unknown-shoulder"
+  mkdir -p "$PHASE6_ROOT"
+  make_phase6_project_at "$BATS_TEST_TMPDIR/projects/unknown-a" unknown-a \
+    "release" "$PHASE6_ROOT"
+  printf '\n[shoulder]\nauto_wire = true\n' >>"$P3_PROJECT/.agents/config.toml"
+  make_phase6_project_at "$BATS_TEST_TMPDIR/projects/unknown-b" unknown-b \
+    "release" "$PHASE6_ROOT"
+  printf '\n[shoulder]\nauto_wire = true\n' >>"$P3_PROJECT/.agents/config.toml"
+  : >"$PHASE6_ROOT/2026-07-29.jsonl"
+  run run_phase3
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.fleet[].pressure.daily_budget_consumers[]
+      | select(.consumer=="release_shoulder_critic")
+      | select(.applicability=="applicable" and .event_root_state=="unknown")]
+      | length)==2
+    and ([.priorities[] | select(.rule_id=="budget_gate_scope_mismatch_v1"
+      and (.operands.consumers|index("release_shoulder_critic"))!=null)]
+      | length)==0
+  ' <<<"$output"
+}
+
+@test "inspect: human attention and priority ids map exactly to JSON" {
+  make_phase6_priority_fixture
+  run run_phase3
+  [ "$status" -eq 0 ]
+  json_ids="$(jq -r '.attention[].id,.priorities[].id' <<<"$output" | sort)"
+  run run_phase3_human
+  [ "$status" -eq 0 ]
+  human_ids="$(grep -oE '(att|pri)_[0-9a-f]{16}' <<<"$output" | sort)"
+  [ "$human_ids" = "$json_ids" ]
+  printf 'JSON_IDS=%s\nHUMAN_IDS=%s\n' \
+    "$(tr '\n' ',' <<<"$json_ids")" "$(tr '\n' ',' <<<"$human_ids")"
+}
+
+@test "inspect: human fleet lines expose pressure and configured safety posture" {
+  make_phase6_priority_fixture
+  run run_phase3_human
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"FLEET"* ]]
+  [[ "$output" == *"roles=2("* ]]
+  [[ "$output" == *"doctor=clean"* ]]
+  [[ "$output" == *"budget="* ]]
+  [[ "$output" == *"open-cap="* ]]
+  [[ "$output" == *"gates=merge:false,no-ci:false,verify:true,branch:main"* ]]
+}
+
+@test "inspect: empty and unavailable sections render explicitly" {
+  make_phase6_empty_fixture
+  run run_phase3_human
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'ATTENTION\n  none'* ]]
+  [[ "$output" == *$'NEXT SHIPYARD PR\n  none'* ]]
+  [[ "$output" == *"delegation_claude: unavailable"* ]]
+  [[ "$output" != *$'COVERAGE\n\n'* ]]
+}
+
+@test "inspect: JSON stdout contains JSON only and diagnostics use stderr" {
+  make_phase6_empty_fixture
+  run --separate-stderr run_phase3
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+  jq -e '.schema_version==1 and (.priorities|type)=="array"' <<<"$output"
+  printf 'JSON_STDOUT_BYTES=%s JSON_STDERR_BYTES=%s\n' \
+    "${#output}" "${#stderr}"
+
+  run --separate-stderr env SHIPYARD_INSPECT_NOW=2026-07-29T12:00:00Z \
+    python3 "$QUARTET_ROOT/skills/shipyard/inspect.py" \
+      --core-root "$P3_CORE" --unit-dir "$UNIT_DIR" --days 0 --json
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"--days must be a positive integer"* ]]
+  printf 'DIAGNOSTIC_STDOUT_BYTES=%s DIAGNOSTIC_STDERR=%s\n' \
+    "${#output}" "$stderr"
 }
