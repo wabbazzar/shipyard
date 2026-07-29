@@ -2128,3 +2128,72 @@ execute-ticket docs/tickets/pending/shipyard-fleet-inspect-cli.md
   decision coverage as `not_applicable/unsupported`.
 - Commit: `feat: inspect operator attention and decisions` (orchestrator;
   subagent was instructed not to commit).
+
+### Phase 5 Ledger — effectiveness benchmarks and delegation cohorts
+
+- Plan: add the eight locked effectiveness records, benchmark limitations, and
+  source-local Claude/Codex/Hermes delegation coverage while preserving strict
+  pre-inspection boundaries and excluding transcript content.
+- Prior phase commit: `a7095bd`.
+- `builder: subagent (1 agent)`.
+- RED: ticket literal filter selected 3 cases and failed 0/3, rc=1; expanded
+  named-case filter failed 0/10, rc=1, before implementation.
+- Focused GREEN: ticket literal filter passed 3/3, rc=0; expanded named-case
+  filter passed 10/10, rc=0; `py_compile` rc=0.
+- Common Per-Commit Gate: orchestrator full Bats passed 498/498, rc=0;
+  remaining repository-wide checks are recorded immediately before commit.
+- Observable evidence/deviations: all eight effectiveness records were emitted
+  in locked order. With no outcome components, records 1–5 were
+  `unmeasured/null`; disconnected proposal/decision/job/usage/critique facts
+  made them `partial/null`, never measured. Synthetic Claude and Codex
+  reporters were independently `measured/1`; Hermes was
+  `unmeasured/null` with unsupported coverage. Claude coverage was
+  `partial/upper_bound_unsupported` with `2 total/1 valid/1 invalid`; Codex was
+  the same state/reason with `4/1/3`, propagating one malformed record, one
+  malformed boundary, and one malformed timestamp. Both cohorts named the
+  unsupported exclusive upper bound and possible at/after-start inclusion.
+  Missing-root coverage degraded only its source. Exact transcript-secret grep
+  found zero matches (grep rc=1). No deviation.
+- Completion-time repair evidence: strengthened the successful-cohort case with
+  two controlled reporters and external return-boundary markers. Targeted RED
+  failed 0/1, rc=1, because both completion fields reused
+  `inspection_started_at`; targeted GREEN passed 1/1, rc=0, after capturing UTC
+  separately immediately after each subprocess return. The behavioral gate
+  proves `claude_return <= claude_completed < codex_return <= codex_completed`,
+  both values are RFC3339 UTC, neither equals the injected inspection clock,
+  and evidence `observed_at`, evidence operands, and effectiveness components
+  agree per source. Expanded Phase 5 passed 10/10 and full inspector passed
+  59/59, both rc=0; exclusive-upper-bound limitations were unchanged. No
+  repair deviation.
+- Performance repair evidence: the controlled overlap gate was RED at 0/1,
+  rc=1, in 2.77s, then GREEN at 1/1, rc=0, in 1.59s. Its return markers prove
+  `max(starts) < min(returns)` and each completion is at or after its own
+  reporter return and differs from the inspection clock. Claude and Codex
+  remain separate real reporter subprocesses, launched before fleet scanning
+  and collected in deterministic Claude/Codex order; Hermes remains
+  unsupported. Expanded Phase 5 passed 10/10 and the full inspector passed
+  59/59, both rc=0. The real-fleet run improved from the orchestrator's 15.66s
+  RED to 13.67s, rc=0, across eight projects/31 roles; all eight records and
+  coverage semantics remained present (Claude 16, Codex 22, Hermes null). No
+  performance-repair deviation.
+- Decode-isolation repair evidence: a reporter emitting raw invalid UTF-8 made
+  the strengthened source-isolation gate RED at 0/1, rc=1, in 0.54s by raising
+  during subprocess text decoding and discarding the valid peer. The targeted
+  gate then passed 1/1, rc=0, in 0.50s: Claude became
+  `error/malformed` and `unmeasured/null` while Codex remained `measured/1`,
+  and both retained their locked output positions. Only `UnicodeDecodeError`
+  is converted to the existing malformed-output contract; `KeyboardInterrupt`
+  and `SystemExit` are not caught. Expanded Phase 5 passed 10/10 in 2.70s and
+  the full inspector passed 59/59 in 12.32s, all rc=0. No repair deviation.
+- Independent final re-audit: PASS. Reporter subprocesses overlap each other
+  and the fleet scan while staying independently attributed and deterministically
+  ordered; completion timestamps follow each source's return; malformed UTF-8
+  degrades only that source; no broad exception catch was added.
+- Orchestrator live proof: three consecutive real read-only JSON runs were
+  13.29s, 13.41s, and 13.59s, each rc=0 and below 15.0s. The live report
+  contained all eight records in order: the five historical benchmarks were
+  `partial/null`, Claude was `measured/16`, Codex was `measured/22`, and
+  Hermes was `unmeasured/null`; every effectiveness evidence reference
+  resolved.
+- Commit: `feat: measure fleet effectiveness honestly` (orchestrator;
+  subagent was instructed not to commit).

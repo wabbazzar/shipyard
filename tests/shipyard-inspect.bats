@@ -6,6 +6,8 @@ setup() {
   quartet_setup
   UNIT_DIR="$HOME/.config/systemd/user"
   mkdir -p "$UNIT_DIR"
+  export CLAUDE_PROJECTS_DIR="$BATS_TEST_TMPDIR/no-real-claude"
+  export CODEX_SESSIONS_DIR="$BATS_TEST_TMPDIR/no-real-codex"
   make_strict_show_stub
 }
 
@@ -240,6 +242,83 @@ phase4_proposal() {
   local id="$1" signal_ids="${2:-[]}" title="${3:-Proposal $1}"
   printf '{"id":"%s","type":"feature","title":"%s","severity":"med","status":"open","signal_ids":%s}' \
     "$id" "$title" "$signal_ids"
+}
+
+enable_phase5_reporters() {
+  mkdir -p "$P3_CORE/scripts" "$P3_CORE/docs/tickets/pending"
+  cp "$QUARTET_ROOT/scripts/delegation-report.py" \
+    "$P3_CORE/scripts/delegation-report.py"
+  cat >"$P3_CORE/docs/tickets/pending/synthetic.md" <<'EOF'
+# Synthetic ticket
+
+## Ledger
+
+builder: subagent (1 agent)
+EOF
+  CLAUDE_PROJECTS_DIR="$BATS_TEST_TMPDIR/transcripts/claude"
+  CODEX_SESSIONS_DIR="$BATS_TEST_TMPDIR/transcripts/codex"
+  export CLAUDE_PROJECTS_DIR CODEX_SESSIONS_DIR
+  mkdir -p "$CLAUDE_PROJECTS_DIR/fixture" \
+    "$CODEX_SESSIONS_DIR/2026/07/29"
+}
+
+write_phase5_claude() {
+  cat >"$CLAUDE_PROJECTS_DIR/fixture/session.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-07-28T08:00:00Z","message":{"content":[{"type":"tool_use","id":"skill-1","name":"Skill","input":{"skill":"execute-ticket"}}],"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+{"type":"assistant","timestamp":"2026-07-28T08:00:01Z","message":{"content":[{"type":"tool_use","id":"agent-1","name":"Agent","input":{"description":"CLAUDE_TRANSCRIPT_SECRET"}}],"usage":{"input_tokens":1,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4}}}
+{"type":"assistant","timestamp":"malformed-claude-time","message":{"content":"CLAUDE_MALFORMED_SECRET","usage":{"input_tokens":999,"output_tokens":999,"cache_read_input_tokens":999,"cache_creation_input_tokens":999}}}
+{"type":"assistant","timestamp":"2026-07-29T12:00:00Z","message":{"content":"CLAUDE_AT_BOUNDARY_SECRET","usage":{"input_tokens":5,"output_tokens":6,"cache_read_input_tokens":7,"cache_creation_input_tokens":8}}}
+EOF
+}
+
+write_phase5_codex() {
+  cat >"$CODEX_SESSIONS_DIR/2026/07/29/rollout-fixture.jsonl" <<'EOF'
+{"timestamp":"2026-07-28T09:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+{"timestamp":"2026-07-28T09:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<!-- shipyard-skill:execute-ticket:v1 --> CODEX_TRANSCRIPT_SECRET"}]}}
+{"timestamp":"2026-07-28T09:00:02Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"secret\":\"CODEX_CALL_SECRET\"}","call_id":"spawn-1"}}
+{"timestamp":"2026-07-28T09:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3,"reasoning_output_tokens":1,"total_tokens":14}}}}
+{"timestamp":"2026-07-28T09:00:04Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}
+not-json-CODEX_MALFORMED_RECORD_SECRET
+{"timestamp":"malformed-codex-time","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"CODEX_MALFORMED_TIME_SECRET"}]}}
+{"timestamp":"2026-07-28T09:05:00Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"wrong"}}
+{"timestamp":"2026-07-29T12:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-at-boundary"}}
+{"timestamp":"2026-07-29T12:00:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"CODEX_AT_BOUNDARY_SECRET"}]}}
+{"timestamp":"2026-07-29T12:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":20,"cached_input_tokens":4,"output_tokens":6,"reasoning_output_tokens":2,"total_tokens":28}}}}
+{"timestamp":"2026-07-29T12:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-at-boundary"}}
+EOF
+}
+
+make_phase5_reporter_fixture() {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-effectiveness"
+  mkdir -p "$root"
+  make_phase3_project effectiveness "build" "$root"
+  enable_phase5_reporters
+  write_phase5_claude
+  write_phase5_codex
+}
+
+make_phase5_benchmark_fixture() {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-benchmarks"
+  mkdir -p "$root"
+  make_phase3_project outcomes "design build release" "$root"
+  write_phase4_result tmp design \
+    "[$(phase4_proposal bug-open '[]' 'Disconnected bug'),$(phase4_proposal feature-open '[]' 'Disconnected feature')]"
+  sed -i 's/"type":"feature","title":"Disconnected bug"/"type":"bug","title":"Disconnected bug"/' \
+    "$P3_PROJECT/tmp/outcomes-design-result.json"
+  cat >"$P3_PROJECT/data/decisions.jsonl" <<'EOF'
+{"proposal_id":"unrelated-decision","decision":"approve","ts":"2026-07-28T10:00:00Z"}
+EOF
+  cat >"$P3_PROJECT/data/usage/outcomes.jsonl" <<'EOF'
+{"ts":"2026-07-28T10:00:00Z","action":"view","path":"/synthetic"}
+EOF
+  cat >"$root/2026-07-28.jsonl" <<'EOF'
+{"ts":"2026-07-28T10:00:00Z","svc":"outcomes-design","event":"medic.incident","incident_id":"incident-disconnected","summary":"BENCHMARK_SECRET"}
+{"ts":"2026-07-28T10:01:00Z","svc":"outcomes-build","event":"job.end","status":"ok","tokens":1}
+{"ts":"2026-07-28T10:02:00Z","svc":"outcomes-release","event":"job.end","status":"ok","tokens":1}
+{"ts":"2026-07-28T10:03:00Z","svc":"outcomes-release","event":"release.critique","block":1,"warn":1,"note":0,"files":1,"tokens":1}
+EOF
 }
 
 @test "inspect: discovers only matching current-root manifests and emits schema v1" {
@@ -2026,4 +2105,341 @@ EOF
   for command in curl wget nc gh claude codex hermes; do
     [ ! -s "$SHIM_LOG/$command.rejected" ]
   done
+}
+
+@test "inspect: historical benchmark windows and targets are labelled" {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-benchmark-labels"
+  mkdir -p "$root"
+  make_phase3_project labels "build" "$root"
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    [.effectiveness[].key] == [
+      "bugs_caught_and_fixed",
+      "usage_assessed_projects",
+      "features_shipped_end_to_end",
+      "consequential_decisions_surfaced",
+      "critique_actionability",
+      "execute_ticket_delegation_claude",
+      "execute_ticket_delegation_codex",
+      "execute_ticket_delegation_hermes"
+    ]
+    and ([.effectiveness[0:4][]
+      | [.benchmark_label,.benchmark_window_days,.target_operator,
+         .target_value]]
+      | all((.==["Historical 5-day trial benchmark",5,"gte",1])
+        or (.==["Historical 5-day trial benchmark",5,"gte",3])))
+    and ([.effectiveness[0:4][].target_value] == [1,3,1,1])
+    and (.effectiveness[4]
+      | .benchmark_label=="Historical 2-week benchmark"
+        and .benchmark_window_days==14 and .target_operator=="gte"
+        and .target_value==0.333333 and .unit=="ratio")
+    and ([.effectiveness[5:8][]
+      | [.benchmark_label,.benchmark_window_days,.target_operator,.target_value]]
+      | all(.==["No presentation target",null,null,null]))
+  ' <<<"$output"
+}
+
+@test "inspect: missing linkage is partial with null value" {
+  make_phase5_benchmark_fixture
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    [.effectiveness[0:5][] | [.state,.value,.reason]] == [
+      ["partial",null,"missing_bug_fix_lineage"],
+      ["partial",null,"missing_usage_assessment_lineage"],
+      ["partial",null,"missing_feature_delivery_lineage"],
+      ["partial",null,"missing_decision_consequence_judgment"],
+      ["partial",null,"missing_operator_actionability_judgment"]
+    ]
+    and ([.effectiveness[0:5][].evidence_ids|length] | all(.>0))
+    and ([.effectiveness[0:5][].limitations|length] | all(.>0))
+  ' <<<"$output"
+}
+
+@test "inspect: benchmark component facts never claim measured in v1" {
+  make_phase5_benchmark_fixture
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.effectiveness[0:5][].state] | all(.=="partial" or .=="unmeasured"))
+    and ([.effectiveness[0:5][].value] | all(.==null))
+    and (.effectiveness[0].components.bug_proposals==1)
+    and (.effectiveness[1].components.usage_projects_observed==1)
+    and (.effectiveness[2].components.feature_proposals==1)
+    and (.effectiveness[3].components.valid_decisions==1)
+    and (.effectiveness[4].components.critique_findings==2)
+  ' <<<"$output"
+  [[ "$output" != *"BENCHMARK_SECRET"* ]]
+}
+
+@test "inspect: successful delegation cohort is measured with partial window coverage" {
+  make_phase5_reporter_fixture
+  PHASE5_COMPLETION_MARKERS="$BATS_TEST_TMPDIR/reporter-completion"
+  export PHASE5_COMPLETION_MARKERS
+  mkdir -p "$PHASE5_COMPLETION_MARKERS"
+  cat >"$P3_CORE/scripts/delegation-report.py" <<'PY'
+import json
+import os
+import pathlib
+import sys
+import time
+
+source = sys.argv[sys.argv.index("--source") + 1]
+marker_dir = pathlib.Path(os.environ["PHASE5_COMPLETION_MARKERS"])
+marker_dir.joinpath(source + ".start").write_text(
+    str(time.time()), encoding="utf-8"
+)
+time.sleep(1.1)
+marker_dir.joinpath(source + ".return").write_text(
+    str(time.time()), encoding="utf-8"
+)
+summary = {
+    "sessions": 1,
+    "turns": 3 if source == "claude" else 2,
+    "agent_calls": 1,
+    "zero_agent_sessions": 0,
+    "zero_agent_pct": 0.0,
+    "malformed_timestamps": 1,
+}
+if source == "codex":
+    summary.update({"malformed_records": 1, "malformed_boundaries": 1})
+print(json.dumps(summary))
+PY
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  claude_completed="$(jq -r '
+    [.effectiveness[] | select(.key=="execute_ticket_delegation_claude")][0]
+    .components.reporter_completed_at' <<<"$output")"
+  codex_completed="$(jq -r '
+    [.effectiveness[] | select(.key=="execute_ticket_delegation_codex")][0]
+    .components.reporter_completed_at' <<<"$output")"
+  python3 - "$claude_completed" "$codex_completed" \
+    "$PHASE5_COMPLETION_MARKERS/claude.start" \
+    "$PHASE5_COMPLETION_MARKERS/claude.return" \
+    "$PHASE5_COMPLETION_MARKERS/codex.start" \
+    "$PHASE5_COMPLETION_MARKERS/codex.return" <<'PY'
+import datetime
+import pathlib
+import sys
+
+def epoch(value):
+    parsed = datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    return int(parsed.replace(tzinfo=datetime.timezone.utc).timestamp())
+
+claude = epoch(sys.argv[1])
+codex = epoch(sys.argv[2])
+claude_start = float(pathlib.Path(sys.argv[3]).read_text())
+claude_return = float(pathlib.Path(sys.argv[4]).read_text())
+codex_start = float(pathlib.Path(sys.argv[5]).read_text())
+codex_return = float(pathlib.Path(sys.argv[6]).read_text())
+assert sys.argv[1] != "2026-07-29T12:00:00Z"
+assert sys.argv[2] != "2026-07-29T12:00:00Z"
+assert max(claude_start, codex_start) < min(claude_return, codex_return)
+assert int(claude_return) <= claude
+assert int(codex_return) <= codex
+PY
+  jq -e '
+    ([.effectiveness[] | select(.key=="execute_ticket_delegation_claude")][0]) as $claude
+    | ([.effectiveness[] | select(.key=="execute_ticket_delegation_codex")][0]) as $codex
+    | ($claude
+      | .state=="measured" and .value==1 and .unit=="sessions"
+        and .components.sessions==1 and .components.agent_calls==1
+        and (.components.reporter_completed_at
+          | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+        and .reason=="upper_bound_unsupported"
+        and (.limitations|index("exclusive_upper_bound_unsupported"))!=null
+        and (.evidence_ids|length)==1)
+    and ($codex.components.reporter_completed_at
+      | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+    and ([.coverage[] | select(.source=="delegation_claude")][0]
+      | .state=="partial" and .reason=="upper_bound_unsupported")
+    and ([.evidence[] | select(.kind=="delegation_cohort"
+      and .fields.source=="claude")][0]
+      | .claim_kind=="fact"
+        and .observed_at==$claude.components.reporter_completed_at
+        and .fields.reporter_completed_at==$claude.components.reporter_completed_at)
+    and ([.evidence[] | select(.kind=="delegation_cohort"
+      and .fields.source=="codex")][0]
+      | .observed_at==$codex.components.reporter_completed_at
+        and .fields.reporter_completed_at==$codex.components.reporter_completed_at)
+  ' <<<"$output"
+}
+
+@test "inspect: Claude and Codex delegation cohorts are independent" {
+  make_phase5_reporter_fixture
+  cat >"$CLAUDE_PROJECTS_DIR/fixture/session-two.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-07-28T11:00:00Z","message":{"content":[{"type":"tool_use","id":"skill-2","name":"Skill","input":{"skill":"execute-ticket"}}],"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+EOF
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.effectiveness[] | select(.key=="execute_ticket_delegation_claude")][0]
+      | .state=="measured" and .value==2
+        and .components.sessions==2 and .components.turns==4
+        and .components.zero_agent_sessions==1)
+    and ([.effectiveness[] | select(.key=="execute_ticket_delegation_codex")][0]
+      | .state=="measured" and .value==1
+        and .components.sessions==1 and .components.turns==2
+        and .components.zero_agent_sessions==0)
+    and ([.evidence[] | select(.kind=="delegation_cohort")
+      | .fields.source] | sort)==["claude","codex"]
+  ' <<<"$output"
+}
+
+@test "inspect: missing reporter root degrades only that cohort" {
+  make_phase5_reporter_fixture
+  CLAUDE_PROJECTS_DIR="$BATS_TEST_TMPDIR/transcripts/missing-claude"
+  export CLAUDE_PROJECTS_DIR
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.effectiveness[] | select(.key=="execute_ticket_delegation_claude")][0]
+      | .state=="unmeasured" and .value==null
+        and .reason=="reporter_root_missing" and .evidence_ids==[])
+    and ([.coverage[] | select(.source=="delegation_claude")][0]
+      | .state=="unavailable" and .reason=="missing")
+    and ([.effectiveness[] | select(.key=="execute_ticket_delegation_codex")][0]
+      | .state=="measured" and .value==1)
+  ' <<<"$output"
+
+  cat >"$P3_CORE/scripts/delegation-report.py" <<'PY'
+import json
+import sys
+
+source = sys.argv[sys.argv.index("--source") + 1]
+if source == "claude":
+    sys.stdout.buffer.write(b"\xffinvalid-reporter-output")
+else:
+    print(json.dumps({
+        "sessions": 1,
+        "turns": 2,
+        "agent_calls": 1,
+        "zero_agent_sessions": 0,
+        "zero_agent_pct": 0.0,
+        "malformed_records": 0,
+        "malformed_boundaries": 0,
+        "malformed_timestamps": 0,
+    }))
+PY
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    (.effectiveness[5]
+      | .key=="execute_ticket_delegation_claude"
+        and .state=="unmeasured" and .value==null
+        and .reason=="reporter_malformed_output" and .evidence_ids==[])
+    and (.effectiveness[6]
+      | .key=="execute_ticket_delegation_codex"
+        and .state=="measured" and .value==1)
+    and ([.coverage[] | select(.source=="delegation_claude")][0]
+      | .state=="error" and .reason=="malformed"
+        and .records_total==1 and .records_valid==0 and .records_invalid==1)
+    and ([.coverage[] | select(.source=="delegation_codex")][0]
+      | .state=="partial" and .reason=="upper_bound_unsupported")
+    and ([.evidence[] | select(.kind=="delegation_cohort")
+      | .fields.source])==["codex"]
+  ' <<<"$output"
+}
+
+@test "inspect: reporter malformed counts propagate to coverage" {
+  make_phase5_reporter_fixture
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.coverage[] | select(.source=="delegation_claude")][0]
+      | .records_total==2 and .records_valid==1 and .records_invalid==1
+        and (.limitations|index("reporter_malformed_timestamps"))!=null)
+    and ([.coverage[] | select(.source=="delegation_codex")][0]
+      | .records_total==4 and .records_valid==1 and .records_invalid==3
+        and (.limitations|index("reporter_malformed_records"))!=null
+        and (.limitations|index("reporter_malformed_boundaries"))!=null
+        and (.limitations|index("reporter_malformed_timestamps"))!=null)
+    and ([.evidence[] | select(.kind=="delegation_cohort"
+      and .fields.source=="claude")][0].fields
+      | .malformed_records==0 and .malformed_boundaries==0
+        and .malformed_timestamps==1)
+    and ([.evidence[] | select(.kind=="delegation_cohort"
+      and .fields.source=="codex")][0].fields
+      | .malformed_records==1 and .malformed_boundaries==1
+        and .malformed_timestamps==1)
+  ' <<<"$output"
+}
+
+@test "inspect: reporter upper bound limitation covers at-and-after start records" {
+  make_phase5_reporter_fixture
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.effectiveness[] | select(.key=="execute_ticket_delegation_claude")][0]
+      | .components.turns==3
+        and (.limitations|index("records_at_or_after_inspection_started_at_may_be_included"))!=null)
+    and ([.effectiveness[] | select(.key=="execute_ticket_delegation_codex")][0]
+      | .components.turns==2
+        and (.limitations|index("records_at_or_after_inspection_started_at_may_be_included"))!=null)
+    and ([.coverage[] | select(.source=="delegation_claude"
+      or .source=="delegation_codex")]
+      | all(.state=="partial" and .reason=="upper_bound_unsupported"))
+  ' <<<"$output"
+}
+
+@test "inspect: unsupported Hermes is unmeasured not zero" {
+  make_phase5_reporter_fixture
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.effectiveness[] | select(.key=="execute_ticket_delegation_hermes")][0]
+      | .state=="unmeasured" and .value==null and .components=={}
+        and .evidence_ids==[] and .reason=="unsupported"
+        and (.limitations|index("unsupported_in_v1"))!=null)
+    and ([.coverage[] | select(.source=="delegation_hermes")][0]
+      | .state=="unavailable" and .reason=="unsupported"
+        and .records_total==0 and .records_valid==0 and .records_invalid==0)
+  ' <<<"$output"
+}
+
+@test "inspect: no transcript content enters output" {
+  make_phase5_reporter_fixture
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"CLAUDE_TRANSCRIPT_SECRET"* ]]
+  [[ "$output" != *"CLAUDE_MALFORMED_SECRET"* ]]
+  [[ "$output" != *"CLAUDE_AT_BOUNDARY_SECRET"* ]]
+  [[ "$output" != *"CODEX_TRANSCRIPT_SECRET"* ]]
+  [[ "$output" != *"CODEX_CALL_SECRET"* ]]
+  [[ "$output" != *"CODEX_MALFORMED_RECORD_SECRET"* ]]
+  [[ "$output" != *"CODEX_MALFORMED_TIME_SECRET"* ]]
+  [[ "$output" != *"CODEX_AT_BOUNDARY_SECRET"* ]]
+  jq -e '
+    ([.evidence[] | select(.kind=="delegation_cohort")]|length)==2
+    and ([.evidence[] | select(.kind=="delegation_cohort")
+      | (.fields|keys)] | all(.==[
+        "agent_calls","malformed_boundaries","malformed_records",
+        "malformed_timestamps","reporter_completed_at","sessions","source",
+        "turns","zero_agent_pct","zero_agent_sessions"
+      ]))
+  ' <<<"$output"
 }

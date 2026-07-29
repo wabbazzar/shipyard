@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tomllib
 from collections import defaultdict
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -2810,6 +2811,464 @@ def _attention_record(
     }
 
 
+def _benchmark_record(
+    *,
+    key: str,
+    label: str,
+    window_days: int,
+    target_value: int | float,
+    unit: str,
+    components: dict[str, Any],
+    evidence_ids: list[str],
+    missing_link: str,
+) -> dict[str, Any]:
+    component_present = any(
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value > 0
+        for value in components.values()
+    )
+    return {
+        "key": key,
+        "benchmark_label": label,
+        "benchmark_window_days": window_days,
+        "target_operator": "gte",
+        "target_value": target_value,
+        "unit": unit,
+        "state": "partial" if component_present else "unmeasured",
+        "value": None,
+        "components": components,
+        "evidence_ids": sorted(set(evidence_ids)),
+        "reason": missing_link if component_present else "no_component_evidence",
+        "limitations": [
+            "historical_benchmark_not_measured_v1",
+            *([missing_link] if component_present else []),
+        ],
+    }
+
+
+def _benchmark_effectiveness(
+    evidence: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    bug_proposals = [
+        item
+        for item in evidence
+        if item["kind"] == "open_proposal"
+        and item["fields"].get("type") == "bug"
+    ]
+    feature_proposals = [
+        item
+        for item in evidence
+        if item["kind"] == "open_proposal"
+        and item["fields"].get("type") == "feature"
+    ]
+    incidents = [
+        item
+        for item in evidence
+        if item["kind"] in {"incident_event", "incident_state"}
+        and item["fields"].get("incident_id") is not None
+    ]
+    usage = [item for item in evidence if item["kind"] == "usage_beacon"]
+    decisions = [item for item in evidence if item["kind"] == "decision"]
+    approvals = [
+        item for item in decisions if item["fields"].get("decision") == "approve"
+    ]
+    build_success = [
+        item
+        for item in evidence
+        if item["kind"] == "job_end"
+        and item["fields"].get("role") == "build"
+        and item["fields"].get("status") == "ok"
+    ]
+    release_success = [
+        item
+        for item in evidence
+        if item["kind"] == "job_end"
+        and item["fields"].get("role") == "release"
+        and item["fields"].get("status") == "ok"
+    ]
+    critique_events = [
+        item for item in evidence if item["kind"] == "critique_event"
+    ]
+    critique_findings = 0
+    for item in critique_events:
+        finding_count = sum(
+            value
+            for key in ("block", "warn", "note")
+            if isinstance((value := item["fields"].get(key)), (int, float))
+            and not isinstance(value, bool)
+            and value >= 0
+        )
+        critique_findings += finding_count
+
+    bug_evidence = bug_proposals + incidents + build_success
+    usage_evidence = usage
+    feature_evidence = (
+        feature_proposals + approvals + build_success + release_success
+    )
+    decision_evidence = decisions
+    critique_evidence = critique_events
+    five_day = "Historical 5-day trial benchmark"
+    return [
+        _benchmark_record(
+            key="bugs_caught_and_fixed",
+            label=five_day,
+            window_days=5,
+            target_value=1,
+            unit="bugs",
+            components={
+                "bug_proposals": len(bug_proposals),
+                "incident_signals": len(incidents),
+                "successful_build_jobs": len(build_success),
+            },
+            evidence_ids=[item["id"] for item in bug_evidence],
+            missing_link="missing_bug_fix_lineage",
+        ),
+        _benchmark_record(
+            key="usage_assessed_projects",
+            label=five_day,
+            window_days=5,
+            target_value=3,
+            unit="projects",
+            components={
+                "usage_projects_observed": len(
+                    {item["project_id"] for item in usage if item["project_id"]}
+                ),
+                "usage_records": len(usage),
+            },
+            evidence_ids=[item["id"] for item in usage_evidence],
+            missing_link="missing_usage_assessment_lineage",
+        ),
+        _benchmark_record(
+            key="features_shipped_end_to_end",
+            label=five_day,
+            window_days=5,
+            target_value=1,
+            unit="features",
+            components={
+                "feature_proposals": len(feature_proposals),
+                "approve_decisions": len(approvals),
+                "successful_build_jobs": len(build_success),
+                "successful_release_jobs": len(release_success),
+            },
+            evidence_ids=[item["id"] for item in feature_evidence],
+            missing_link="missing_feature_delivery_lineage",
+        ),
+        _benchmark_record(
+            key="consequential_decisions_surfaced",
+            label=five_day,
+            window_days=5,
+            target_value=1,
+            unit="decisions",
+            components={"valid_decisions": len(decisions)},
+            evidence_ids=[item["id"] for item in decision_evidence],
+            missing_link="missing_decision_consequence_judgment",
+        ),
+        _benchmark_record(
+            key="critique_actionability",
+            label="Historical 2-week benchmark",
+            window_days=14,
+            target_value=0.333333,
+            unit="ratio",
+            components={
+                "critique_events": len(critique_events),
+                "critique_findings": critique_findings,
+            },
+            evidence_ids=[item["id"] for item in critique_evidence],
+            missing_link="missing_operator_actionability_judgment",
+        ),
+    ]
+
+
+def _delegation_failure(
+    source: str,
+    *,
+    coverage_state: str,
+    coverage_reason: str,
+    effectiveness_reason: str,
+    limitations: list[str],
+    total: int = 0,
+    invalid: int = 0,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    return (
+        _coverage(
+            None,
+            f"delegation_{source}",
+            coverage_state,
+            coverage_reason,
+            total=total,
+            invalid=invalid,
+            limitations=limitations,
+        ),
+        [],
+        {
+            "key": f"execute_ticket_delegation_{source}",
+            "benchmark_label": "No presentation target",
+            "benchmark_window_days": None,
+            "target_operator": None,
+            "target_value": None,
+            "unit": "sessions",
+            "state": "unmeasured",
+            "value": None,
+            "components": {},
+            "evidence_ids": [],
+            "reason": effectiveness_reason,
+            "limitations": limitations,
+        },
+    )
+
+
+def _delegation_adapter(
+    *,
+    source: str,
+    core_root: str,
+    window_start: datetime,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    reporter = Path(core_root) / "scripts" / "delegation-report.py"
+    if not reporter.is_file():
+        return _delegation_failure(
+            source,
+            coverage_state="unavailable",
+            coverage_reason="missing_dependency",
+            effectiveness_reason="reporter_unavailable",
+            limitations=["missing_dependency"],
+        )
+    argv = [
+        sys.executable,
+        str(reporter),
+        "--source",
+        source,
+        "--since",
+        _format_utc(window_start),
+        "--json",
+        "--tickets-dir",
+        str(Path(core_root) / "docs" / "tickets"),
+    ]
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=core_root,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return _delegation_failure(
+            source,
+            coverage_state="error",
+            coverage_reason="command_failed",
+            effectiveness_reason="reporter_unavailable",
+            limitations=["reporter_command_failed"],
+        )
+    except UnicodeDecodeError:
+        return _delegation_failure(
+            source,
+            coverage_state="error",
+            coverage_reason="malformed",
+            effectiveness_reason="reporter_malformed_output",
+            limitations=["reporter_malformed_output"],
+            total=1,
+            invalid=1,
+        )
+    completed_at = _format_utc(datetime.now(timezone.utc))
+    if result.returncode != 0:
+        root_missing = result.returncode == 2 and "transcript root at" in result.stderr
+        return _delegation_failure(
+            source,
+            coverage_state="unavailable" if root_missing else "error",
+            coverage_reason="missing" if root_missing else "command_failed",
+            effectiveness_reason=(
+                "reporter_root_missing" if root_missing else "reporter_unavailable"
+            ),
+            limitations=[
+                "reporter_root_missing" if root_missing else "reporter_command_failed"
+            ],
+        )
+    try:
+        summary = _strict_object(result.stdout)
+    except _StrictJSONError:
+        return _delegation_failure(
+            source,
+            coverage_state="error",
+            coverage_reason="malformed",
+            effectiveness_reason="reporter_malformed_output",
+            limitations=["reporter_malformed_output"],
+            total=1,
+            invalid=1,
+        )
+
+    required_integers = (
+        "sessions",
+        "turns",
+        "agent_calls",
+        "zero_agent_sessions",
+        "malformed_timestamps",
+    )
+    if source == "codex":
+        required_integers += ("malformed_records", "malformed_boundaries")
+    invalid_summary = any(
+        isinstance(summary.get(key), bool)
+        or not isinstance(summary.get(key), int)
+        or summary[key] < 0
+        for key in required_integers
+    )
+    zero_agent_pct = summary.get("zero_agent_pct")
+    if (
+        isinstance(zero_agent_pct, bool)
+        or not isinstance(zero_agent_pct, (int, float))
+        or not math.isfinite(zero_agent_pct)
+        or zero_agent_pct < 0
+    ):
+        invalid_summary = True
+    if invalid_summary:
+        return _delegation_failure(
+            source,
+            coverage_state="error",
+            coverage_reason="malformed",
+            effectiveness_reason="reporter_malformed_output",
+            limitations=["reporter_malformed_output"],
+            total=1,
+            invalid=1,
+        )
+
+    malformed_records = summary.get("malformed_records", 0)
+    malformed_boundaries = summary.get("malformed_boundaries", 0)
+    malformed_timestamps = summary["malformed_timestamps"]
+    fields = {
+        "source": source,
+        "sessions": summary["sessions"],
+        "turns": summary["turns"],
+        "agent_calls": summary["agent_calls"],
+        "zero_agent_sessions": summary["zero_agent_sessions"],
+        "zero_agent_pct": zero_agent_pct,
+        "malformed_records": malformed_records,
+        "malformed_boundaries": malformed_boundaries,
+        "malformed_timestamps": malformed_timestamps,
+        "reporter_completed_at": completed_at,
+    }
+    source_ref = f"command:delegation:{source}:aggregate"
+    item = {
+        "id": _evidence_id("delegation", source_ref, fields),
+        "project_id": None,
+        "source": f"delegation_{source}",
+        "claim_kind": "fact",
+        "kind": "delegation_cohort",
+        "observed_at": completed_at,
+        "source_ref": source_ref,
+        "recurrence_key": None,
+        "fields": fields,
+        "limitations": [],
+    }
+    malformed_total = (
+        malformed_records + malformed_boundaries + malformed_timestamps
+    )
+    limitations = [
+        "exclusive_upper_bound_unsupported",
+        "records_at_or_after_inspection_started_at_may_be_included",
+    ]
+    for count, limitation in (
+        (malformed_records, "reporter_malformed_records"),
+        (malformed_boundaries, "reporter_malformed_boundaries"),
+        (malformed_timestamps, "reporter_malformed_timestamps"),
+    ):
+        if count:
+            limitations.append(limitation)
+    item["limitations"] = list(limitations)
+    coverage = _coverage(
+        None,
+        f"delegation_{source}",
+        "partial",
+        "upper_bound_unsupported",
+        total=summary["sessions"] + malformed_total,
+        valid=summary["sessions"],
+        invalid=malformed_total,
+        newest_ts=completed_at,
+        limitations=limitations,
+    )
+    effectiveness = {
+        "key": f"execute_ticket_delegation_{source}",
+        "benchmark_label": "No presentation target",
+        "benchmark_window_days": None,
+        "target_operator": None,
+        "target_value": None,
+        "unit": "sessions",
+        "state": "measured",
+        "value": summary["sessions"],
+        "components": fields,
+        "evidence_ids": [item["id"]],
+        "reason": "upper_bound_unsupported",
+        "limitations": limitations,
+    }
+    return coverage, [item], effectiveness
+
+
+def _start_delegation_reporters(
+    *, core_root: str, window_start: datetime
+) -> tuple[
+    ThreadPoolExecutor,
+    dict[
+        str,
+        Future[
+            tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]
+        ],
+    ],
+]:
+    executor = ThreadPoolExecutor(
+        max_workers=2, thread_name_prefix="shipyard-delegation"
+    )
+    futures = {
+        source: executor.submit(
+            _delegation_adapter,
+            source=source,
+            core_root=core_root,
+            window_start=window_start,
+        )
+        for source in ("claude", "codex")
+    }
+    return executor, futures
+
+
+def _delegation_effectiveness(
+    *,
+    executor: ThreadPoolExecutor,
+    futures: dict[
+        str,
+        Future[
+            tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]
+        ],
+    ],
+) -> tuple[
+    dict[tuple[str | None, str], dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    coverage: dict[tuple[str | None, str], dict[str, Any]] = {}
+    evidence: list[dict[str, Any]] = []
+    effectiveness: list[dict[str, Any]] = []
+    try:
+        for source in ("claude", "codex"):
+            source_coverage, source_evidence, source_effectiveness = (
+                futures[source].result()
+            )
+            coverage[(None, f"delegation_{source}")] = source_coverage
+            evidence.extend(source_evidence)
+            effectiveness.append(source_effectiveness)
+    finally:
+        executor.shutdown(wait=True)
+    hermes_coverage, hermes_evidence, hermes_effectiveness = _delegation_failure(
+        "hermes",
+        coverage_state="unavailable",
+        coverage_reason="unsupported",
+        effectiveness_reason="unsupported",
+        limitations=["unsupported_in_v1"],
+    )
+    coverage[(None, "delegation_hermes")] = hermes_coverage
+    evidence.extend(hermes_evidence)
+    effectiveness.append(hermes_effectiveness)
+    return coverage, evidence, effectiveness
+
+
 def _consumer_matches(
     consumer: str, record: dict[str, Any], svc: str
 ) -> bool:
@@ -3152,6 +3611,10 @@ def build_document(
     manifests = discover_manifests(core_root, unit_dir)
     if not manifests:
         return None
+    delegation_executor, delegation_futures = _start_delegation_reporters(
+        core_root=core_root,
+        window_start=window_start_at,
+    )
 
     by_project: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for manifest in manifests:
@@ -3357,6 +3820,17 @@ def build_document(
         )
         exact_pressure_ids[project_id].extend(pressure_ids)
 
+    (
+        delegation_coverage,
+        delegation_evidence,
+        delegation_records,
+    ) = _delegation_effectiveness(
+        executor=delegation_executor,
+        futures=delegation_futures,
+    )
+    coverage_by_key.update(delegation_coverage)
+    evidence.extend(delegation_evidence)
+
     coverage = list(coverage_by_key.values())
     source_rank = {source: index for index, source in enumerate(COVERAGE_ORDER)}
     coverage.sort(
@@ -3523,6 +3997,11 @@ def build_document(
         )
 
     evidence = sorted(evidence_by_id.values(), key=lambda item: item["id"])
+    effectiveness = _benchmark_effectiveness(evidence) + delegation_records
+    effectiveness_state_counts = {
+        state: sum(1 for item in effectiveness if item["state"] == state)
+        for state in ("measured", "partial", "unmeasured")
+    }
     attention.sort(
         key=lambda item: (
             item["detected_at"] is None,
@@ -3571,17 +4050,13 @@ def build_document(
         "evidence": evidence,
         "fleet": fleet,
         "attention": attention,
-        "effectiveness": [],
+        "effectiveness": effectiveness,
         "priorities": [],
         "summary": {
             "fleet_state": fleet_state,
             "project_state_counts": state_counts,
             "attention_count": len(attention),
-            "effectiveness_state_counts": {
-                "measured": 0,
-                "partial": 0,
-                "unmeasured": 0,
-            },
+            "effectiveness_state_counts": effectiveness_state_counts,
             "priority_count": 0,
             "top_priority_ids": [],
         },
