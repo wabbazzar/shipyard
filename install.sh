@@ -702,8 +702,15 @@ else
     /^[[:space:]]*\[names\]/ { skip=1; next }
     skip && /^[[:space:]]*\[/ { skip=0 }
     !skip { print }
-  ' "$CFG" > "$tmp_cfg"
-  # Drop a trailing blank line to keep spacing tidy, then append the block.
+  ' "$CFG" | awk '
+    { line[NR]=$0 }
+    END {
+      last=NR
+      while (last > 0 && line[last] ~ /^[[:space:]]*$/) last--
+      for (i=1; i<=last; i++) print line[i]
+    }
+  ' > "$tmp_cfg"
+  # Drop trailing blank lines to keep spacing stable, then append the block.
   printf '\n%s' "$names_block" >> "$tmp_cfg"
   mv "$tmp_cfg" "$CFG"
   echo "  wrote [names] ($THEME)"

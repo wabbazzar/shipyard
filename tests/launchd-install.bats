@@ -53,8 +53,10 @@ do_install() {
 @test "launchd install is idempotent and doctor sees a clean loaded crew" {
   launchd_fixture
   do_install >/dev/null
+  first_config="$(cksum "$P/.agents/config.toml")"
   do_install >/dev/null
   [ "$(find "$JOBS" -maxdepth 1 -name 'macp-*.plist' | wc -l | tr -d ' ')" -eq 3 ]
+  [ "$(cksum "$P/.agents/config.toml")" = "$first_config" ]
 
   run env QUARTET_DIR="$QUARTET_ROOT" SHIPYARD_SCHEDULER=launchd \
     /bin/bash "$QUARTET_ROOT/install.sh" --doctor --project "$P"
