@@ -36,6 +36,36 @@ mark_installed() {
   [ "$status" -eq 0 ]
   run grep -E '^kind:' "$QUARTET_ROOT/skills/shipyard/SKILL.md"
   [ "$status" -eq 0 ]
+  # Source-line-safe pre-change guard: inspect remains additive to status.
+  grep -Fxq '### `status` (default)' "$QUARTET_ROOT/skills/shipyard/SKILL.md"
+}
+
+@test "shipyard inspect public contract is bounded and non-certifying" {
+  skill="$QUARTET_ROOT/skills/shipyard/SKILL.md"
+  readme="$QUARTET_ROOT/README.md"
+  editorial="$QUARTET_ROOT/docs/deck-editorial.json"
+
+  grep -Fq '"/shipyard inspect"' "$skill"
+  grep -Fq 'Four subcommands:' "$skill"
+  grep -Fq 'matching current-user manifests into this Shipyard core' "$skill"
+  grep -Fq 'strictly read-only' "$skill"
+  grep -Fq 'does not certify fleet health' "$skill"
+  grep -Fq 'stable schema-v1 JSON' "$skill"
+  grep -Fq 'bounded by evidence and reported limitations' "$skill"
+
+  grep -Fq 'six independently enforced daily consumers' "$readme"
+  grep -Fq 'matching current-user manifests into the current Shipyard core' \
+    "$readme"
+  grep -Fq 'never infers an unknown shoulder root' "$readme"
+
+  jq -e '
+    .glossary["/shipyard"].def
+    | contains("matching current-user manifests")
+      and contains("strictly read-only")
+      and contains("does not certify fleet health")
+      and contains("stable schema-v1 JSON")
+      and contains("evidence and limitations")
+  ' "$editorial"
 }
 
 @test "status exits 3 on a project with nothing installed" {

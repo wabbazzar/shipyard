@@ -6,13 +6,13 @@ kind: frontdoor
 description: >
   Inspect and extend an installed crew from inside a project. Triggers on
   "/shipyard", "/shipyard status", "shipyard status", "what crew is installed
-  here", "add a specialist for <subsystem>", or "shipyard learn <lesson>". Three
-  subcommands: `status` (read-only report of the units/timers installed here,
-  where each `.agents/<role>.md` project block lives, and an install.sh --doctor
-  drift audit), `add-specialist <subsystem>` (scaffold the domain-specialist
-  archetype for one subsystem and wire it into gates/critic/write_ticket), and
-  `learn "<lesson>"` (route a lesson through the ADAPTING.md triage taxonomy to
-  a project note or a core-change stub). The deterministic core is
+  here", "/shipyard inspect", "shipyard inspect", "fleet health", "where should
+  the next Shipyard PR focus", "add a specialist for <subsystem>", or "shipyard
+  learn <lesson>". Four subcommands: `status` (read-only report of the local
+  install), `inspect` (strictly read-only current-user fleet evidence, rendered
+  for humans by default or as stable schema-v1 JSON), `add-specialist
+  <subsystem>` (scaffold and wire a domain specialist), and `learn "<lesson>"`
+  (route a lesson through the ADAPTING.md taxonomy). The deterministic core is
   `skills/shipyard/shipyard.sh` — run it; do not reimplement its logic in prose.
 ---
 
@@ -32,12 +32,14 @@ identical whether a human or an agent invokes it.
 
 ## Usage
 
-Run the core from the project you're asking about (its symlinked copy is at
-`.claude/skills/shipyard/shipyard.sh`; in the harness repo it's
-`skills/shipyard/shipyard.sh`):
+Run the core from the project you're asking about. Codex discovers
+`.agents/skills/shipyard`; Claude and Hermes discover
+`.claude/skills/shipyard`; both symlinks resolve to the same
+`skills/shipyard/` core:
 
 ```bash
 bash .claude/skills/shipyard/shipyard.sh status
+bash .claude/skills/shipyard/shipyard.sh inspect [--json] [--days N]
 bash .claude/skills/shipyard/shipyard.sh add-specialist <subsystem>
 bash .claude/skills/shipyard/shipyard.sh learn "<lesson>"
 ```
@@ -54,6 +56,24 @@ toolchain is present — runs `install.sh --doctor` for a drift audit. Exits `3`
 when nothing is installed here (a deliberate no-op the caller can branch on),
 `0` otherwise. Never writes anything.
 
+### `inspect`
+
+Strictly read-only across matching current-user manifests into this Shipyard core.
+It accepts only canonical service manifests whose runner resolves into the
+current core and whose project and working-directory operands agree. It never
+starts or changes a unit, calls a model or network, sends a notification,
+records a decision, creates a ticket, or changes a repository.
+
+The default is a human operator view; `--json` emits stable schema-v1 JSON from
+the same document, and `--days N` selects the bounded evidence window. The
+report does not certify fleet health: missing, malformed, stale, or
+non-atomically-read sources remain explicit coverage and limitations.
+Recommendations for the next Shipyard PR are deterministic, bounded by evidence and reported limitations.
+Direct core evidence may support a Shipyard-core fact; cross-project recurrence
+and model-authored proposals remain assessments. A design/shoulder budget scope
+is shared only when the current inspection proves the same resolved gate root
+for multiple eligible projects; an unknown shoulder root is never inferred.
+
 ### `add-specialist <subsystem>`
 
 Scaffolds the domain-specialist archetype (`agents/specialist/`) for one named
@@ -68,7 +88,7 @@ ambiguous lesson ⇒ exit `2`.
 
 ## Reading the result
 
-Relay the script's output faithfully — the timer list, the block locations, the
-doctor findings. On exit `3`, tell the operator nothing is installed here and
-offer `install.sh --project <dir>`. On exit `2`, surface exactly what was
-malformed; do not paper over it.
+Relay the script's output faithfully. For `inspect`, do not collapse
+`partial`/`unavailable` into green or present an assessment as a proven core
+fault. On exit `3`, tell the operator nothing matching is installed. On exit
+`2`, surface exactly what was malformed; do not paper over it.

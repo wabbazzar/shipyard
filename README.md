@@ -126,12 +126,23 @@ codes `0`/`2`/`3`):
 - `shipyard status` — read-only report of the units/timers installed here, where
   each `.agents/<role>.md` block lives, and an `install.sh --doctor` drift audit
   (exit `3` when nothing is installed).
+- `shipyard inspect [--json] [--days N]` — strictly read-only fleet evidence
+  from matching current-user manifests into the current Shipyard core. The
+  default human console and stable schema-v1 JSON are rendered from one
+  document. This is a bounded, best-effort observation, not a certification of
+  fleet health: missing/malformed sources and snapshot limitations stay
+  explicit, and recommendations for the next Shipyard PR remain
+  evidence-bounded assessments.
 - `shipyard add-specialist <subsystem>` — scaffold the **specialist** archetype
   (below) for one subsystem and wire it into the project's `write_ticket`
   context, a gates note, and a hunk-keyed release-critic block.
 - `shipyard learn "<lesson>"` — route a lesson through the `docs/ADAPTING.md`
   taxonomy (`--to project|generic|install`, else a keyword heuristic) to a
   project note or a `docs/tickets/` stub for review.
+
+For the current inspection, a multi-project design/shoulder budget
+recommendation is eligible only when exact manifests prove one resolved
+unscoped gate root for multiple projects; it never infers an unknown shoulder root.
 
 ### The specialist archetype (an installable sixth role)
 
@@ -181,7 +192,7 @@ configuration, and it is YOUR job:
 | self-merge | `[medic] can_merge` | **false** |
 | zero-CI merges | `[build] allow_no_ci` — a repo with no CI checks cannot pass the merge gate vacuously | **false** |
 | forbidden paths | `[build] forbidden_paths` — any edit inside one is refused (`forbidden_path:<path>`); medic never escalates failures there | `[]` |
-| spend / scope caps | every role: `budget_tokens_daily` (summed per project per role from the day's `job.end` events) + per-invocation `wall_clock_sec` timeouts as the hard guard; `[design] max_open_proposals`; `[medic] daily_escalation_cap` | 1M tokens/day |
+| spend / scope caps | six independently enforced daily consumers: `design_runner`, `build_runner`, `release_runner`, `release_shoulder_critic`, `medic_runner`, and `scribe_runner`. Inspect reports current-UTC-day attributed use and the gate operand each consumer actually enforces; release runner and shoulder critic remain separate consumers. Per-invocation `wall_clock_sec`, `[design] max_open_proposals`, and `[medic] daily_escalation_cap` are additional guards. | 1M tokens/consumer/day |
 | stall self-heal | `[release] stall_retries` — a mid-stream model stall (no `result.json` written) is retried in-process before the job fails, so a one-off stall self-heals instead of forcing a medic retry. A written verdict (pass **or** fail) is never retried. Each retry is one extra model run. | **0** (off) |
 | false-green guard | `[release] verify_gate` — in hook/daily mode the proctor *self-reports* its verdict; with this set the runner re-runs the real `typecheck` + `test_cmd` and overrides a claimed `pass` to **fail** if either really fails, so a hallucinated green can't reach medic or the dispatch. Costs one real gate run. post-merge already runs the gate deterministically. | **false** (trust the model) |
 | off switch | `systemctl --user disable --now <project>-<display>.timer` — per crew, instant | — |

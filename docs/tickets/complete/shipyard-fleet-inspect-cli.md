@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-29
 - **Owner:** wabbazzar
-- **Status:** Ratified — execution in progress
+- **Status:** Complete — built and verified 2026-07-29 UTC
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 20 (7 phases, each within the 5-point cap)
@@ -1734,73 +1734,73 @@ are green; ticket exists only under `complete/`.
 
 ## Roll-up Definition of Done
 
-- [ ] U1 and U2 are answered and locked into Decisions/Ledger before Phase 1.
-- [ ] `shipyard inspect` discovers every and only matching eligible manifest
+- [x] U1 and U2 are answered and locked into Decisions/Ledger before Phase 1.
+- [x] `shipyard inspect` discovers every and only matching eligible manifest
       for the current user's systemd instance and this resolved core root,
       deduped by canonical path+role; skills-only, arbitrary `CODE_ROOT`,
       other-user, other-core-root, and indistinguishable-spoof limitations are
       explicit.
-- [ ] The existing no-argument/`status`, `add-specialist`, and `learn` behavior
+- [x] The existing no-argument/`status`, `add-specialist`, and `learn` behavior
       and exit semantics are unchanged.
-- [ ] Default output is a concise whole-fleet operator report; `--json` emits
+- [x] Default output is a concise whole-fleet operator report; `--json` emits
       the stable `schema_version:1` source document; human output is rendered
       only from that document.
-- [ ] `--days N` and the injected fixture clock implement the exact L7 rolling
+- [x] `--days N` and the injected fixture clock implement the exact L7 rolling
       interval and reject non-positive/non-integer/invalid values with exit 2.
-- [ ] No eligible fleet exits 3; unhealthy/degraded fleet data still produces a
+- [x] No eligible fleet exits 3; unhealthy/degraded fleet data still produces a
       report and exits 0.
-- [ ] Fleet/project state uses only
+- [x] Fleet/project state uses only
       `fault_observed|degraded_observed|no_fault_observed|unknown`; normal
       inactive oneshots are not faults and absent events never certify health.
-- [ ] Coverage reports valid/invalid/out-of-window counts and source-specific
+- [x] Coverage reports valid/invalid/out-of-window counts and source-specific
       applicability/freshness; present-empty is distinguishable from missing;
       shared event roots are scanned once and exact service attribution prevents
       project contamination while preserving global unknown/ambiguous counts.
-- [ ] Health evidence includes roles/unit state, doctor drift/unavailability,
+- [x] Health evidence includes roles/unit state, doctor drift/unavailability,
       exact job statuses/reasons, deduped incidents, critic failures/findings,
       distinct same-UTC-day runner/shoulder budget consumers with exact
       attributed-versus-gate operands, current open-cap pressure, and never
       merges abort into failure; incident summaries and query values never enter
       output.
-- [ ] Configured safety posture reports the exact locked gate/default/trunk
+- [x] Configured safety posture reports the exact locked gate/default/trunk
       fields; it never substitutes remote/recovery proof it did not run.
-- [ ] Attention includes open-undecided proposals and direct operator-relevant
+- [x] Attention includes open-undecided proposals and direct operator-relevant
       failures/gaps, with configured result paths/themes honored, decided
       proposals suppressed only by exact valid L30 records, malformed/conflicting
       decision coverage explicit, unresolved signal IDs limited, missing
       approval action explicit, and no action taken.
-- [ ] Overseer is applicable only to observed-autonomous projects, explicitly
+- [x] Overseer is applicable only to observed-autonomous projects, explicitly
       unknown when config cannot establish autonomy, and never invoked.
-- [ ] Every historical presentation benchmark is labelled with its own window
+- [x] Every historical presentation benchmark is labelled with its own window
       and reported `measured|partial|unmeasured`; missing linkage has
       `value:null`, never fractional credit or zero.
-- [ ] Claude/Codex delegation cohorts are independent and propagate malformed
+- [x] Claude/Codex delegation cohorts are independent and propagate malformed
       counts; missing roots are source-local; Hermes is explicitly unsupported.
-- [ ] Priorities use the six locked categories and deterministic tie-breakers;
+- [x] Priorities use the six locked categories and deterministic tie-breakers;
       every candidate exposes rule, evidence, claim kind, confidence basis,
       limitations, and scope; no opaque score or free-text semantic clustering
       exists.
-- [ ] Project-local app problems remain attention; direct core evidence may be
+- [x] Project-local app problems remain attention; direct core evidence may be
       `shipyard_core`; exact cross-project recurrence is only a
       `core_candidate` assessment.
-- [ ] Every attention/effectiveness/priority evidence ID resolves to the
+- [x] Every attention/effectiveness/priority evidence ID resolves to the
       versioned evidence table; exact JSONL-line/structured-pointer canonical
       identities and fixture output match the full schema golden.
-- [ ] The command performs no writes, notifications, approvals, ticket
+- [x] The command performs no writes, notifications, approvals, ticket
       creation, systemd state changes, model calls, or network calls, proven by
       default-deny stubs, input hashes, and live invoked-command audit.
-- [ ] Claude, Codex, and Hermes reach the same installed skill/core; no
+- [x] Claude, Codex, and Hermes reach the same installed skill/core; no
       harness-specific inspect implementation or global binary is added.
-- [ ] `skills/shipyard/SKILL.md`, `README.md`, and the existing deck node
+- [x] `skills/shipyard/SKILL.md`, `README.md`, and the existing deck node
       document the shipped behavior; generated deck data is current.
-- [ ] Focused RED-first cases and the full `bats tests/`, syntax/compile,
+- [x] Focused RED-first cases and the full `bats tests/`, syntax/compile,
       leak-check, deck freshness/completeness, and optional render gates pass;
       real-fleet human/JSON output is structurally and semantically compared.
-- [ ] Three real `inspect --json` runs each finish in ≤15.0 seconds without
+- [x] Three real `inspect --json` runs each finish in ≤15.0 seconds without
       omitting a source; any baseline fleet drift is explained, not hidden.
-- [ ] Every phase's Ledger entry records its actual `builder:` line and gate
+- [x] Every phase's Ledger entry records its actual `builder:` line and gate
       evidence; the working tree is clean after each committed phase.
-- [ ] Status is Complete and the ticket exists only under
+- [x] Status is Complete and the ticket exists only under
       `docs/tickets/complete/`; push/publication follows the recorded U2 answer.
 
 ## Boundaries
@@ -2258,4 +2258,64 @@ execute-ticket docs/tickets/pending/shipyard-fleet-inspect-cli.md
   attention and 18 priority IDs appeared exactly once in human output and
   matched JSON. All five required human sections were present.
 - Commit: `feat: rank fleet priorities and render operator view` (orchestrator;
+  subagent was instructed not to commit).
+
+### Phase 7 Ledger — shared contract, live proof, and graduation
+
+- Plan: publish the existing shared skill/docs/deck contract, prove both
+  discovery roots reach one core, execute the exact live read-only audit, and
+  graduate the ticket only after every final gate.
+- Prior phase commit: `3e54321`.
+- `builder: subagent (1 agent)`.
+- Docs/contract RED: the source-line-safe default-status guard passed 1/1,
+  rc=0, and the new public-contract case failed 0/1, rc=1, at the absent
+  `/shipyard inspect` trigger. The explicit two-root discovery case already
+  passed 1/1 against the pre-change installer behavior.
+- Docs/contract GREEN: the exact focused docs/discovery Bats set passed 90/90,
+  rc=0; generator, deck freshness, deck completeness (8 installed skills),
+  and deck render all passed rc=0. Generated data changed only the existing
+  `/shipyard` glossary definition/example (two replacements).
+- Public claims now bound inspect to matching current-user/current-core
+  manifests, strictly read-only human/default and schema-v1 JSON views,
+  non-certifying health, and deterministic recommendations limited by evidence
+  and explicit coverage. The README names L31's six independently enforced
+  daily consumers and promotes a multi-project design/shoulder gate scope only
+  when current exact manifests prove a shared resolved root; unknown shoulder
+  roots are never inferred.
+- Discovery proof: `.agents/skills/shipyard` and
+  `.claude/skills/shipyard` both resolved to the canonical
+  `skills/shipyard` core; no separate harness implementation or global entry
+  was added.
+- Live install/proof: `install.sh --doctor --project .` passed checks a-j.
+  The exact hash gate covered 77 matching unit/timer/config inputs; before and
+  after manifests were byte-identical at
+  `09204d2cc712a50892c13ed0910c1f1f90958d19a5f0fa49118f308f225e2397`.
+  Human output carried all 155 attention/priority IDs exactly once and matched
+  the JSON source document. Three final real JSON runs were 10.26s, 10.27s,
+  and 10.48s, each rc=0 and below 15.0s.
+- Invoked-command audit: the ticket's literal negative regexes produced known
+  false positives for reporter arguments `--source claude|codex`, Codex-owned
+  PATH shim directories, and read-only `systemctl is-enabled`; these matches
+  were recorded rather than called green. An argument-aware audit of the same
+  trace found zero successful Claude/Codex/Hermes, network, notification, or
+  runner invocations and zero mutating systemctl verbs. The only successful
+  systemctl verbs were 62 `show` and 59 `is-enabled`; the remaining executable
+  set was the local shell/doctor/parser toolchain.
+- Real fleet: 8 projects/31 roles, all currently `fault_observed`; 137
+  attention items and 18 priorities. Effectiveness was 2 measured, 5 partial,
+  and 1 unmeasured. Claude coverage was
+  `partial/upper_bound_unsupported` with 16 valid/2335 invalid timestamp
+  records; Codex was the same state with 23 valid/4 invalid; Hermes remained
+  unavailable/unsupported. `mg` retained four real doctor findings. Six
+  Shipyard timers were listed; no baseline drift was hidden.
+- Local proof artifacts were removed after audit. Worktree-linked shared-skill
+  count remained zero.
+- Final Common Per-Commit Gate: orchestrator full Bats passed 514/514, rc=0;
+  shell syntax and Python compilation passed; leak-check was clean; deck
+  freshness/completeness and rendered-deck assertions passed; lifecycle and
+  `git diff --check` passed.
+- Graduation: all roll-up DoD items were checked from recorded evidence,
+  opening status changed to `Complete — built and verified 2026-07-29 UTC`,
+  and the lifecycle engine moved this ticket from `pending/` to `complete/`.
+- Commit: `feat: publish fleet inspect operator contract` (orchestrator;
   subagent was instructed not to commit).

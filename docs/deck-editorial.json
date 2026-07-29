@@ -774,8 +774,8 @@
       "source": "agents/specialist/role.md — installed via /shipyard add-specialist"
     },
     "/shipyard": {
-      "def": "The operator's in-project console for an installed crew: `status` (what's wired here + a doctor drift audit), `add-specialist <subsystem>` (scaffold + wire a specialist), and `learn \"<lesson>\"` (route a lesson through the adaptation taxonomy). Deterministic core with load-bearing exit codes 0/2/3.",
-      "example": "shipyard status → lists the installed timers, the project blocks, and any install drift.",
+      "def": "The operator's in-project console for an installed crew: `status`, strictly read-only `inspect` over matching current-user manifests, `add-specialist <subsystem>`, and `learn \"<lesson>\"`. Inspect renders a human view or stable schema-v1 JSON from one bounded evidence document; it does not certify fleet health, and next-PR recommendations retain their evidence and limitations.",
+      "example": "shipyard inspect → human fleet/attention/effectiveness/next-PR/coverage view. shipyard inspect --json → the same versioned evidence document.",
       "source": "skills/shipyard/shipyard.sh"
     }
   },

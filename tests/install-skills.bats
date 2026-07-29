@@ -64,6 +64,17 @@ run_install() {
   grep -q "skilltest" "$PROJ/.agents/gates.md"   # <PROJECT_NAME> substituted
 }
 
+@test "shipyard discovery roots for Codex and Claude Hermes resolve one core" {
+  run run_install
+  [ "$status" -eq 0 ]
+  claude_root="$(readlink -f "$PROJ/.claude/skills/shipyard")"
+  codex_root="$(readlink -f "$PROJ/.agents/skills/shipyard")"
+  core_root="$(readlink -f "$QUARTET_ROOT/skills/shipyard")"
+  [ "$claude_root" = "$core_root" ]
+  [ "$codex_root" = "$core_root" ]
+  [ "$claude_root" = "$codex_root" ]
+}
+
 @test "re-run is idempotent: skills unchanged, gates.md left as-is" {
   run_install >/dev/null
   # Mutate the gate file so a clobber would be detectable.
