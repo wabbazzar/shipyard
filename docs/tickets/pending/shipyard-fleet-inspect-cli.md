@@ -1964,4 +1964,53 @@ execute-ticket docs/tickets/pending/shipyard-fleet-inspect-cli.md
   rather than byte-for-byte because it intentionally enumerates later-phase
   enums/nullability. Orchestrator review additionally closed inspect-option
   leakage into other subcommands and exact explicit-option/positional rejection.
-- Commit: this phase's `feat: add fleet inspect schema skeleton` commit.
+- Commit: `f93f80e` (`feat: add fleet inspect schema skeleton`).
+
+### Phase 2 Ledger — config, systemd, doctor
+
+- Plan: add local-only TOML posture, read-only `systemctl show`, UTC timer
+  normalization, doctor state/finding adapters, and their evidence/coverage;
+  preserve non-certifying health and default-deny every mutation path.
+- `builder: subagent (1 agent)`.
+- RED: the exact Phase 2 filter ran 8 named cases against the Phase 1
+  skeleton; all 8 failed on their new state/schema assertions, rc=1.
+- Focused GREEN: exact Phase 2 filter 8/8, rc=0; complete inspect suite 18/18,
+  rc=0; related status+doctor suite 29/29, rc=0; shell syntax and Python
+  compilation rc=0.
+- Common Per-Commit Gate: full Bats 457/457, rc=0, including the post-repair
+  orchestrator rerun; syntax/compile rc=0; leak-check clean; deck
+  freshness/completeness rc=0; lifecycle rc=0; `git diff --check` clean.
+- Observable evidence/deviations: configured posture produced the exact
+  booleans, branch/unavailable-trunk states, sorted forbidden paths, and
+  five-key budget map; malformed config produced `autonomous=null` and
+  `config error/malformed`. UTC timer values normalized to `Z`; local-time and
+  missing properties produced `systemd partial/malformed`; missing user bus
+  produced `unavailable/systemd_unavailable`; disabled/missing timers and a
+  failed service produced `fault_observed`, while inactive/dead/success did
+  not. Doctor preserved clean rc=0, structured drift rc=1 and finding class,
+  missing-dependency rc=2, and unexpected-rc `error/command_failed`.
+  Strict systemd fixtures recorded exactly two read-only `show` calls with
+  `LC_ALL=C`, `TZ=UTC`, and zero rejected/mutation calls; the separate doctor
+  fixture log contained only `show`/`is-enabled`. No deviation.
+- Repair audit RED: adversarial assertions added after independent review made
+  5/8 focused cases fail, rc=1, exposing permissive bus-error classification,
+  parser/counter gaps, max-open coercion gaps, and an over-broad doctor
+  dependency match.
+- Repair GREEN: exact Phase 2 filter 8/8, full inspect 18/18, and related
+  status+doctor 29/29, all rc=0; Python compilation, shell syntax, and
+  `git diff --check` were rc=0.
+- Repair evidence: only exact standalone missing-user-bus diagnostics classify
+  systemd unavailable; another rc=1 with empty output is
+  `error/command_failed`. Unexpected, duplicate, malformed, and missing
+  properties produced `total=14`, `valid=10`, `invalid=4`. Activating and
+  enabled-runtime were non-fault, explicit failed was fault, and disabled
+  timer, failed service, and missing timer each independently proved a direct
+  fault. Doctor finding text containing `missing dependency: gh` remained
+  drift while the exact standalone diagnostic classified coverage unavailable.
+  Missing/invalid max-open values defaulted to 1, the ASCII string `"007"`
+  normalized to 7, and the 300/301-second boundary was fresh/stale exactly.
+  Independent re-audit passed all six repair findings. Live inspection was
+  rc=0 in 2.67s, reported eight projects/31 roles and the observed Ice timer
+  faults plus four `mg` doctor findings; all state/evidence references
+  resolved, and unit/config hashes were unchanged before/after.
+- Commit: this phase's `feat: inspect fleet posture and unit health` commit.
