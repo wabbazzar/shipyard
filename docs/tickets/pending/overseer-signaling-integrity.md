@@ -563,16 +563,30 @@ commit.
 
 ### Phase 1 — Separate Overseer findings from execution failure
 
-- plan:
-- builder:
-- RED command / failing assertion / exit:
-- pre-change error guard / exit:
+- plan: Separate completed findings from assessment failures at the runner
+  boundary; pin single, fleet, and transient-user-unit semantics.
+- builder: subagent `signal_noise_audit`; orchestrator independently inspected
+  the diff and reran every focused/full gate.
+- RED command / failing assertion / exit: filtered seven new/guard Overseer
+  cases; rc=1, 4 passed / 3 failed at the expected `$status -eq 0`
+  assertions for a valid problem, findings-only fleet, and problem oneshot.
+- pre-change error guard / exit: infrastructure error, bad invocation, and
+  systemd error cases 3/3 passed, rc=0.
 - focused GREEN command / count / exit:
+  `bats tests/overseer.bats tests/build-benign-abort.bats` 16/16, rc=0;
+  runner syntax rc=0.
 - problem event + notify count + process/systemd status:
-- error event + process/systemd status:
-- full Shipyard gates / counts / exits:
-- unrelated-path preservation proof:
-- commit:
+  `status=problem`, one notify-stub record, process rc=0; transient unit
+  `Finished with result: success`, `code=exited/status=0`.
+- error event + process/systemd status: `status=error`, process rc=1;
+  transient unit `Finished with result: exit-code`,
+  `code=exited/status=1`.
+- full Shipyard gates / counts / exits: `bats tests/` 439/439; syntax +
+  Python compile rc=0; leak/freshness/completeness/lifecycle checks rc=0.
+- unrelated-path preservation proof: the concurrent Release change landed
+  separately as `187e345`; Phase 1 diff contains only its two owned files plus
+  this Ledger update.
+- commit: pending
 
 ### Phase 2 — Make Ice notification audits last-process durable
 

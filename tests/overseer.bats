@@ -39,6 +39,18 @@ stub_judge() {
   make_stub claude 0 "$env"
 }
 
+stub_judge_by_project() {
+  make_stub_script claude '
+case "$*" in
+  *"PROJECT: alpha"*)
+    verdict="{\"healthy\":false,\"summary\":\"alpha finding\",\"findings\":[{\"role\":\"release\",\"severity\":\"high\",\"issue\":\"alpha problem\"}]}" ;;
+  *"PROJECT: gamma"*)
+    verdict="${GAMMA_VERDICT:-not json at all}" ;;
+  *) verdict="{\"healthy\":true,\"summary\":\"ok\",\"findings\":[]}" ;;
+esac
+jq -cn --arg v "$verdict" "{result:\$v,usage:{input_tokens:5,output_tokens:5}}"'
+}
+
 run_overseer() {
   CODE_ROOT="$ROOT" OVERSEER_WALL_CLOCK=5 \
   QUARTET_DIR="$QUARTET_ROOT" QUARTET_EVENTS_DIR="$EVENTS_DIR" QUARTET_NOTIFY_CMD="$NOTIFY_CMD" \
@@ -67,13 +79,14 @@ n_assessed() { events_json | jq -c 'select(.event=="overseer.assessed")' | wc -l
   [ "$(jq -r '.healthy' "$P/tmp/overseer-result.json")" = "true" ]
 }
 
-@test "unhealthy crew: status=problem and the owner IS notified" {
+@test "unhealthy crew: status=problem is a successful assessment" {
   P="$(make_repo alpha true)"
   stub_judge '{"healthy":false,"summary":"false green in proctor","findings":[{"role":"release","severity":"high","issue":"pass:true but pytest failed"}]}'
   run run_overseer --project "$P"
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 0 ]
   [ "$(assessed_status)" = "problem" ]
   [ -s "$NOTIFY_LOG" ]
+  [ "$(grep -c '^overseer: alpha crew needs a look|' "$NOTIFY_LOG")" -eq 1 ]
   grep -q "needs a look" "$NOTIFY_LOG"
   grep -q "false green" "$NOTIFY_LOG"
   [ "$(events_json | jq -r 'select(.event=="notification.decision") | .class')" = "actionable" ]
@@ -97,6 +110,28 @@ n_assessed() { events_json | jq -c 'select(.event=="overseer.assessed")' | wc -l
   [ -f "$ROOT/alpha/tmp/overseer-result.json" ]
   [ -f "$ROOT/gamma/tmp/overseer-result.json" ]
   [ ! -f "$ROOT/beta/tmp/overseer-result.json" ]
+}
+
+@test "findings-only fleet exits 0 and reports every problem" {
+  make_repo alpha true >/dev/null
+  make_repo gamma true >/dev/null
+  export GAMMA_VERDICT='{"healthy":false,"summary":"gamma finding","findings":[{"role":"build","severity":"medium","issue":"gamma problem"}]}'
+  stub_judge_by_project
+  run run_overseer
+  [ "$status" -eq 0 ]
+  [ "$(n_assessed)" -eq 2 ]
+  [ "$(events_json | jq -r 'select(.event=="overseer.assessed") | .status' | grep -c '^problem$')" -eq 2 ]
+}
+
+@test "mixed problem and assessment error fleet remains nonzero" {
+  make_repo alpha true >/dev/null
+  make_repo gamma true >/dev/null
+  export GAMMA_VERDICT='not json at all'
+  stub_judge_by_project
+  run run_overseer
+  [ "$status" -eq 1 ]
+  [ "$(n_assessed)" -eq 2 ]
+  [ "$(events_json | jq -r 'select(.event=="overseer.assessed") | .status' | sort | paste -sd, -)" = "error,problem" ]
 }
 
 @test "the judge's git context carries ISO commit dates + co-author trailers (temporal correlation)" {
@@ -134,13 +169,55 @@ Co-authored-by: alpha-chronicler <noreply@anthropic.com>"
   stub_argv claude | grep -q "alpha-chronicler"
 }
 
-@test "judge returns no usable verdict → status=error and the owner is notified" {
+@test "assessment infrastructure failure remains nonzero" {
   P="$(make_repo alpha true)"
-  stub_judge 'not json at all'
+  make_stub claude 1 ""
   run run_overseer --project "$P"
   [ "$status" -eq 1 ]
   [ "$(assessed_status)" = "error" ]
   [ -s "$NOTIFY_LOG" ]
+  [ "$(jq -r '.summary' "$P/tmp/overseer-result.json")" = \
+    "overseer could not assess alpha — judge returned no verdict (exit 1)" ]
+}
+
+@test "bad invocation remains exit 2" {
+  run run_overseer --unknown
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown arg: --unknown"* ]]
+}
+
+@test "systemd problem verdict leaves oneshot healthy" {
+  systemctl --user show-environment >/dev/null 2>&1 || skip "no user systemd manager"
+  P="$(make_repo alpha true)"
+  stub_judge '{"healthy":false,"summary":"expected finding","findings":[{"role":"release","severity":"high","issue":"synthetic problem"}]}'
+  unit="overseer-test-problem-${BATS_TEST_NUMBER}-$$"
+  run systemd-run --user --wait --collect --unit="$unit" \
+    --setenv="PATH=$PATH" \
+    --setenv="QUARTET_DIR=$QUARTET_ROOT" \
+    --setenv="QUARTET_EVENTS_DIR=$EVENTS_DIR" \
+    --setenv="QUARTET_NOTIFY_CMD=$NOTIFY_CMD" \
+    --setenv="OVERSEER_WALL_CLOCK=5" \
+    /bin/bash "$QUARTET_ROOT/agents/overseer/runner.sh" --project "$P"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Finished with result: success"* ]]
+  [[ "$output" == *"code=exited/status=0"* ]]
+}
+
+@test "systemd error verdict fails oneshot" {
+  systemctl --user show-environment >/dev/null 2>&1 || skip "no user systemd manager"
+  P="$(make_repo alpha true)"
+  make_stub claude 1 ""
+  unit="overseer-test-error-${BATS_TEST_NUMBER}-$$"
+  run systemd-run --user --wait --collect --unit="$unit" \
+    --setenv="PATH=$PATH" \
+    --setenv="QUARTET_DIR=$QUARTET_ROOT" \
+    --setenv="QUARTET_EVENTS_DIR=$EVENTS_DIR" \
+    --setenv="QUARTET_NOTIFY_CMD=$NOTIFY_CMD" \
+    --setenv="OVERSEER_WALL_CLOCK=5" \
+    /bin/bash "$QUARTET_ROOT/agents/overseer/runner.sh" --project "$P"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Finished with result: exit-code"* ]]
+  [[ "$output" == *"code=exited/status=1"* ]]
 }
 
 @test "a healthy fleet stays silent (no notification for any repo)" {

@@ -27,7 +27,8 @@
 #   {healthy:bool, summary:"one line", findings:[{role,severity,issue}]}
 # Result file: <repo>/tmp/overseer-result.json.
 # Event: overseer.assessed status=ok|problem|error project=<name> findings=<n>.
-# Exit: 0 all healthy · 1 a problem was found · 2 bad invocation · 3 not autonomous.
+# Exit: 0 assessment completed (healthy or findings) · 1 assessment error
+#       2 bad invocation · 3 not autonomous.
 
 set -uo pipefail
 QUARTET_DIR="${QUARTET_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
@@ -196,8 +197,10 @@ Return ONLY the JSON verdict, no prose."
     quartet_notify --class actionable --episode "$episode" \
       "overseer: $name crew needs a look" "$summary${body:+
 $body}"
-    return 1
   fi
+  # A finding is a successful assessment — it is the Overseer's expected work.
+  # Only failure to produce a usable assessment is an execution failure.
+  [ "$status" = "error" ] && return 1
   return 0
 }
 
@@ -211,7 +214,7 @@ else
   while IFS= read -r d; do
     [ -n "$d" ] || continue
     found=1
-    assess "$d" || rc=1   # a problem in one repo must not abort the fleet sweep
+    assess "$d" || rc=1   # an assessment error must not abort the fleet sweep
   done <<<"$(autonomous_repos)"
   [ "$found" -eq 0 ] && echo "overseer: no autonomous repos under $CODE_ROOT" >&2
 fi
