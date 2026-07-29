@@ -304,6 +304,20 @@ run_medic_scan() {
   [ "$(jq -r '.can_merge' <<<"$output")" = "true" ]
 }
 
+@test "1c: medic preserves explicit false restart and sync settings" {
+  proj="$(make_fixture_project c1cf can-merge-false.toml)"
+  sed -i.bak '/^\[medic\]$/a\
+restart_systemd = false\
+sync_to_build = false
+' "$proj/.agents/config.toml"
+  rm "$proj/.agents/config.toml.bak"
+  run run_runner medic "$proj" --check-config
+  [ "$status" -eq 0 ]
+  jq -e . <<<"$output" >/dev/null
+  [ "$(jq -r '.restart_systemd' <<<"$output")" = "false" ]
+  [ "$(jq -r '.sync_to_build' <<<"$output")" = "false" ]
+}
+
 # ---------------------------------------------------------------------------
 # 1d — zero CI checks must not pass silently
 # ---------------------------------------------------------------------------

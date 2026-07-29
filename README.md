@@ -2,7 +2,7 @@
 
 **A crew of five autonomous agents that design, build, release, and repair a
 repo while you sleep** — each a [Claude Code](https://claude.com/claude-code)
-instance on a systemd timer:
+instance scheduled by systemd on Linux or launchd on macOS:
 
 | role id | display (`--theme spacetime`) | cadence | job |
 |---|---|---|---|
@@ -14,7 +14,7 @@ instance on a systemd timer:
 
 The **role id** is the stable identity: the agent dir (`agents/<role>/`), the
 `[<role>]` config section, the event `role:` field. The **display name** —
-systemd unit names, notification voice — is chosen at install time with
+scheduler job names, notification voice — is chosen at install time with
 `--theme`: `plain` (role ids verbatim), `spacetime` (the column above), or
 `custom:d,b,r,m,s` (five names in role order `design,build,release,medic,scribe`).
 A config with no `[names]` block displays the role ids verbatim.
@@ -123,7 +123,7 @@ host-managed/global skill-picker UI.
 (`skills/shipyard/shipyard.sh` is its deterministic core, with load-bearing exit
 codes `0`/`2`/`3`):
 
-- `shipyard status` — read-only report of the units/timers installed here, where
+- `shipyard status` — read-only report of the scheduler jobs installed here, where
   each `.agents/<role>.md` block lives, and an `install.sh --doctor` drift audit
   (exit `3` when nothing is installed).
 - `shipyard inspect [--json] [--days N]` — strictly read-only fleet evidence
@@ -195,7 +195,7 @@ configuration, and it is YOUR job:
 | spend / scope caps | six independently enforced daily consumers: `design_runner`, `build_runner`, `release_runner`, `release_shoulder_critic`, `medic_runner`, and `scribe_runner`. Inspect reports current-UTC-day attributed use and the gate operand each consumer actually enforces; release runner and shoulder critic remain separate consumers. Per-invocation `wall_clock_sec`, `[design] max_open_proposals`, and `[medic] daily_escalation_cap` are additional guards. | 1M tokens/consumer/day |
 | stall self-heal | `[release] stall_retries` — a mid-stream model stall (no `result.json` written) is retried in-process before the job fails, so a one-off stall self-heals instead of forcing a medic retry. A written verdict (pass **or** fail) is never retried. Each retry is one extra model run. | **0** (off) |
 | false-green guard | `[release] verify_gate` — in hook/daily mode the proctor *self-reports* its verdict; with this set the runner re-runs the real `typecheck` + `test_cmd` and overrides a claimed `pass` to **fail** if either really fails, so a hallucinated green can't reach medic or the dispatch. Costs one real gate run. post-merge already runs the gate deterministically. | **false** (trust the model) |
-| off switch | `systemctl --user disable --now <project>-<display>.timer` — per crew, instant | — |
+| off switch | Linux: `systemctl --user disable --now <project>-<display>.timer`; macOS: `launchctl bootout gui/$(id -u)/com.shipyard.<project>-<display>` | — |
 | hands-off repo | `autonomous = true` (top-level) — a private, disposable dogfood repo with no human in the loop: it never appears in the hub's approval wire, and the ticket auto-gate proceeds without stopping even for a user-decision. Pair with `[medic] can_merge = true`. **Only ever set this on a throwaway private repo.** | **unset** (human-in-the-loop) |
 | inspect first | `install.sh --dry-run` prints every unit and crontab change before writing | — |
 
@@ -204,8 +204,13 @@ low-stakes repo.
 
 ## Requirements
 
-Linux with systemd (user instance), Claude Code installed and authenticated,
-`jq`, `python3` (3.11+), `gh` (authenticated, for PRs), `git`.
+Linux with a systemd user instance, or macOS with launchd. Both require Claude
+Code installed and authenticated, `jq`, Python 3.11+, authenticated `gh`, and
+`git`. macOS also needs GNU `timeout` and `sha256sum`:
+
+```bash
+brew install coreutils jq
+```
 
 ## Install on a project
 
@@ -240,15 +245,16 @@ can_merge = false
 2. Run the installer:
 
 ```bash
-./install.sh --project /path/to/myproject --dry-run          # inspect first
-./install.sh --project /path/to/myproject --theme spacetime  # then for real
-./install.sh --project /path/to/myproject --agents design,build,release,medic,scribe
+/bin/bash ./install.sh --project /path/to/myproject --dry-run          # inspect first
+/bin/bash ./install.sh --project /path/to/myproject --theme spacetime  # then for real
+/bin/bash ./install.sh --project /path/to/myproject --agents design,build,release,medic,scribe
 ```
 
 Default `--agents` is `build,release,medic,scribe` — design is opt-in. The
-installer bakes the `[names]` theme block into the config, writes
-`~/.config/systemd/user/<project>-<display>.{service,timer}` and enables the
-timers, symlinks the eight shared skills into `<project>/.claude/skills/`,
+installer auto-detects the host OS, bakes the `[names]` theme block into the
+config, and writes either systemd units under `~/.config/systemd/user/` or
+LaunchAgent plists under `~/Library/LaunchAgents/`. It then enables the jobs,
+symlinks the eight shared skills into `<project>/.claude/skills/`,
 writes a root `AGENTS.md` skill bridge for Codex and Hermes when absent, drops
 `skills/gates.md.template` into `.agents/gates.md` (never clobbering an
 existing gate file), removes legacy cron launchers that would race the timers
@@ -256,9 +262,13 @@ existing gate file), removes legacy cron launchers that would race the timers
 
 Re-runs are safe: without `--theme`, an existing `[names]` block is honored
 (only an explicit `--theme` renames a fleet), and the installer **sweeps any
-stale unit set for the same project+role left under an old display name**, so
-a theme change or rename can never leave two sets of timers firing the same
+stale job for the same project+role left under an old display name**, so
+a theme change or rename can never leave two scheduler jobs firing the same
 agent twice.
+
+The portable `[install.timers]` schedule subset is `*-*-* HH:MM:00` for a
+daily job and `*-*-* *:0/N:00` for every N minutes. The installer rejects a
+schedule that launchd cannot translate instead of silently changing cadence.
 
 **Doctor** — a read-only audit of what a crew install owns, so drift is
 visible instead of surfacing weeks later:
@@ -268,12 +278,12 @@ install.sh --doctor --project <project_dir>
 ```
 
 Exit 0 clean; exit 1 with one `DOCTOR <class>: <detail>` line per finding.
-It checks the manifest install writes — expected units enabled and pointed at
-`$QUARTET_DIR`, no stale duplicate role units, no foreign `.service.d`
-drop-ins, no retired config keys, skill symlinks resolving into
+It checks the manifest install writes — expected jobs enabled and pointed at
+`$QUARTET_DIR`, no stale duplicate role jobs, no foreign `.service.d`
+drop-ins on systemd, no retired config keys, skill symlinks resolving into
 `$QUARTET_DIR/skills`, no dead `.claude/settings.json` hooks, no legacy
 launchers/cron — and finishes in well under a second, so a `[[medic.checks]]`
-entry can run it every scan. It never writes or touches systemd.
+entry can run it every scan. It never writes or touches the scheduler.
 
 **Uninstall** — remove exactly the installer-owned surface; the config you
 wrote and your data are left untouched:
@@ -282,7 +292,8 @@ wrote and your data are left untouched:
 install.sh --uninstall --project <project_dir> [--dry-run]
 ```
 
-It disables + removes this project's crew units/timers, removes the shared
+It disables + removes this project's systemd units or LaunchAgent plists,
+removes the shared
 skill symlinks that resolve into `$QUARTET_DIR/skills`, and prints what it
 deliberately leaves (`.agents/` incl. config + prompts + gates.md, `data/`,
 `tmp/`). `--dry-run` prints the plan without writing. Reinstall is just
@@ -330,11 +341,11 @@ leaves the prompt byte-identical. See `agents/release/critic-role.md`.
 ## Notifications & environment knobs
 
 Transport-agnostic. `QUARTET_NOTIFY_CMD`, `QUARTET_EVENTS_DIR`, and
-`QUARTET_OPS_JSON` are **baked into the generated crew units at install time**
-(user services don't inherit your shell env), so set them when running
+`QUARTET_OPS_JSON` are **baked into generated scheduler jobs at install time**
+(user jobs don't inherit your shell env), so set them when running
 `install.sh`. The rest below are plain runtime env vars the runner/spawn code
 reads directly (`${VAR:-default}`) — install.sh does not bake them into any
-unit, so a systemd unit needing one (e.g. the overseer's fleet timer, which
+job, so an unmanaged job needing one (e.g. the overseer's fleet timer, which
 install.sh does not manage at all) must set it by hand:
 
 | var | effect |

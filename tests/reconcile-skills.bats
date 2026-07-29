@@ -73,3 +73,22 @@ generic_skills() {
   [ -L "$P/.claude/skills/$one" ]
   [ -L "$P/.agents/skills/$one" ]
 }
+
+@test "--all discovers a project from a launchd plist and relinks it" {
+  P="$(make_fixture_project rc5)"
+  export SHIPYARD_SCHEDULER=launchd
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cat >"$HOME/Library/LaunchAgents/rc5-release.plist" <<EOF
+<plist><dict><key>ProgramArguments</key><array>
+<string>/bin/bash</string>
+<string>$QUARTET_ROOT/agents/release/runner.sh</string>
+<string>--project</string>
+<string>$P</string>
+</array></dict></plist>
+EOF
+  local one; one="$(generic_skills | awk '{print $1}')"
+  run run_reconcile --all
+  [ "$status" -eq 0 ]
+  [ -L "$P/.claude/skills/$one" ]
+  [ -L "$P/.agents/skills/$one" ]
+}

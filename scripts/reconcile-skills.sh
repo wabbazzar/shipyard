@@ -17,8 +17,8 @@
 #   reconcile-skills.sh --project <dir> [--dry-run]
 #   reconcile-skills.sh --all           [--dry-run]   # every installed project
 #
-# --all discovers projects from the systemd user units' ExecStart `--project`
-# argument. Exit 0 = reconciled (or nothing to do), 2 = bad invocation.
+# --all discovers projects from systemd units (Linux) or LaunchAgent plists
+# (macOS). Exit 0 = reconciled (or nothing to do), 2 = bad invocation.
 
 set -uo pipefail
 
@@ -44,15 +44,34 @@ GENERIC_SKILLS="$(grep -m1 -oE 'GENERIC_SKILLS="[^"]*"' "$QUARTET_DIR/install.sh
   | sed 's/^GENERIC_SKILLS="//;s/"$//')"
 [ -n "$GENERIC_SKILLS" ] || { echo "reconcile-skills: GENERIC_SKILLS not found" >&2; exit 2; }
 
-# discover_projects — unique --project dirs from the installed crew units.
-# Units live where install.sh writes them: $HOME/.config/systemd/user (install.sh
-# hardcodes this and does NOT honor XDG_CONFIG_HOME, so neither may we — else a
-# machine with XDG_CONFIG_HOME set would scan the wrong dir and find nothing).
+# discover_projects — unique --project dirs from installed scheduler jobs.
 discover_projects() {
-  local unit_dir="$HOME/.config/systemd/user"
-  [ -d "$unit_dir" ] || return 0
-  grep -hoE -- '--project[ =][^ ]+' "$unit_dir"/*.service 2>/dev/null \
-    | sed -E 's/^--project[ =]//' | sort -u
+  local scheduler="${SHIPYARD_SCHEDULER:-auto}"
+  if [ "$scheduler" = "auto" ]; then
+    [ "$(uname -s)" = "Darwin" ] && scheduler="launchd" || scheduler="systemd"
+  fi
+  case "$scheduler" in
+    systemd)
+      local unit_dir="$HOME/.config/systemd/user"
+      [ -d "$unit_dir" ] || return 0
+      grep -hoE -- '--project[ =][^ ]+' "$unit_dir"/*.service 2>/dev/null \
+        | sed -E 's/^--project[ =]//' | sort -u
+      ;;
+    launchd)
+      local job_dir="$HOME/Library/LaunchAgents"
+      [ -d "$job_dir" ] || return 0
+      awk '
+        /<string>--project<\/string>/ {
+          if (getline > 0) {
+            sub(/^.*<string>/, ""); sub(/<\/string>.*$/, "")
+            gsub(/&amp;/, "\\&"); gsub(/&lt;/, "<"); gsub(/&gt;/, ">")
+            print
+          }
+        }
+      ' "$job_dir"/*.plist 2>/dev/null | sort -u
+      ;;
+    *) echo "reconcile-skills: bad SHIPYARD_SCHEDULER '$scheduler'" >&2; return 2 ;;
+  esac
 }
 
 # reconcile_one <project-dir> — mirror install.sh's create/refresh symlink rules
@@ -102,7 +121,7 @@ if [ "$ALL" = "1" ]; then
     echo "project: $p"
     reconcile_one "$p"
   done < <(discover_projects)
-  [ "$found" = "1" ] || echo "reconcile-skills: no installed crew units found"
+  [ "$found" = "1" ] || echo "reconcile-skills: no installed crew jobs found"
 else
   echo "project: $PROJECT_DIR"
   reconcile_one "$PROJECT_DIR"

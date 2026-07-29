@@ -425,7 +425,7 @@ eval_pass() {
     [ -s "$queue" ] || continue
     session="${queue##*/critic-queue-}"
     now="$(date +%s)"
-    mtime="$(stat -c %Y "$queue" 2>/dev/null || echo "$now")"
+    mtime="$(stat -c %Y "$queue" 2>/dev/null || stat -f %m "$queue" 2>/dev/null || echo "$now")"
     idle=$(( now - mtime ))
     distinct="$(awk '{print $1}' "$queue" | sort -u | wc -l)"
     if [ "$idle" -ge "$IDLE_SEC" ] || [ "$distinct" -ge "$BATCH_FILES" ]; then

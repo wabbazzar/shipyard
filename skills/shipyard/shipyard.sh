@@ -71,9 +71,18 @@ fi
 PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON" 2>/dev/null)"
 [ -n "$PROJECT_NAME" ] || PROJECT_NAME="$(basename "$PROJECT_DIR")"
 
+_scheduler() {
+  case "${SHIPYARD_SCHEDULER:-auto}" in
+    systemd|launchd) printf '%s\n' "$SHIPYARD_SCHEDULER" ;;
+    auto) [ "$(uname -s)" = "Darwin" ] && printf 'launchd\n' || printf 'systemd\n' ;;
+    *) return 2 ;;
+  esac
+}
+
 _have_all_deps() {
-  local d
-  for d in jq python3 git gh systemctl claude; do
+  local d scheduler_dep
+  [ "$(_scheduler)" = "launchd" ] && scheduler_dep="launchctl" || scheduler_dep="systemctl"
+  for d in jq python3 git gh "$scheduler_dep" claude; do
     command -v "$d" >/dev/null 2>&1 || return 1
   done
 }
@@ -124,22 +133,29 @@ cmd_status() {
     echo "shipyard status: --json/--days apply only to inspect" >&2
     return 2
   }
-  local unit_dir="$HOME/.config/systemd/user"
+  local scheduler unit_dir pattern suffix
+  scheduler="$(_scheduler)" || { echo "shipyard: unsupported scheduler" >&2; return 2; }
+  case "$scheduler" in
+    systemd)
+      unit_dir="$HOME/.config/systemd/user"; pattern="$PROJECT_NAME-*.timer"; suffix=".timer" ;;
+    launchd)
+      unit_dir="$HOME/Library/LaunchAgents"; pattern="$PROJECT_NAME-*.plist"; suffix=".plist" ;;
+  esac
   local timers=() t
   if [ -d "$unit_dir" ]; then
     while IFS= read -r t; do [ -n "$t" ] && timers+=("$t"); done \
-      < <(find "$unit_dir" -maxdepth 1 -name "$PROJECT_NAME-*.timer" 2>/dev/null | sort)
+      < <(find "$unit_dir" -maxdepth 1 -name "$pattern" 2>/dev/null | sort)
   fi
 
   if [ "${#timers[@]}" -eq 0 ]; then
     echo "shipyard: no crew installed for '$PROJECT_NAME'"
-    echo "  (no $unit_dir/$PROJECT_NAME-*.timer)"
+    echo "  (no $unit_dir/$pattern)"
     echo "  install with: $QUARTET_DIR/install.sh --project $PROJECT_DIR"
     return 3
   fi
 
-  echo "shipyard: crew installed for '$PROJECT_NAME' — ${#timers[@]} timer(s):"
-  for t in "${timers[@]}"; do echo "  - $(basename "$t" .timer)"; done
+  echo "shipyard: crew installed for '$PROJECT_NAME' — ${#timers[@]} job(s) via $scheduler:"
+  for t in "${timers[@]}"; do echo "  - $(basename "$t" "$suffix")"; done
 
   echo "project blocks (.agents/<role>.md):"
   local r

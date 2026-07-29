@@ -32,12 +32,16 @@ which of these apply; "the code looks right" is never proof.
 (exit codes + printed values, not vibes). Scripts with a `--check` / `--dry-run`
 flag: run that too.
 
-### systemd (user) units  — APPLIES: yes / no
-`systemctl --user daemon-reload`, then `list-timers` shows the expected next
-fire, then start the service once (`systemctl --user start <unit>`) and confirm
-the observable outcome — a `job.end` line in `$QUARTET_EVENTS_DIR/$(date +%F).jsonl`,
-`journalctl --user -u <unit>`, or the project's stated probe. Never wait for
-`OnCalendar`.
+### Scheduler jobs (systemd / launchd)  — APPLIES: yes / no
+- Linux: `systemctl --user daemon-reload`, `list-timers` shows the expected
+  next fire, then start the service once with `systemctl --user start <unit>`.
+- macOS: `plutil -lint ~/Library/LaunchAgents/<job>.plist`,
+  `launchctl print gui/$(id -u)/com.shipyard.<job>` reports it loaded, then
+  start once with `launchctl kickstart gui/$(id -u)/com.shipyard.<job>`.
+
+Confirm the observable outcome — a `job.end` line in
+`$QUARTET_EVENTS_DIR/$(date +%F).jsonl`, scheduler logs, or the project's
+stated probe. Never wait for the scheduled cadence.
 
 ### Served app at a port  — APPLIES: yes / no
 - Dev port: `<PORT>`  ·  Build command: `<BUILD_CMD>`  ·  Restart: `<RESTART_CMD>`

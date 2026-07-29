@@ -2,8 +2,9 @@
 
 Public repo (`git@github.com:wabbazzar/shipyard.git`, trunk `main`). It ships a
 crew of five autonomous agents — each a headless `claude` invocation on a
-systemd user timer — that design, build, release, repair, and document *other*
-repos. This repo is the **implementation**; it holds no project state.
+systemd user timer (Linux) or LaunchAgent (macOS) — that design, build, release,
+repair, and document *other* repos. This repo is the **implementation**; it
+holds no project state.
 
 Read `README.md` first for the product-level story. This file covers the things
 that are only obvious after breaking something.
@@ -12,7 +13,7 @@ that are only obvious after breaking something.
 
 Five **role ids** — `design build release medic scribe` — are the stable
 identity: agent dir `agents/<role>/`, config section `[<role>]`, project prompt
-`.agents/<role>.md`, event field `role:`. **Display names** (systemd unit names,
+`.agents/<role>.md`, event field `role:`. **Display names** (scheduler job names,
 notification voice) come from the project config's `[names]` block, baked at
 install time by `--theme plain|spacetime|custom:d,b,r,m,s`. No `[names]` block →
 display == role id.
@@ -20,7 +21,7 @@ display == role id.
 Never reintroduce the retired vocabulary (`quartet` as a role word, `augur`,
 `guardian` as config sections/dirs). The `QUARTET_*` env vars and `QUARTET_DIR`
 are the one intentional exception — they are the stable env contract baked into
-every generated unit.
+every generated scheduler job.
 
 `agents/lib/naming.sh` owns role→display/dir resolution. Use it; do not
 hand-roll name mapping.
@@ -28,7 +29,7 @@ hand-roll name mapping.
 ## Layout
 
 ```
-agents/<role>/runner.sh   the entry point each systemd unit calls
+agents/<role>/runner.sh   the entry point each scheduler job calls
 agents/<role>/role.md     generic prompt; project appends .agents/<role>.md
 agents/lib/               load-config.sh naming.sh post-run.sh log_event.sh
                           revert-merge.sh detect-trunk.sh mentat-proposal.sh

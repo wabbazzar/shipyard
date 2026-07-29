@@ -14,12 +14,12 @@ implement.
 ### L0 — core
 **Where:** the harness repo, shared by every project.
 **What:** runners, the shared lib, the skills, the installer — generic, with
-zero personal facts (enforced by `scripts/leak-check.sh` in CI). **Units execute
-runners from the clone, so a merge to trunk is fleet-live at the next timer
+zero personal facts (enforced by `scripts/leak-check.sh` in CI). **Scheduler
+jobs execute runners from the clone, so a merge to trunk is fleet-live at the next timer
 fire.** This is the only layer an upgrade touches; every project inherits it.
 
 ### L1 — hub knobs
-**Where:** baked into the systemd units at install time (env in the unit file).
+**Where:** baked into systemd units (Linux) or LaunchAgent plists (macOS).
 **What:** where events, notifications, and dashboard state flow:
 
 ```
@@ -28,10 +28,10 @@ QUARTET_OPS_JSON     # dashboard ops-state file (optional)
 QUARTET_EVENTS_DIR   # append-only JSONL event stream directory
 ```
 
-Units **bake** env; they don't read it live. Changing a knob means re-running
-the installer. A user-instance systemd service starts with a near-empty
-environment, so an unbaked knob silently mutes notifications and disables the
-ops scan — the installer propagates each set knob into every unit it writes.
+Jobs **bake** env; they don't read it live. Changing a knob means re-running
+the installer. User scheduler jobs start with a near-empty environment, so an
+unbaked knob silently mutes notifications and disables the ops scan — the
+installer propagates each set knob into every job it writes.
 
 ### L2 — theme
 **Where:** `--theme` flag → `[names]` block in `.agents/config.toml`.
@@ -97,11 +97,11 @@ recon  →  interview  →  write L2–L5  →  bake units  →  verify
 3. **Write L2–L5.** Author `.agents/config.toml` + per-role blocks; drop
    `gates.md` (installer, from the template — never clobbering an existing
    one) and fill it in; the theme block; the conventions block.
-4. **Bake units.** `install.sh --project <dir> --theme <t>` writes the systemd
-   units with L1 env baked in, symlinks the L5 skills, enables the timers,
-   removes legacy cron launchers.
+4. **Bake jobs.** `install.sh --project <dir> --theme <t>` writes systemd units
+   on Linux or LaunchAgent plists on macOS with L1 env baked in, symlinks the
+   L5 skills, enables the timers, and removes legacy cron launchers.
 5. **Verify.** `medic --mode scan --dry-run` loads clean, the release gates
-   are green now, `list-timers` shows sane next-fires, the eight skill
+   are green now, the scheduler reports each job loaded, and the eight skill
    symlinks resolve.
 
 ## Doctor — audit what an install owns
@@ -118,9 +118,9 @@ inputs install uses) and checks it against reality, one `DOCTOR <class>:
 
 | class | catches |
 |-------|---------|
-| a | an expected role's unit missing, its timer disabled, or its ExecStart runner not under `$QUARTET_DIR` |
-| b | a stale duplicate — more than one unit running the same role runner (an old display-name unit left beside its successor) |
-| c | a foreign `<crew-unit>.service.d/` drop-in (e.g. a hand-written env override) — flagged, never removed |
+| a | an expected role's scheduler job missing, disabled, or pointing outside `$QUARTET_DIR` |
+| b | a stale duplicate — more than one job running the same role runner |
+| c | Linux only: a foreign `<crew-unit>.service.d/` drop-in — flagged, never removed |
 | d | retired config keys/sections (USD-era budget decimals, retired vocabulary) |
 | e | a shared-skill symlink missing or not resolving into `$QUARTET_DIR/skills` |
 | f | a `.claude/settings.json` hook command naming a script that does not exist (dead wiring) |
@@ -128,7 +128,7 @@ inputs install uses) and checks it against reality, one `DOCTOR <class>:
 | h | (hub only) a dispatch decision in `data/news/decisions.jsonl` not mirrored into the target project's `data/decisions.jsonl` |
 | i | (opt-in only — flagged only once a project has enabled shoulder mode) the capture hook not wired into the authoring harness's native config, or `.agents/shoulder.env` missing; fix with `install.sh --wire-shoulder` |
 
-It is strictly read-only (no writes, no `systemctl` mutation) and finishes in
+It is strictly read-only (no writes or scheduler mutation) and finishes in
 well under a second, so it runs as a `[[medic.checks]]` entry every scan —
 the next self-written drop-in or dead hook pages within one tick instead of
 surfacing weeks later.
@@ -147,26 +147,26 @@ install.sh --relink --project <project_dir> [--dry-run]
 It recreates only the installer-owned skill symlinks that resolve wrong
 (missing, broken, or pointing outside `$QUARTET_DIR/skills`), leaves correct
 ones untouched, and **never** clobbers a real file/dir an operator placed
-there. It touches nothing else — no `systemctl`, no config, no gate file — and
+there. It touches nothing else — no scheduler, config, or gate file — and
 exits 0 even when nothing needed fixing. `--dry-run` prints the plan without
 writing.
 
 ## Uninstall
 
-Remove exactly the installer-owned surface (units/timers + shared-skill
+Remove exactly the installer-owned surface (scheduler jobs + shared-skill
 symlinks); the config you wrote and your data are left in place:
 
 ```bash
 install.sh --uninstall --project <project_dir> [--dry-run]
 ```
 
-It disables + removes this project's crew units/timers (`daemon-reload`),
+It disables + removes this project's systemd units or LaunchAgent plists,
 removes the shared skill symlinks that resolve into `$QUARTET_DIR/skills`
 (a real dir or a symlink pointing elsewhere is left untouched), and prints
 the deliberate leave-behind: `.agents/` (config, prompts, gates.md), `data/`,
 `tmp/`. `--dry-run` prints the identical plan without writing.
 
 Reinstall is `install.sh --project <dir>` again — **uninstall + install
-converges to a fresh install's unit set.** The repo keeps nothing it didn't
+converges to a fresh install's job set.** The repo keeps nothing it didn't
 choose — the crew leaves no code behind, only the config the operator wrote
 and can read.

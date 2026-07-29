@@ -105,10 +105,26 @@ done
 
 LINE=$(jq -cn "${JQ_ARGS[@]}" "$JQ_FILTER" 2>/dev/null) || exit 0
 
-# flock prevents interleaved writes across concurrent callers.
-(
-    flock -x 9
-    printf '%s\n' "$LINE" >> "$FILE"
-) 9>"$FILE.lock" 2>/dev/null
+# Prevent interleaved writes across concurrent callers. Linux normally has
+# flock; stock macOS does not, so use a short-lived atomic mkdir lock there.
+if command -v flock >/dev/null 2>&1; then
+    (
+        flock -x 9
+        printf '%s\n' "$LINE" >> "$FILE"
+    ) 9>"$FILE.lock" 2>/dev/null
+else
+    LOCK_DIR="$FILE.lock.d"
+    LOCKED=0
+    ATTEMPT=0
+    while [ "$ATTEMPT" -lt 100 ]; do
+        if mkdir "$LOCK_DIR" 2>/dev/null; then LOCKED=1; break; fi
+        sleep 0.01
+        ATTEMPT=$((ATTEMPT + 1))
+    done
+    if [ "$LOCKED" = "1" ]; then
+        printf '%s\n' "$LINE" >> "$FILE"
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+    fi
+fi
 
 exit 0

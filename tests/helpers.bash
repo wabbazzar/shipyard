@@ -46,6 +46,9 @@ quartet_setup() {
   export GIT_COMMITTER_EMAIL="quartet-test@example.com"
   export GIT_CONFIG_NOSYSTEM=1
   export HOME="$BATS_TEST_TMPDIR/home"
+  # Keep the existing suite deterministic on both Linux and macOS. Dedicated
+  # launchd cases override this after quartet_setup.
+  export SHIPYARD_SCHEDULER=systemd
   mkdir -p "$HOME"
 
   make_notify_stub

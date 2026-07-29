@@ -162,17 +162,25 @@ quartet_notify() {
   key="$(printf '%s' "$project_name|$episode" | sha256sum | awk '{print $1}')"
   now="$(date +%s)"
 
-  local notify_lock_fd
-  exec {notify_lock_fd}>"$lock_file" || {
-    if _quartet_notify_transport "$title" "$body"; then
-      _quartet_notification_decision "$class" "$episode" delivered "$policy" dedup_unavailable
+  local notify_lock_kind="" notify_lock_dir="$lock_file.d"
+  local lock_attempt=0
+  if command -v flock >/dev/null 2>&1; then
+    if exec 9>"$lock_file" && flock -x 9; then
+      notify_lock_kind="flock"
     else
-      _quartet_notification_decision "$class" "$episode" suppressed "$policy" transport_failed
+      exec 9>&-
     fi
-    return 0
-  }
-  if ! flock -x "$notify_lock_fd"; then
-    exec {notify_lock_fd}>&-
+  else
+    while [ "$lock_attempt" -lt 100 ]; do
+      if mkdir "$notify_lock_dir" 2>/dev/null; then
+        notify_lock_kind="mkdir"
+        break
+      fi
+      sleep 0.01
+      lock_attempt=$((lock_attempt + 1))
+    done
+  fi
+  if [ -z "$notify_lock_kind" ]; then
     if _quartet_notify_transport "$title" "$body"; then
       _quartet_notification_decision "$class" "$episode" delivered "$policy" dedup_unavailable
     else
@@ -189,8 +197,11 @@ quartet_notify() {
   last="$(jq -r --arg key "$key" '.episodes[$key] // 0' <<<"$state")"
   [[ "$last" =~ ^[0-9]+$ ]] || last=0
   if [ "$last" -gt 0 ] && [ $((now - last)) -lt "$window" ]; then
-    flock -u "$notify_lock_fd"
-    exec {notify_lock_fd}>&-
+    if [ "$notify_lock_kind" = "flock" ]; then
+      flock -u 9; exec 9>&-
+    else
+      rmdir "$notify_lock_dir" 2>/dev/null || true
+    fi
     _quartet_notification_decision "$class" "$episode" deduped "$policy" episode_window
     return 0
   fi
@@ -209,13 +220,19 @@ quartet_notify() {
       [ -n "$state_tmp" ] && rm -f "$state_tmp"
       reason="state_write_failed"
     fi
-    flock -u "$notify_lock_fd"
-    exec {notify_lock_fd}>&-
+    if [ "$notify_lock_kind" = "flock" ]; then
+      flock -u 9; exec 9>&-
+    else
+      rmdir "$notify_lock_dir" 2>/dev/null || true
+    fi
     _quartet_notification_decision "$class" "$episode" delivered "$policy" "$reason"
   else
     # A failed transport never consumes the key; the next call may retry.
-    flock -u "$notify_lock_fd"
-    exec {notify_lock_fd}>&-
+    if [ "$notify_lock_kind" = "flock" ]; then
+      flock -u 9; exec 9>&-
+    else
+      rmdir "$notify_lock_dir" 2>/dev/null || true
+    fi
     _quartet_notification_decision "$class" "$episode" suppressed "$policy" transport_failed
   fi
   return 0

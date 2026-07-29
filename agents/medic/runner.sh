@@ -182,7 +182,9 @@ TRUNK_BRANCH="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")" || exit 2
 DEV_PORT="$(echo "$CFG_JSON" | jq -r '.dev_port // empty')"
 DAILY_CAP="$(echo "$CFG_JSON" | jq -r '.medic.daily_escalation_cap // 5')"
 POLL_INTERVAL="$(echo "$CFG_JSON" | jq -r '.medic.poll_interval_sec // 600')"
-RESTART_SYSTEMD="$(echo "$CFG_JSON" | jq -r '.medic.restart_systemd // true')"
+RESTART_SYSTEMD="$(echo "$CFG_JSON" | jq -r '
+  if .medic.restart_systemd == null then true else .medic.restart_systemd end
+')"
 # Optional project-defined restart command for restart-class incidents that
 # have no local user-unit to bounce (e.g. an HTTP probe outage on a service
 # managed outside `systemctl --user`). Unset = current behavior (no-op).
@@ -205,8 +207,8 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
       project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
       can_merge:($cfg.medic.can_merge // false),
       allow_no_ci:($cfg.build.allow_no_ci // false),
-      restart_systemd:($cfg.medic.restart_systemd // true),
-      sync_to_build:($cfg.medic.sync_to_build // true),
+      restart_systemd:(if $cfg.medic.restart_systemd == null then true else $cfg.medic.restart_systemd end),
+      sync_to_build:(if $cfg.medic.sync_to_build == null then true else $cfg.medic.sync_to_build end),
       budgets:{budget_tokens_daily:($cfg.medic.budget_tokens_daily // 1000000),
                daily_escalation_cap:($cfg.medic.daily_escalation_cap // 5),
                build_wall_clock_sec:($cfg.build.wall_clock_sec // 3600)}}'
@@ -547,7 +549,9 @@ detect_scan_freshness() {
     if [ ! -f "$log_path" ]; then
       reason="last-run log missing ($c_log) — runner has never completed"
     else
-      local age_sec=$(( $(date +%s) - $(stat -c %Y "$log_path") ))
+      local log_mtime
+      log_mtime="$(stat -c %Y "$log_path" 2>/dev/null || stat -f %m "$log_path" 2>/dev/null || date +%s)"
+      local age_sec=$(( $(date +%s) - log_mtime ))
       if [ "$age_sec" -gt $(( c_hours * 3600 )) ]; then
         reason="last-run log is $((age_sec / 3600))h old (max ${c_hours}h) — run missed or silently dead"
       elif ! grep -qE "$c_regex" "$log_path"; then

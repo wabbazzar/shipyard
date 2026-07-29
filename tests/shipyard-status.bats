@@ -84,6 +84,17 @@ mark_installed() {
   echo "$output" | grep -qi "project blocks"
 }
 
+@test "status lists native launchd jobs on macOS installs" {
+  P="$(make_fixture_project macwired)"
+  export SHIPYARD_SCHEDULER=launchd
+  mkdir -p "$HOME/Library/LaunchAgents"
+  printf '<plist><dict/></plist>\n' >"$HOME/Library/LaunchAgents/macwired-release.plist"
+  run run_shipyard status --project "$P"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "macwired-release"
+  echo "$output" | grep -qF "via launchd"
+}
+
 @test "status is the default subcommand (no arg)" {
   P="$(make_fixture_project deflt)"
   run run_shipyard --project "$P"

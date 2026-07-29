@@ -65,14 +65,10 @@ cq_under_project() {
     /*) abs="$cand" ;;
     *)  abs="$proj/$cand" ;;
   esac
-  # Lexical canonicalization (-m: missing ok, -s: don't follow symlinks).
-  if command -v realpath >/dev/null 2>&1; then
-    abs="$(realpath -ms -- "$abs" 2>/dev/null)" || return 1
-    proj="$(realpath -ms -- "$proj" 2>/dev/null)" || return 1
-  else
-    # No realpath: reject any `..` segment rather than risk an escape.
-    case "/$cand/" in */../*) return 1 ;; esac
-  fi
+  # Lexical canonicalization with Python keeps missing paths valid and avoids
+  # GNU realpath flags that Apple's realpath does not implement.
+  abs="$(python3 -c 'import os,sys; print(os.path.abspath(os.path.normpath(sys.argv[1])))' "$abs" 2>/dev/null)" || return 1
+  proj="$(python3 -c 'import os,sys; print(os.path.abspath(os.path.normpath(sys.argv[1])))' "$proj" 2>/dev/null)" || return 1
   case "$abs" in
     "$proj")     printf '.\n'; return 0 ;;
     "$proj"/*)   printf '%s\n' "${abs#"$proj"/}"; return 0 ;;

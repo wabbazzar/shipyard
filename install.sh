@@ -13,13 +13,14 @@
 #                (design is opt-in).
 #   --doctor     Read-only conformance audit of this project's crew install.
 #                Prints `DOCTOR <class>: <detail>` one line per finding; exit 0
-#                clean / 1 on drift. Never writes, never touches systemd. Fast
+#                clean / 1 on drift. Never writes, never touches the scheduler.
+#                Fast
 #                enough to run as a [[medic.checks]] entry every scan.
 #   --relink     Repair mode: recreate the skill symlinks and missing skill
 #                bridge --doctor flags as drift. Deterministic filesystem op —
-#                touches nothing else (no systemd/config/gate), never clobbers
+#                touches nothing else (no scheduler/config/gate), never clobbers
 #                a real file/dir. Honors --dry-run. Exit 0.
-#   --uninstall  Remove exactly the installer-owned surface (crew units/timers
+#   --uninstall  Remove exactly the installer-owned surface (scheduler jobs
 #                + shared-skill symlinks resolving into $QUARTET_DIR/skills),
 #                then print the deliberate leave-behind (.agents/, data/, tmp/).
 #                Honors --dry-run. uninstall+install == fresh install.
@@ -33,12 +34,14 @@
 #
 # What it does (idempotent — re-running is safe):
 #
-#   1. Writes ~/.config/systemd/user/<project_name>-<agent>.{service,timer}
-#      for each agent. Schedules come from config.toml's [install.timers]
-#      table, falling back to baked-in defaults (release 06:00, medic
-#      every 10 min, build 03:30, scribe 01:00).
+#   1. Writes scheduler definitions for each agent:
+#        Linux: ~/.config/systemd/user/<project>-<agent>.{service,timer}
+#        macOS: ~/Library/LaunchAgents/<project>-<agent>.plist
+#      Schedules come from config.toml's [install.timers] table, falling back
+#      to baked-in defaults (release 06:00, medic every 10 min, build 03:30,
+#      scribe 01:00).
 #
-#   2. `systemctl --user daemon-reload` + `enable --now` each timer.
+#   2. Enables each timer with systemd (Linux) or launchd (macOS).
 #
 #   3. Removes ANY crontab line that invokes a per-project agent launcher
 #      (<project_dir>/scripts/<project_name>-<role-or-display>.sh) — those
@@ -68,18 +71,56 @@
 # Why removal, not shimming: shims preserve a working call path but also
 # preserve the surface area people forget to update. After install, the
 # canonical entry point is `agents/<name>/runner.sh --project <dir> --mode X`
-# — the same path systemd, the post-push hook, and medic→build all use.
+# — the same path the scheduler, the post-push hook, and medic→build all use.
 
 set -uo pipefail
 
-# Dependency preflight — fail fast with a clear message.
-for dep in jq python3 git gh systemctl claude; do
-  command -v "$dep" >/dev/null 2>&1 || {
-    echo "missing dependency: $dep (see README Requirements)" >&2; exit 2; }
-done
-
 QUARTET_DIR="${QUARTET_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-SYSTEMD_DIR="$HOME/.config/systemd/user"
+SYSTEMD_DIR="${SHIPYARD_SYSTEMD_DIR:-$HOME/.config/systemd/user}"
+LAUNCHD_DIR="${SHIPYARD_LAUNCHD_DIR:-$HOME/Library/LaunchAgents}"
+LAUNCHD_LOG_DIR="${SHIPYARD_LAUNCHD_LOG_DIR:-$HOME/Library/Logs/Shipyard}"
+LAUNCHD_DOMAIN="gui/$(id -u)"
+
+detect_scheduler() {
+  case "${SHIPYARD_SCHEDULER:-auto}" in
+    systemd|launchd) printf '%s\n' "$SHIPYARD_SCHEDULER" ;;
+    auto)
+      case "$(uname -s)" in
+        Darwin) printf 'launchd\n' ;;
+        Linux)  printf 'systemd\n' ;;
+        *) echo "unsupported platform: $(uname -s) (want Linux/systemd or macOS/launchd)" >&2; return 2 ;;
+      esac
+      ;;
+    *) echo "bad SHIPYARD_SCHEDULER: $SHIPYARD_SCHEDULER (want auto|systemd|launchd)" >&2; return 2 ;;
+  esac
+}
+SCHEDULER="$(detect_scheduler)" || exit $?
+
+scheduler_dependency() {
+  case "$SCHEDULER" in
+    systemd) printf 'systemctl\n' ;;
+    launchd) printf 'launchctl\n' ;;
+  esac
+}
+
+scheduler_manifest_dir() {
+  case "$SCHEDULER" in
+    systemd) printf '%s\n' "$SYSTEMD_DIR" ;;
+    launchd) printf '%s\n' "$LAUNCHD_DIR" ;;
+  esac
+}
+
+launchd_label() { printf 'com.shipyard.%s\n' "$1"; }
+
+xml_escape() {
+  local s="$1"
+  s="${s//&/&amp;}"
+  s="${s//</&lt;}"
+  s="${s//>/&gt;}"
+  s="${s//\"/&quot;}"
+  s="${s//\'/&apos;}"
+  printf '%s' "$s"
+}
 
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/naming.sh"
@@ -118,6 +159,19 @@ case "$MODE" in
   doctor|uninstall|relink) [ "$THEME_EXPLICIT" = "0" ] || { echo "--theme not valid with --$MODE" >&2; usage; } ;;
 esac
 
+# Dependency preflight — fail fast with a scheduler-specific message.
+for dep in jq python3 git gh claude "$(scheduler_dependency)"; do
+  command -v "$dep" >/dev/null 2>&1 || {
+    echo "missing dependency: $dep (see README Requirements)" >&2; exit 2; }
+done
+BASH_BIN="/bin/bash"
+if [ "$SCHEDULER" = "launchd" ]; then
+  for dep in plutil timeout sha256sum; do
+    command -v "$dep" >/dev/null 2>&1 || {
+      echo "missing macOS dependency: $dep (run: brew install coreutils jq)" >&2; exit 2; }
+  done
+fi
+
 # The installer-owned shared-skill set: the symlink manifest doctor (e) audits
 # and uninstall removes. Single source of truth (referenced again at step 4.5).
 GENERIC_SKILLS="polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard ui-design"
@@ -146,22 +200,58 @@ PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON")"
 # mid-migration (a plain unit and its spacetime successor coexisting).
 # ===========================================================================
 
-# crew_units_for_role <role> — this project's unit basenames (no .service)
-# whose ExecStart runs agents/<role>/runner.sh for THIS project dir. One
-# per line; empty if none. Non-crew units (watch daemons, app services)
-# never match because they don't invoke a role runner.
+# crew_units_for_role <role> — this project's scheduler basenames (without
+# .service/.plist) whose command runs agents/<role>/runner.sh for THIS project
+# dir. One per line; empty if none. Non-crew jobs never match.
 crew_units_for_role() {
-  local role="$1" svc
-  for svc in "$SYSTEMD_DIR/${PROJECT_NAME}-"*.service; do
-    [ -e "$svc" ] || continue
-    grep -q -- "--project $PROJECT_DIR " "$svc" 2>/dev/null || continue
-    grep -q "agents/$role/runner.sh" "$svc" 2>/dev/null || continue
-    basename "${svc%.service}"
-  done
+  local role="$1" manifest
+  case "$SCHEDULER" in
+    systemd)
+      for manifest in "$SYSTEMD_DIR/${PROJECT_NAME}-"*.service; do
+        [ -e "$manifest" ] || continue
+        grep -Fq -- "--project $PROJECT_DIR " "$manifest" 2>/dev/null || continue
+        grep -Fq "agents/$role/runner.sh" "$manifest" 2>/dev/null || continue
+        basename "${manifest%.service}"
+      done
+      ;;
+    launchd)
+      for manifest in "$LAUNCHD_DIR/${PROJECT_NAME}-"*.plist; do
+        [ -e "$manifest" ] || continue
+        grep -Fq "<string>$PROJECT_DIR</string>" "$manifest" 2>/dev/null || continue
+        grep -Fq "agents/$role/runner.sh" "$manifest" 2>/dev/null || continue
+        basename "${manifest%.plist}"
+      done
+      ;;
+  esac
 }
 
-# timer_enabled <unit-base> — success if <unit-base>.timer is enabled.
-timer_enabled() { systemctl --user is-enabled "$1.timer" >/dev/null 2>&1; }
+# timer_enabled <unit-base> — success if the scheduler job is loaded/enabled.
+timer_enabled() {
+  case "$SCHEDULER" in
+    systemd) systemctl --user is-enabled "$1.timer" >/dev/null 2>&1 ;;
+    launchd) launchctl print "$LAUNCHD_DOMAIN/$(launchd_label "$1")" >/dev/null 2>&1 ;;
+  esac
+}
+
+crew_manifest_path() {
+  case "$SCHEDULER" in
+    systemd) printf '%s/%s.service\n' "$SYSTEMD_DIR" "$1" ;;
+    launchd) printf '%s/%s.plist\n' "$LAUNCHD_DIR" "$1" ;;
+  esac
+}
+
+runner_path_from_manifest() {
+  local role="$1" unit="$2" manifest
+  manifest="$(crew_manifest_path "$unit")"
+  case "$SCHEDULER" in
+    systemd)
+      grep -oE "/bin/bash [^ ]*agents/$role/runner.sh" "$manifest" 2>/dev/null | awk '{print $2}'
+      ;;
+    launchd)
+      sed -n "s#.*<string>\\([^<]*agents/$role/runner.sh\\)</string>.*#\\1#p" "$manifest" | head -1
+      ;;
+  esac
+}
 
 # run_doctor — read-only conformance audit. Prints `DOCTOR <class>: <detail>`
 # one line per finding on stdout; a clean project prints a single line to
@@ -175,7 +265,7 @@ run_doctor() {
   local role u
 
   # Expected role set: [install.timers] keys ∪ roles with an enabled crew
-  # timer; installer default when both are empty. (The installed agent set is
+  # job; installer default when both are empty. (The installed agent set is
   # not recorded in config, so this is the honest lower bound — extra
   # installed roles are tolerated, a scheduled-but-not-running role is caught.)
   local timer_roles enabled_roles="" expected
@@ -203,7 +293,7 @@ run_doctor() {
       [ -z "$u" ] && continue
       timer_enabled "$u" && any_enabled=1
       local es es_base es_dir
-      es="$(grep -oE "/bin/bash [^ ]*agents/$role/runner.sh" "$SYSTEMD_DIR/$u.service" | awk '{print $2}')"
+      es="$(runner_path_from_manifest "$role" "$u")"
       es_base="${es%/agents/$role/runner.sh}"       # the claimed QUARTET_DIR
       if [ -d "$es_base" ]; then
         es_dir="$(cd "$es_base" && pwd -P)"          # realpath-tolerant (compat symlink ok)
@@ -213,7 +303,7 @@ run_doctor() {
       [ -n "$es" ] && [ "$es_dir" != "$qd_real" ] && \
         emit "unit: $u runner not under \$QUARTET_DIR (-> $es_dir, want $qd_real)"
     done <<<"$units"
-    [ "$any_enabled" = "1" ] || emit "unit: '$role' present but its timer is not enabled"
+    [ "$any_enabled" = "1" ] || emit "unit: '$role' present but its scheduler job is not enabled"
   done
 
   # (b) more than one crew unit per role for this project = stale duplicate
@@ -225,14 +315,16 @@ run_doctor() {
   done
 
   # (c) foreign systemd drop-in on a crew unit (e.g. a self-written budget
-  #     override). Crew-scoped so app-service drop-ins are not flagged.
-  for role in $QUARTET_ROLES; do
-    while IFS= read -r u; do
-      [ -z "$u" ] && continue
-      [ -d "$SYSTEMD_DIR/$u.service.d" ] && \
-        emit "dropin: $u.service.d present (foreign env override) — flag, never auto-removed"
-    done <<<"$(crew_units_for_role "$role")"
-  done
+  #     override). launchd has no drop-in mechanism.
+  if [ "$SCHEDULER" = "systemd" ]; then
+    for role in $QUARTET_ROLES; do
+      while IFS= read -r u; do
+        [ -z "$u" ] && continue
+        [ -d "$SYSTEMD_DIR/$u.service.d" ] && \
+          emit "dropin: $u.service.d present (foreign env override) — flag, never auto-removed"
+      done <<<"$(crew_units_for_role "$role")"
+    done
+  fi
 
   # (d) retired config keys/sections (USD-era caps, retired vocabulary). The
   #     retired words are assembled from split strings so this file never
@@ -356,7 +448,7 @@ run_doctor() {
   #     a flat project is NOT a finding; exit 2 = the engine could not run.
   local lc_engine="$QUARTET_DIR/scripts/ticket-lifecycle.sh" lc_out lc_rc
   if [ -f "$lc_engine" ]; then
-    lc_out="$(bash "$lc_engine" --project "$PROJECT_DIR" --check 2>/dev/null)"
+    lc_out="$("$BASH_BIN" "$lc_engine" --project "$PROJECT_DIR" --check 2>/dev/null)"
     lc_rc=$?
     case "$lc_rc" in
       0|3) : ;;
@@ -379,7 +471,7 @@ run_doctor() {
 }
 
 # run_uninstall — remove exactly the installer-owned surface for this project:
-# its crew units/timers (any role, enabled or not) and the shared-skill
+# its scheduler jobs (any role, enabled or not) and the shared-skill
 # symlinks that resolve into $QUARTET_DIR/skills. Everything else (.agents/
 # incl. config + prompts + gates.md, data/, tmp/) is deliberately left.
 # Honors --dry-run (prints the identical plan, writes nothing). Invariant:
@@ -388,7 +480,7 @@ run_uninstall() {
   echo "==> uninstall crew for $PROJECT_NAME ($PROJECT_DIR)"
   [ "$DRY_RUN" = "1" ] && echo "  (dry-run — no changes will be made)"
 
-  # 1. crew units/timers (dedup across roles).
+  # 1. crew scheduler jobs (dedup across roles).
   local seen=" " u role touched=0
   for role in $QUARTET_ROLES; do
     while IFS= read -r u; do
@@ -397,19 +489,31 @@ run_uninstall() {
       seen+="$u "
       touched=1
       if [ "$DRY_RUN" = "1" ]; then
-        echo "  would disable + remove: $u.{service,timer}"
+        case "$SCHEDULER" in
+          systemd) echo "  would disable + remove: $u.{service,timer}" ;;
+          launchd) echo "  would bootout + remove: $u.plist" ;;
+        esac
       else
-        systemctl --user disable --now "$u.timer" >/dev/null 2>&1 || true
-        rm -f "$SYSTEMD_DIR/$u.service" "$SYSTEMD_DIR/$u.timer"
-        echo "  removed: $u.{service,timer}"
+        case "$SCHEDULER" in
+          systemd)
+            systemctl --user disable --now "$u.timer" >/dev/null 2>&1 || true
+            rm -f "$SYSTEMD_DIR/$u.service" "$SYSTEMD_DIR/$u.timer"
+            echo "  removed: $u.{service,timer}"
+            ;;
+          launchd)
+            launchctl bootout "$LAUNCHD_DOMAIN/$(launchd_label "$u")" >/dev/null 2>&1 || true
+            rm -f "$LAUNCHD_DIR/$u.plist"
+            echo "  removed: $u.plist"
+            ;;
+        esac
       fi
     done <<<"$(crew_units_for_role "$role")"
   done
   [ "$touched" = "0" ] && echo "  (no crew units found for $PROJECT_NAME)"
   if [ "$DRY_RUN" = "1" ]; then
-    echo "  would: systemctl --user daemon-reload"
+    [ "$SCHEDULER" = "systemd" ] && echo "  would: systemctl --user daemon-reload"
   else
-    systemctl --user daemon-reload
+    [ "$SCHEDULER" = "systemd" ] && systemctl --user daemon-reload
   fi
 
   # 2. shared-skill symlinks in both discovery roots — only ones that resolve
@@ -534,8 +638,9 @@ esac
 # ---------- theme → [names] block -------------------------------------------
 # Resolve the theme into a display name per role (order: design build release
 # medic scribe), then bake a [names] block into the project's config.toml so
-# the runners + this installer resolve the same svc/unit names.
-declare -A THEME_NAMES
+# the runners + this installer resolve the same svc/unit names. Individual
+# variables keep the installer and generated jobs compatible with Apple's
+# native Bash 3.2.
 # No explicit --theme on a re-run: an existing [names] block in the project's
 # config is the operator's prior choice — honor it. Defaulting to plain here
 # once wrote a DUPLICATE role-id unit set alongside a live themed fleet.
@@ -548,23 +653,36 @@ if [ "$THEME_EXPLICIT" = "0" ]; then
 fi
 case "$THEME" in
   plain)
-    THEME_NAMES=( [design]=design [build]=build [release]=release [medic]=medic [scribe]=scribe ) ;;
+    THEME_DESIGN=design; THEME_BUILD=build; THEME_RELEASE=release
+    THEME_MEDIC=medic; THEME_SCRIBE=scribe ;;
   spacetime)
-    THEME_NAMES=( [design]=mentat [build]=helldiver [release]=proctor [medic]=suk [scribe]=chronicler ) ;;
+    THEME_DESIGN=mentat; THEME_BUILD=helldiver; THEME_RELEASE=proctor
+    THEME_MEDIC=suk; THEME_SCRIBE=chronicler ;;
   custom:*)
     IFS=',' read -r c_d c_b c_r c_m c_s <<<"${THEME#custom:}"
     if [ -z "$c_d" ] || [ -z "$c_b" ] || [ -z "$c_r" ] || [ -z "$c_m" ] || [ -z "$c_s" ]; then
       echo "bad --theme custom: need 5 names (design,build,release,medic,scribe)" >&2; exit 2
     fi
-    THEME_NAMES=( [design]="$c_d" [build]="$c_b" [release]="$c_r" [medic]="$c_m" [scribe]="$c_s" ) ;;
+    THEME_DESIGN="$c_d"; THEME_BUILD="$c_b"; THEME_RELEASE="$c_r"
+    THEME_MEDIC="$c_m"; THEME_SCRIBE="$c_s" ;;
   *)
     echo "unknown --theme: $THEME (want plain|spacetime|custom:d,b,r,m,s)" >&2; exit 2 ;;
 esac
 
+theme_name() {
+  case "$1" in
+    design) printf '%s\n' "$THEME_DESIGN" ;;
+    build) printf '%s\n' "$THEME_BUILD" ;;
+    release) printf '%s\n' "$THEME_RELEASE" ;;
+    medic) printf '%s\n' "$THEME_MEDIC" ;;
+    scribe) printf '%s\n' "$THEME_SCRIBE" ;;
+  esac
+}
+
 # Build the [names] TOML block (canonical role order).
 names_block="[names]"$'\n'
 for role in $QUARTET_ROLES; do
-  names_block+="$role = \"${THEME_NAMES[$role]}\""$'\n'
+  names_block+="$role = \"$(theme_name "$role")\""$'\n'
 done
 
 echo "==> theme '$THEME' → [names] block in $CFG"
@@ -572,7 +690,7 @@ echo "==> theme '$THEME' → [names] block in $CFG"
 # resolution (role_display) sees the theme in BOTH dry-run and real runs —
 # a dry-run must show the same unit names the real run will write.
 names_json="$(for role in $QUARTET_ROLES; do
-    printf '%s\t%s\n' "$role" "${THEME_NAMES[$role]}"
+    printf '%s\t%s\n' "$role" "$(theme_name "$role")"
   done | jq -R 'split("\t") | {(.[0]): .[1]}' | jq -s 'add')"
 CFG_JSON="$(jq --argjson n "$names_json" '.names = $n' <<<"$CFG_JSON")"
 if [ "$DRY_RUN" = "1" ]; then
@@ -640,9 +758,44 @@ write_or_show() {
   fi
 }
 
-# ---------- step 1+2: systemd units ----------------------------------------
-echo "==> systemd units (project=$PROJECT_NAME dir=$PROJECT_DIR)"
-[ "$DRY_RUN" = "1" ] || mkdir -p "$SYSTEMD_DIR"
+# Convert Shipyard's documented systemd-style schedule subset to launchd.
+# Daily HH:MM jobs become StartCalendarInterval; */N minute jobs become
+# StartInterval. Fail honestly on any expression launchd cannot represent.
+launchd_schedule_xml() {
+  local schedule="$1" hour minute seconds every
+  if [[ "$schedule" =~ ^\*-\*-\*\ ([0-9][0-9]?):([0-9][0-9]):([0-9][0-9])$ ]]; then
+    hour="${BASH_REMATCH[1]}"; minute="${BASH_REMATCH[2]}"; seconds="${BASH_REMATCH[3]}"
+    [ "$seconds" = "00" ] || {
+      echo "launchd does not support seconds in schedule '$schedule'" >&2; return 2; }
+    hour=$((10#$hour)); minute=$((10#$minute))
+    [ "$hour" -le 23 ] && [ "$minute" -le 59 ] || {
+      echo "invalid daily schedule '$schedule'" >&2; return 2; }
+    cat <<EOF
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>$hour</integer>
+    <key>Minute</key><integer>$minute</integer>
+  </dict>
+EOF
+    return 0
+  fi
+  if [[ "$schedule" =~ ^\*-\*-\*\ \*:0/([0-9]+):00$ ]]; then
+    every="${BASH_REMATCH[1]}"
+    [ "$every" -gt 0 ] || { echo "invalid interval schedule '$schedule'" >&2; return 2; }
+    printf '  <key>StartInterval</key>\n  <integer>%s</integer>\n' "$((every * 60))"
+    return 0
+  fi
+  echo "launchd cannot translate schedule '$schedule' (use '*-*-* HH:MM:00' or '*-*-* *:0/N:00')" >&2
+  return 2
+}
+
+# ---------- step 1+2: scheduler jobs ---------------------------------------
+echo "==> $SCHEDULER jobs (project=$PROJECT_NAME dir=$PROJECT_DIR)"
+manifest_dir="$(scheduler_manifest_dir)"
+if [ "$DRY_RUN" = "0" ]; then
+  mkdir -p "$manifest_dir"
+  [ "$SCHEDULER" = "launchd" ] && mkdir -p "$LAUNCHD_LOG_DIR"
+fi
 
 for role in $ROLES_LIST; do
   # Timer schedule: config's [install.timers] wins (accept role id OR the
@@ -657,41 +810,48 @@ for role in $ROLES_LIST; do
   dir="$(dir_for_role "$role")"
   display="$(role_display "$role" "$CFG_JSON")"
 
-  service_path="$SYSTEMD_DIR/${PROJECT_NAME}-${display}.service"
-  timer_path="$SYSTEMD_DIR/${PROJECT_NAME}-${display}.timer"
+  unit_base="${PROJECT_NAME}-${display}"
+  service_path="$SYSTEMD_DIR/$unit_base.service"
+  timer_path="$SYSTEMD_DIR/$unit_base.timer"
+  plist_path="$LAUNCHD_DIR/$unit_base.plist"
 
-  # A theme change or rename must never leave two live unit sets for one
-  # project+role: sweep any OTHER unit of this project whose ExecStart runs
-  # this role's runner. Plain-name leftovers have fired alongside a
-  # spacetime set before. (The retired display-name dir aliases are gone —
-  # every install is post-rename, so only the role dir itself is swept.)
-  role_dirs="$dir"
-  for old_svc in "$SYSTEMD_DIR/${PROJECT_NAME}-"*.service; do
-    [ -e "$old_svc" ] || continue
-    [ "$old_svc" = "$service_path" ] && continue
-    grep -q -- "--project $PROJECT_DIR " "$old_svc" 2>/dev/null || continue
-    stale=0
-    for rd in $role_dirs; do
-      grep -q "agents/$rd/runner.sh" "$old_svc" 2>/dev/null && stale=1
-    done
-    [ "$stale" = "1" ] || continue
-    old_base="$(basename "${old_svc%.service}")"
+  # A theme change or rename must never leave two jobs for one project+role.
+  while IFS= read -r old_base; do
+    [ -n "$old_base" ] || continue
+    [ "$old_base" = "$unit_base" ] && continue
     if [ "$DRY_RUN" = "1" ]; then
-      echo "  would remove stale duplicate: $old_base.{service,timer} (role $role under an old name)"
+      case "$SCHEDULER" in
+        systemd) echo "  would remove stale duplicate: $old_base.{service,timer} (role $role under an old name)" ;;
+        launchd) echo "  would remove stale duplicate: $old_base.plist (role $role under an old name)" ;;
+      esac
     else
-      systemctl --user disable --now "$old_base.timer" >/dev/null 2>&1 || true
-      rm -f "$old_svc" "$SYSTEMD_DIR/$old_base.timer"
-      echo "  removed stale duplicate: $old_base.{service,timer} (role $role under an old name)"
+      case "$SCHEDULER" in
+        systemd)
+          systemctl --user disable --now "$old_base.timer" >/dev/null 2>&1 || true
+          rm -f "$SYSTEMD_DIR/$old_base.service" "$SYSTEMD_DIR/$old_base.timer"
+          echo "  removed stale duplicate: $old_base.{service,timer} (role $role under an old name)"
+          ;;
+        launchd)
+          launchctl bootout "$LAUNCHD_DOMAIN/$(launchd_label "$old_base")" >/dev/null 2>&1 || true
+          rm -f "$LAUNCHD_DIR/$old_base.plist"
+          echo "  removed stale duplicate: $old_base.plist (role $role under an old name)"
+          ;;
+      esac
     fi
-  done
+  done <<<"$(crew_units_for_role "$role")"
 
-  # Propagate quartet runtime knobs set at install time into the unit —
-  # systemd user services get a near-empty environment otherwise, which
-  # silently mutes notifications and disables medic's ops scan.
+  # Propagate runtime knobs into the scheduler's deliberately small environment.
   quartet_env=""
+  # Put Apple's native /bin/bash ahead of an old Intel Homebrew bash; Rosetta
+  # shells have exhibited command-substitution hangs on Apple Silicon.
+  launchd_env="    <key>PATH</key><string>$(xml_escape "$HOME/.local/bin:$HOME/.pyenv/shims:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin")</string>"$'\n'
+  launchd_env+="    <key>HOME</key><string>$(xml_escape "$HOME")</string>"$'\n'
   for var in QUARTET_NOTIFY_CMD QUARTET_OPS_JSON QUARTET_EVENTS_DIR; do
     val="${!var:-}"
-    [ -n "$val" ] && quartet_env+="Environment=$var=$val"$'\n'
+    if [ -n "$val" ]; then
+      quartet_env+="Environment=$var=$val"$'\n'
+      launchd_env+="    <key>$var</key><string>$(xml_escape "$val")</string>"$'\n'
+    fi
   done
 
   # Bake the per-role harness/model/provider knobs into the unit env. Precedence:
@@ -703,15 +863,24 @@ for role in $ROLES_LIST; do
   h_val="$(jq -r --arg r "$role" '(.[$r].harness  // .harness.default  // empty)' <<<"$CFG_JSON")"
   m_val="$(jq -r --arg r "$role" '(.[$r].model     // .harness.model    // empty)' <<<"$CFG_JSON")"
   p_val="$(jq -r --arg r "$role" '(.[$r].provider  // .harness.provider // empty)' <<<"$CFG_JSON")"
-  [ -n "$h_val" ] && quartet_env+="Environment=${role_upper}_HARNESS=$h_val"$'\n'
-  [ -n "$m_val" ] && quartet_env+="Environment=${role_upper}_MODEL=$m_val"$'\n'
-  [ -n "$p_val" ] && quartet_env+="Environment=${role_upper}_PROVIDER=$p_val"$'\n'
+  if [ -n "$h_val" ]; then
+    quartet_env+="Environment=${role_upper}_HARNESS=$h_val"$'\n'
+    launchd_env+="    <key>${role_upper}_HARNESS</key><string>$(xml_escape "$h_val")</string>"$'\n'
+  fi
+  if [ -n "$m_val" ]; then
+    quartet_env+="Environment=${role_upper}_MODEL=$m_val"$'\n'
+    launchd_env+="    <key>${role_upper}_MODEL</key><string>$(xml_escape "$m_val")</string>"$'\n'
+  fi
+  if [ -n "$p_val" ]; then
+    quartet_env+="Environment=${role_upper}_PROVIDER=$p_val"$'\n'
+    launchd_env+="    <key>${role_upper}_PROVIDER</key><string>$(xml_escape "$p_val")</string>"$'\n'
+  fi
 
-  # The release role (tests + build) wants network; the others don't.
-  unit_extras=""
-  [ "$role" = "release" ] && unit_extras=$'Wants=network-online.target\nAfter=network-online.target\n'
-
-  service_content="[Unit]
+  if [ "$SCHEDULER" = "systemd" ]; then
+    # The release role (tests + build) wants network; the others don't.
+    unit_extras=""
+    [ "$role" = "release" ] && unit_extras=$'Wants=network-online.target\nAfter=network-online.target\n'
+    service_content="[Unit]
 Description=$desc
 ${unit_extras}
 [Service]
@@ -732,18 +901,69 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 "
-  write_or_show "$service_path" "$service_content"
-  write_or_show "$timer_path"   "$timer_content"
+    write_or_show "$service_path" "$service_content"
+    write_or_show "$timer_path" "$timer_content"
+  else
+    schedule_xml="$(launchd_schedule_xml "$schedule")" || exit $?
+    label="$(launchd_label "$unit_base")"
+    plist_content="<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
+<plist version=\"1.0\">
+<dict>
+  <key>Label</key><string>$(xml_escape "$label")</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(xml_escape "$BASH_BIN")</string>
+    <string>$(xml_escape "$QUARTET_DIR/agents/$dir/runner.sh")</string>
+    <string>--project</string>
+    <string>$(xml_escape "$PROJECT_DIR")</string>
+    <string>--mode</string>
+    <string>$(xml_escape "$mode")</string>
+  </array>
+  <key>WorkingDirectory</key><string>$(xml_escape "$PROJECT_DIR")</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+${launchd_env}  </dict>
+$schedule_xml
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>$(xml_escape "$LAUNCHD_LOG_DIR/$unit_base.log")</string>
+  <key>StandardErrorPath</key><string>$(xml_escape "$LAUNCHD_LOG_DIR/$unit_base.err.log")</string>
+</dict>
+</plist>
+"
+    write_or_show "$plist_path" "$plist_content"
+    if [ "$DRY_RUN" = "0" ]; then
+      plutil -lint "$plist_path" >/dev/null || exit 2
+    fi
+  fi
 done
 
 if [ "$DRY_RUN" = "1" ]; then
-  echo "  would: systemctl --user daemon-reload + enable --now each timer"
+  case "$SCHEDULER" in
+    systemd) echo "  would: systemctl --user daemon-reload + enable --now each timer" ;;
+    launchd) echo "  would: launchctl bootstrap each LaunchAgent" ;;
+  esac
 else
-  systemctl --user daemon-reload
-  for role in $ROLES_LIST; do
-    display="$(role_display "$role" "$CFG_JSON")"
-    systemctl --user enable --now "${PROJECT_NAME}-${display}.timer" 2>&1 | sed 's/^/  /'
-  done
+  case "$SCHEDULER" in
+    systemd)
+      systemctl --user daemon-reload
+      for role in $ROLES_LIST; do
+        display="$(role_display "$role" "$CFG_JSON")"
+        systemctl --user enable --now "${PROJECT_NAME}-${display}.timer" 2>&1 | sed 's/^/  /'
+      done
+      ;;
+    launchd)
+      for role in $ROLES_LIST; do
+        display="$(role_display "$role" "$CFG_JSON")"
+        unit_base="${PROJECT_NAME}-${display}"
+        label="$(launchd_label "$unit_base")"
+        launchctl bootout "$LAUNCHD_DOMAIN/$label" >/dev/null 2>&1 || true
+        launchctl bootstrap "$LAUNCHD_DOMAIN" "$LAUNCHD_DIR/$unit_base.plist"
+        launchctl enable "$LAUNCHD_DOMAIN/$label" >/dev/null 2>&1 || true
+        echo "  loaded: $label"
+      done
+      ;;
+  esac
 fi
 
 # ---------- step 3: crontab conflict removal --------------------------------
@@ -985,14 +1205,28 @@ echo "==> verification"
 all_ok=1
 for role in $ROLES_LIST; do
   display="$(role_display "$role" "$CFG_JSON")"
-  unit="${PROJECT_NAME}-${display}.timer"
-  if systemctl --user is-enabled "$unit" >/dev/null 2>&1; then
-    next="$(systemctl --user list-timers "$unit" --no-pager 2>/dev/null | awk 'NR==2 {print $1, $2, $3, $4}')"
-    echo "  $unit: enabled, next=$next"
-  else
-    echo "  $unit: NOT ENABLED"
-    all_ok=0
-  fi
+  unit="${PROJECT_NAME}-${display}"
+  case "$SCHEDULER" in
+    systemd)
+      timer="$unit.timer"
+      if systemctl --user is-enabled "$timer" >/dev/null 2>&1; then
+        next="$(systemctl --user list-timers "$timer" --no-pager 2>/dev/null | awk 'NR==2 {print $1, $2, $3, $4}')"
+        echo "  $timer: enabled, next=$next"
+      else
+        echo "  $timer: NOT ENABLED"
+        all_ok=0
+      fi
+      ;;
+    launchd)
+      label="$(launchd_label "$unit")"
+      if launchctl print "$LAUNCHD_DOMAIN/$label" >/dev/null 2>&1; then
+        echo "  $label: loaded"
+      else
+        echo "  $label: NOT LOADED"
+        all_ok=0
+      fi
+      ;;
+  esac
 done
 
 remaining="$(crontab -l 2>/dev/null | grep -E "$CRON_PATTERN" || true)"
