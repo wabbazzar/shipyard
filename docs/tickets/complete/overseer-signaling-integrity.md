@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-29
 - **Owner:** wabbazzar
-- **Status:** Polished — ready for `execute-ticket`
+- **Status:** Complete — built and verified 2026-07-29
 - **Priority:** high
 - **Type:** bugfix
 - **Estimated Points:** 8 (3 phases, each capped at 5)
@@ -510,24 +510,24 @@ commit.
 
 ## Roll-up Definition of Done
 
-- [ ] The original valid unhealthy Overseer fixture records/notifies
+- [x] The original valid unhealthy Overseer fixture records/notifies
   `status=problem` and returns success.
-- [ ] A disposable oneshot running that fixture finishes healthy.
-- [ ] A judge/parse/internal `status=error` still returns nonzero and fails the
+- [x] A disposable oneshot running that fixture finishes healthy.
+- [x] A judge/parse/internal `status=error` still returns nonzero and fails the
   disposable oneshot.
-- [ ] Fleet mode remains healthy for findings-only runs and nonzero when any
+- [x] Fleet mode remains healthy for findings-only runs and nonzero when any
   assessment has an internal error.
-- [ ] No `SuccessExitStatus=1`-only masking fix is used.
-- [ ] The original fake-HTTP-success last-process fixture exits with the
+- [x] No `SuccessExitStatus=1`-only masking fix is used.
+- [x] The original fake-HTTP-success last-process fixture exits with the
   transport result and leaves nonempty, parseable `notify.send` and body JSONL.
-- [ ] BopBop registration is successful-send-only, best-effort, bounded, and
+- [x] BopBop registration is successful-send-only, best-effort, bounded, and
   unable to alter the main Signal transport exit result.
-- [ ] Regression tests were captured red before implementation and green after.
-- [ ] Ice is clean; Shipyard has no new unexplained changes and its three
+- [x] Regression tests were captured red before implementation and green after.
+- [x] Ice is clean; Shipyard has no new unexplained changes and its three
   unrelated pre-existing paths are untouched.
-- [ ] No real Signal/model/network call, historical data rewrite, dashboard
+- [x] No real Signal/model/network call, historical data rewrite, dashboard
   edit, or routine-message expansion occurred.
-- [ ] The ticket is moved to `docs/tickets/complete/` only after both repos and
+- [x] The ticket is moved to `docs/tickets/complete/` only after both repos and
   live disposable proofs are complete.
 
 ## Dependencies
@@ -617,17 +617,25 @@ commit.
 
 ### Phase 3 — Cross-repo live proof and ticket graduation
 
-- plan:
-- builder:
-- independent audit verdict:
-- cross-repo focused/full gates / counts / exits:
-- final transient unit/process query:
-- final Shipyard status (including preserved unrelated paths):
-- final Ice status:
-- Shipyard commit:
-- Ice commit:
-- status header + lifecycle check / exit:
-- graduation commit:
+- plan: Independently inspect both commits, then have the orchestrator rerun
+  focused, full, hygiene, and supervised-live surfaces before graduation.
+- builder: subagent `signal_noise_audit` performed a read-only audit;
+  orchestrator personally repeated every required gate.
+- independent audit verdict: pass with no deviations; Shipyard
+  `8a42948fe802`, Ice `47b8c85aa4de`.
+- cross-repo focused/full gates / counts / exits: Shipyard focused 16/16 and
+  full 439/439; Ice focused 6/6 and full 43/43; all rc=0. Shipyard syntax,
+  compile, leak, deck freshness, and deck completeness all rc=0.
+- final transient unit/process query: `overseer-test-*` and
+  `notify-audit-test-*` empty; no relevant pytest/fake-HTTP process remained.
+- final Shipyard status (including preserved unrelated paths): clean; the
+  concurrent Release paths landed separately in `187e345`.
+- final Ice status: clean on `master`, one commit ahead before push.
+- Shipyard commit: `8a42948 fix(overseer): treat findings as successful runs`
+- Ice commit: `47b8c85 fix: make notification audits teardown-safe`
+- status header + lifecycle check / exit: Complete; deterministic graduate and
+  post-move lifecycle check both rc=0.
+- graduation commit: this final ticket-only commit.
 
 Run with: `execute-ticket docs/tickets/pending/overseer-signaling-integrity.md`.
 There are no open decisions; the parent explicitly owns the transition from
