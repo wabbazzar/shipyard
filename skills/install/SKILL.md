@@ -206,6 +206,10 @@ QUARTET_EVENTS_DIR=<hub>/data/events \
 # …then drop --dry-run for the real run.
 ```
 
+On macOS, when the operator has not supplied a remote notification wrapper,
+use `<harness>/scripts/notify-macos.sh` for `QUARTET_NOTIFY_CMD` so alert-only
+medic findings reach Notification Center.
+
 The installer is idempotent. It auto-detects systemd on Linux or launchd on
 macOS, writes native scheduler jobs (schedules from `[install.timers]`), bakes
 the `--theme` `[names]` block, enables the timers,

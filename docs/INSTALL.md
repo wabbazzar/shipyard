@@ -33,6 +33,10 @@ the installer. User scheduler jobs start with a near-empty environment, so an
 unbaked knob silently mutes notifications and disables the ops scan — the
 installer propagates each set knob into every job it writes.
 
+For a local macOS fleet, use `<harness>/scripts/notify-macos.sh` as
+`QUARTET_NOTIFY_CMD`; it delivers through Notification Center without an
+additional service.
+
 ### L2 — theme
 **Where:** `--theme` flag → `[names]` block in `.agents/config.toml`.
 **What:** display names for units, svc strings, and notification voice:

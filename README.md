@@ -350,7 +350,7 @@ install.sh does not manage at all) must set it by hand:
 
 | var | effect |
 |---|---|
-| `QUARTET_NOTIFY_CMD` | notification command taking `(title, body)` — Signal wrapper, `ntfy`, email; unset = silent (events still log) |
+| `QUARTET_NOTIFY_CMD` | notification command taking `(title, body)` — Signal wrapper, `ntfy`, email, or `scripts/notify-macos.sh` for Notification Center; unset = silent (events still log) |
 | `QUARTET_EVENTS_DIR` | where the JSONL event stream lands (default `data/events/` in this repo) |
 | `QUARTET_OPS_JSON` | optional systemd/cron state snapshot for medic's scan |
 | `QUARTET_SCRIBE_PRE_HOOK` | optional executable run before each scribe pass |
