@@ -586,20 +586,34 @@ commit.
 - unrelated-path preservation proof: the concurrent Release change landed
   separately as `187e345`; Phase 1 diff contains only its two owned files plus
   this Ledger update.
-- commit: pending
+- commit: `8a42948 fix(overseer): treat findings as successful runs`
 
 ### Phase 2 — Make Ice notification audits last-process durable
 
-- plan:
-- builder:
-- RED command / failing assertion / exit:
-- pre-change capture guard / exit:
+- plan: Make the two required audit sinks synchronous and give the optional
+  BopBop child an explicit joined, timeout-bounded, non-authoritative lifetime.
+- builder: subagent `signal_noise_audit`; orchestrator independently inspected
+  the diff and reran focused and full Ice tests.
+- RED command / failing assertion / exit: new-contract filter rc=1, five
+  failures; HTTP 200/201 reached `/v2/send` and main/systemd status 0, but both
+  transient-unit cases observed zero durable `notify.send` records.
+- pre-change capture guard / exit: existing refused-transport capture test
+  1/1, rc=0.
 - focused GREEN command / count / exit:
-- HTTP requests + main exit + notify.send/body JSONL:
-- BopBop failure/timeout evidence:
+  `.venv/bin/python -m pytest scripts/tests/test_notify_capture.py -q`
+  6/6, rc=0; notifier/log-event syntax rc=0.
+- HTTP requests + main exit + notify.send/body JSONL: one loopback `/v2/send`
+  per case; HTTP field 200/201 with `status=ok`; main/systemd rc=0; one
+  parseable event and one parseable body containing `Title\nBody`.
+- BopBop failure/timeout evidence: one successful-send-only registration was
+  attempted; a five-second fake was cut off by curl's existing three-second
+  bound; Signal rc remained 0 and both audits persisted.
 - disposable-unit and child cleanup proof:
-- full Ice gates / counts / exits:
-- commit:
+  `list-units 'notify-audit-test-*'` empty; fake servers joined and process
+  groups cleaned in test finalizers.
+- full Ice gates / counts / exits: `.venv/bin/python -m pytest scripts/tests
+  -q` 43/43, rc=0; syntax and scoped diff checks rc=0; clean after commit.
+- commit: `47b8c85 fix: make notification audits teardown-safe`
 
 ### Phase 3 — Cross-repo live proof and ticket graduation
 
