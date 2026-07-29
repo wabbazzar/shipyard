@@ -237,7 +237,7 @@ can_merge = false
 Default `--agents` is `build,release,medic,scribe` — design is opt-in. The
 installer bakes the `[names]` theme block into the config, writes
 `~/.config/systemd/user/<project>-<display>.{service,timer}` and enables the
-timers, symlinks the seven shared skills into `<project>/.claude/skills/`,
+timers, symlinks the eight shared skills into `<project>/.claude/skills/`,
 writes a root `AGENTS.md` skill bridge for Codex and Hermes when absent, drops
 `skills/gates.md.template` into `.agents/gates.md` (never clobbering an
 existing gate file), removes legacy cron launchers that would race the timers
