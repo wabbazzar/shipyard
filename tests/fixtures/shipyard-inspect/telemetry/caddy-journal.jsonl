@@ -1,0 +1,3 @@
+{"__REALTIME_TIMESTAMP":"1785319200000000","MESSAGE":"{\"request\":{\"host\":\"Example.TEST:443\",\"uri\":\"/callback?debug=fixture#part\"}}"}
+{"__REALTIME_TIMESTAMP":"1785326400000000","MESSAGE":"{\"request\":{\"host\":\"example.test\",\"uri\":\"/excluded?debug=end\"}}"}
+{"__REALTIME_TIMESTAMP":"1785319200000000","MESSAGE":"{\"request\":{\"host\":\"foreign.test\",\"uri\":\"/foreign?debug=ignored\"}}"}

@@ -2013,4 +2013,71 @@ execute-ticket docs/tickets/pending/shipyard-fleet-inspect-cli.md
   rc=0 in 2.67s, reported eight projects/31 roles and the observed Ice timer
   faults plus four `mg` doctor findings; all state/evidence references
   resolved, and unit/config hashes were unchanged before/after.
-- Commit: this phase's `feat: inspect fleet posture and unit health` commit.
+- Commit: `8c7e0cd` (`feat: inspect fleet posture and unit health`).
+
+### Phase 3 Ledger — telemetry, attribution, pressure
+
+- Plan: implement strict bounded telemetry and data-quality adapters, exact
+  per-project event-root attribution, current incident state, Caddy/FYI/usage,
+  six independent budget consumers and gate operands, without body/query leaks
+  or fail/abort conflation.
+- `builder: subagent (1 agent)`.
+- RED: the literal ticket filter exited 1 with 0/11 passing; its regex selects
+  only 11 of the 21 locked named cases. An expanded all-named filter exited 1
+  with 0/21 passing, proving every new adapter assertion failed before the
+  implementation.
+- Focused GREEN: literal ticket filter 11/11, expanded all-named filter 21/21,
+  full inspect 39/39, and related status+doctor 29/29, all rc=0. Python
+  compilation and `git diff --check` were rc=0.
+- Common Per-Commit Gate: orchestrator full Bats 478/478, rc=0;
+  syntax/compile rc=0; leak-check clean; deck freshness/completeness rc=0;
+  lifecycle rc=0; `git diff --check` clean. An earlier delegated broad run was
+  intentionally interrupted after 212 passes; its rc=130 was SIGINT, not a
+  product-test failure.
+- Observable evidence/deviations: malformed event coverage was
+  `total=4,valid=1,invalid=2,out_of_window=1`; current incident state was
+  `total=3,valid=1,invalid=2`; Caddy was
+  `total=2,valid=1,invalid=0,out_of_window=1`. Job status operands remained
+  distinct (`fail=1,abort=1,partial=1,other=1`), and one incident deduped from
+  08:00 through 10:00 with latest event `medic.incident.resolved`. Six
+  attributed/gate token operands were exactly `[10,15,20,25,30,40]` against
+  six 100-token caps; fraction 0.5 remained `no_fault_observed`, while 1.0
+  became `degraded_observed`. Persistent telemetry fixture hashes and each
+  rolling-test input hash set were byte-identical before/after. Strict stubs
+  recorded zero systemd mutations/rejections, network/model calls, runner
+  invocations, notifications, and rejected journal commands; Caddy used the
+  one exact local read command. Bodies, incident summary, fragments, and query
+  values were absent from output. The only deviation is the locked literal
+  filter's incomplete title selection, covered by the expanded 21-case run.
+- Performance repair: the orchestrator's real-fleet run was RED at 18.01s
+  against the 15.0s ceiling. The new cache-isolation assertion failed 0/1
+  before implementation, then passed 1/1. Canonical event-file paths now
+  resolve once per physical file; strict gate-quality counts and jq-compatible
+  gate operands use inspection-local caches whose keys retain exact path and,
+  for exact-service consumers, service stem. Design/shoulder cache keys remain
+  service-insensitive exactly like their locked filters. No persistent cache
+  or jq-semantic replacement was introduced.
+- Performance GREEN: expanded named cases 21/21 and full inspect 39/39, both
+  rc=0; fixture hashes remained identical. Three real read-only
+  `inspect --json` runs were 10.93s, 10.97s, and 10.77s, each rc=0 and each
+  below 15.0s. No performance-repair deviation.
+- Semantic repair RED/GREEN: the seven strengthened existing named cases
+  failed 0/7 before repair and passed 7/7 after it; expanded named cases were
+  21/21 and full inspect 39/39, all rc=0, with identical fixture hashes and
+  clean compile/diff checks.
+- Semantic repair evidence: unrouted design use, foreign shared-root use,
+  divergent shoulder-root use, and a zero cap all degraded with nonempty
+  state reasons resolving to existing config/manifest/watcher evidence.
+  Gate invalid counts were `[2,2,2,2,2,2]` across the six consumers for a
+  missing service plus an invalid routed numeric operand. Invalid persisted
+  `http_status` produced null evidence operand and partial incident coverage.
+  Build-role records carrying design deferrals remained routed evidence but
+  did not increment design/open-cap pressure. Foreign-host Caddy records were
+  filtered before counting, preserving `total=valid+invalid+out_of_window`,
+  while malformed probe URL coverage was `partial/malformed` without a journal
+  call. Post-repair live runs were 11.46s, 11.35s, and 11.32s, each rc=0 and
+  below 15.0s. Independent re-audit passed all six findings. Orchestrator live
+  proof was 11.14s, found no duplicate/unresolved evidence IDs, and every
+  coverage row satisfied exact terminal-counter arithmetic. No
+  semantic-repair deviation.
+- Commit: this phase's `feat: inspect fleet telemetry and pressure` commit.

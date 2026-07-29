@@ -1,0 +1,28 @@
+[
+  {
+    "incident_id": "inc-current",
+    "source": "http",
+    "surface": "web",
+    "detected_at": "2026-07-28T08:00:00Z",
+    "probe": "web",
+    "http_status": 503,
+    "restart_action": "none",
+    "outcome": "open",
+    "summary": "SYNTHETIC_REDACT_ME"
+  },
+  {
+    "incident_id": "inc-no-time",
+    "source": "process",
+    "surface": "worker",
+    "ts": "not-a-time",
+    "outcome": "observed"
+  },
+  {
+    "incident_id": "inc-bad-status",
+    "source": "http",
+    "surface": "api",
+    "detected_at": "2026-07-28T09:00:00Z",
+    "http_status": "503",
+    "outcome": "open"
+  }
+]

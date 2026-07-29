@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -16,6 +18,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 ROLE_ORDER = ("design", "build", "release", "medic", "scribe")
@@ -64,6 +67,15 @@ ASCII_NONNEGATIVE_INTEGER = re.compile(r"^[0-9]+$")
 RFC3339 = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
     r"(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+)
+ASCII_DECIMAL_MICROSECONDS = re.compile(r"^[0-9]+$")
+CONSUMERS = (
+    ("design_runner", "design"),
+    ("build_runner", "build"),
+    ("release_runner", "release"),
+    ("release_shoulder_critic", "release"),
+    ("medic_runner", "medic"),
+    ("scribe_runner", "scribe"),
 )
 
 
@@ -271,6 +283,10 @@ def _coverage(
     total: int = 0,
     valid: int = 0,
     invalid: int = 0,
+    out_of_window: int = 0,
+    unattributed: int = 0,
+    ambiguous: int = 0,
+    newest_ts: str | None = None,
     limitations: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
@@ -278,13 +294,13 @@ def _coverage(
         "source": source,
         "state": state,
         "reason": reason,
-        "newest_ts": None,
+        "newest_ts": newest_ts,
         "records_total": total,
         "records_valid": valid,
         "records_invalid": invalid,
-        "records_out_of_window": 0,
-        "records_unattributed": 0,
-        "records_ambiguous": 0,
+        "records_out_of_window": out_of_window,
+        "records_unattributed": unattributed,
+        "records_ambiguous": ambiguous,
         "limitations": limitations or [],
     }
 
@@ -907,17 +923,1605 @@ def _doctor_adapter(
     return doctor, coverage, evidence
 
 
-def _pressure_skeleton(roles: list[str]) -> dict[str, Any]:
-    consumers = (
-        ("design_runner", "design"),
-        ("build_runner", "build"),
-        ("release_runner", "release"),
-        ("release_shoulder_critic", "release"),
-        ("medic_runner", "medic"),
-        ("scribe_runner", "scribe"),
+class _StrictJSONError(ValueError):
+    """A JSON record violates schema-v1 parsing rules."""
+
+
+def _reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _StrictJSONError(f"duplicate key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_constant(value: str) -> Any:
+    raise _StrictJSONError(f"non-finite constant: {value}")
+
+
+def _strict_json(text: str) -> Any:
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_pairs,
+            parse_constant=_reject_constant,
+        )
+    except (json.JSONDecodeError, _StrictJSONError) as exc:
+        raise _StrictJSONError(str(exc)) from exc
+
+
+def _strict_object(text: str) -> dict[str, Any]:
+    value = _strict_json(text)
+    if not isinstance(value, dict):
+        raise _StrictJSONError("record is not an object")
+    return value
+
+
+def _parse_rfc3339(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not RFC3339.fullmatch(value):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _finite_nonnegative(value: Any) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return value
+
+
+def _string(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _nonempty_string(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _path_without_query(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    parsed = urlsplit(value)
+    path = parsed.path
+    return path or "/"
+
+
+def _file_evidence(
+    *,
+    source_kind: str,
+    project_id: str,
+    source: str,
+    kind: str,
+    observed_at: str | None,
+    source_ref: str,
+    recurrence_key: str | None,
+    fields: dict[str, Any],
+    limitations: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": _evidence_id(source_kind, source_ref, fields),
+        "project_id": project_id,
+        "source": source,
+        "claim_kind": "fact",
+        "kind": kind,
+        "observed_at": observed_at,
+        "source_ref": source_ref,
+        "recurrence_key": recurrence_key,
+        "fields": fields,
+        "limitations": limitations or [],
+    }
+
+
+def _dated_paths(root: Path, start: datetime, end: datetime) -> list[Path]:
+    day = start.date()
+    final_day = end.date()
+    paths: list[Path] = []
+    while day <= final_day:
+        paths.append(root / f"{day.isoformat()}.jsonl")
+        day += timedelta(days=1)
+    return paths
+
+
+def _jq_gate_filter(consumer: str) -> str:
+    if consumer == "design_runner":
+        return (
+            '[.[] | select((.event // "") | startswith("design.")) | '
+            "(.tokens // 0)] | add // 0"
+        )
+    if consumer == "release_shoulder_critic":
+        return (
+            '[.[] | select(.event=="release.critique") | '
+            "(.tokens // 0)] | add // 0"
+        )
+    return (
+        '[.[] | select(.svc==$svc and .event=="job.end") | '
+        "(.tokens // 0)] | add // 0"
     )
+
+
+def compute_gate_operand(path: str | Path, consumer: str, svc: str) -> int | None:
+    """Reproduce the runners' two-stage jq budget operand without shell source."""
+    target = Path(path)
+    if not target.is_file():
+        return 0
+    jq = shutil.which("jq")
+    if jq is None:
+        return None
+    try:
+        raw = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return 0
+    first = subprocess.run(
+        [jq, "-R", "fromjson?"],
+        input=raw,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if first.returncode != 0:
+        return 0
+    argv = [jq, "-s"]
+    if consumer not in {"design_runner", "release_shoulder_critic"}:
+        argv.extend(["--arg", "svc", svc])
+    argv.append(_jq_gate_filter(consumer))
+    second = subprocess.run(
+        argv,
+        input=first.stdout,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if second.returncode != 0:
+        return 0
+    normalized = second.stdout.rstrip("\n")
+    if not ASCII_NONNEGATIVE_INTEGER.fullmatch(normalized):
+        return 0
+    return int(normalized, 10)
+
+
+def _cached_gate_operand(
+    path: str | Path,
+    consumer: str,
+    svc: str,
+    cache: dict[tuple[str, str, str], int | None],
+) -> int | None:
+    selector = (
+        consumer
+        if consumer in {"design_runner", "release_shoulder_critic"}
+        else "exact_service"
+    )
+    service_key = "" if selector != "exact_service" else svc
+    key = (str(Path(path)), selector, service_key)
+    if key not in cache:
+        cache[key] = compute_gate_operand(path, consumer, svc)
+    return cache[key]
+
+
+def _strict_gate_invalid_count(path: Path) -> tuple[int | None, bool]:
+    if not path.is_file():
+        return 0, False
+    invalid = 0
+    parser_difference = False
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return 0, False
+    for line in lines:
+        try:
+            record = _strict_object(line)
+        except _StrictJSONError:
+            invalid += 1
+            try:
+                json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                pass
+            else:
+                parser_difference = True
+            continue
+        role = _string(record.get("role"))
+        if role not in ROLE_ORDER:
+            role = "design"
+        route = _event_route(record, role)
+        if (
+            _parse_rfc3339(record.get("ts")) is None
+            or _nonempty_string(record.get("svc")) is None
+            or (route is not None and route[3])
+        ):
+            invalid += 1
+            parser_difference = True
+    return invalid, parser_difference
+
+
+def _cached_strict_gate_invalid_count(
+    path: str | Path,
+    cache: dict[str, tuple[int | None, bool]],
+) -> tuple[int | None, bool]:
+    key = str(Path(path))
+    if key not in cache:
+        cache[key] = _strict_gate_invalid_count(Path(path))
+    return cache[key]
+
+
+def _event_route(
+    record: dict[str, Any], role: str
+) -> tuple[str, dict[str, Any], str | None, bool] | None:
+    event = _string(record.get("event"))
+    reason = _string(record.get("reason"))
+    numeric_invalid = False
+
+    def number(key: str) -> int | float | None:
+        nonlocal numeric_invalid
+        value = record.get(key)
+        parsed = _finite_nonnegative(value)
+        if key in record and parsed is None:
+            numeric_invalid = True
+        return parsed
+
+    if event == "job.end":
+        status = _string(record.get("status"))
+        fields = {
+            "svc": _string(record.get("svc")),
+            "role": role,
+            "status": status,
+            "reason": reason,
+            "mode": _string(record.get("mode")),
+            "duration_s": number("duration_s"),
+            "tokens": number("tokens"),
+        }
+        return (
+            "job_end",
+            fields,
+            f"job:{role}:{status or ''}:{reason or ''}",
+            numeric_invalid,
+        )
+
+    incident_events = {
+        "medic.incident",
+        "medic.incident.detected",
+        "medic.incident.classified",
+        "medic.incident.frozen",
+        "medic.incident.resolved",
+        "medic.incident.repair_proposed",
+        "medic.action.restart",
+    }
+    if event in incident_events:
+        incident_id = _nonempty_string(record.get("incident_id"))
+        fields = {
+            "incident_id": incident_id,
+            "event": event,
+            "source": _string(record.get("source")),
+            "surface": _string(record.get("surface")),
+            "probe": _string(record.get("probe")),
+            "http_status": number("http_status"),
+            "restart_action": _string(record.get("restart_action")),
+            "outcome": _string(record.get("outcome")),
+            "summary_present": bool(
+                isinstance(record.get("summary"), str) and record["summary"]
+            ),
+        }
+        return "incident_event", fields, None, numeric_invalid or incident_id is None
+
+    critique_events = {
+        "release.critique",
+        "release.critique.delivery_failed",
+        "release.critique.spawn_failed",
+    }
+    if event in critique_events:
+        fields = {
+            "svc": _string(record.get("svc")),
+            "event": event,
+            "source": _string(record.get("source")),
+            "block": number("block"),
+            "warn": number("warn"),
+            "note": number("note"),
+            "files": number("files"),
+            "tokens": number("tokens"),
+            "reason": reason,
+            "attempts": number("attempts"),
+        }
+        return (
+            "critique_event",
+            fields,
+            f"critic:{event}:{reason or ''}",
+            numeric_invalid,
+        )
+
+    if event == "design.proposal.opened" or (
+        event == "design.proposal.skipped" and reason == "open_cap"
+    ):
+        fields = {
+            "svc": _string(record.get("svc")),
+            "event": event,
+            "proposal_id": _string(record.get("proposal_id")),
+            "type": _string(record.get("type")),
+            "severity": _string(record.get("severity")),
+            "reason": reason,
+            "tokens": number("tokens"),
+            "tokens_used": number("tokens_used"),
+            "budget": number("budget"),
+            "open": number("open"),
+            "cap": number("cap"),
+        }
+        return "design_control_event", fields, None, numeric_invalid
+
+    budget_routes = {
+        ("design.proposal.skipped", "budget", None): "design_runner",
+        ("build.skipped", "budget", None): "build_runner",
+        ("release.skipped", "budget", None): "release_runner",
+        (
+            "release.critique.skipped",
+            "budget",
+            "shoulder",
+        ): "release_shoulder_critic",
+        ("medic.skipped", "budget", None): "medic_runner",
+        ("scribe.skipped", "budget", None): "scribe_runner",
+    }
+    source = _string(record.get("source"))
+    consumer = budget_routes.get((event, reason, source))
+    if consumer is None and event != "release.critique.skipped":
+        consumer = budget_routes.get((event, reason, None))
+    if consumer is not None:
+        fields = {
+            "svc": _string(record.get("svc")),
+            "event": event,
+            "source": source,
+            "consumer": consumer,
+            "reason": reason,
+            "tokens_used": number("tokens_used"),
+            "budget": number("budget"),
+        }
+        return "budget_control_event", fields, None, numeric_invalid
+    return None
+
+
+def _scan_root(
+    root: Path, window_start: datetime, started_at: datetime
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "root": root,
+        "state": "available",
+        "reason": "ok",
+        "records": [],
+        "strict_invalid": 0,
+    }
+    if not root.is_dir():
+        result.update({"state": "unavailable", "reason": "missing"})
+        return result
+    for path in _dated_paths(root, window_start, started_at):
+        if not path.exists():
+            continue
+        if not path.is_file():
+            result.update({"state": "unavailable", "reason": "unreadable"})
+            continue
+        try:
+            canonical_path = str(path.resolve(strict=True))
+            with path.open("r", encoding="utf-8") as handle:
+                for line_number, physical in enumerate(handle, 1):
+                    text = physical.rstrip("\r\n")
+                    item: dict[str, Any] = {
+                        "path": canonical_path,
+                        "line": line_number,
+                        "object": None,
+                        "timestamp": None,
+                        "observed_at": None,
+                        "strict_error": False,
+                    }
+                    try:
+                        record = _strict_object(text)
+                    except _StrictJSONError:
+                        item["strict_error"] = True
+                        result["strict_invalid"] += 1
+                    else:
+                        item["object"] = record
+                        timestamp = _parse_rfc3339(record.get("ts"))
+                        item["timestamp"] = timestamp
+                        if timestamp is not None:
+                            item["observed_at"] = _format_utc(timestamp)
+                    result["records"].append(item)
+        except (OSError, UnicodeError):
+            result.update({"state": "unavailable", "reason": "unreadable"})
+    return result
+
+
+def _resolve_project_event_roots(
+    by_project: dict[str, list[dict[str, Any]]], core_root: str
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    fallback = str((Path(core_root) / "data" / "events").resolve(strict=False))
+    for project_path, manifests in by_project.items():
+        explicit = sorted(
+            {
+                manifest["event_root_env"]
+                for manifest in manifests
+                if manifest["event_root_env"]
+            }
+        )
+        if len(explicit) > 1:
+            result[project_path] = {
+                "state": "mixed",
+                "root": None,
+                "explicit": True,
+            }
+        elif explicit:
+            result[project_path] = {
+                "state": "runner_manifest",
+                "root": explicit[0],
+                "explicit": True,
+            }
+        else:
+            result[project_path] = {
+                "state": "core_fallback",
+                "root": fallback,
+                "explicit": False,
+            }
+    return result
+
+
+def _apply_event_evidence(
+    project: dict[str, Any],
+    item: dict[str, Any],
+    route: tuple[str, dict[str, Any], str | None, bool],
+    role: str,
+) -> tuple[dict[str, Any], bool, bool]:
+    kind, fields, recurrence, invalid = route
+    source_ref = f"file:{item['path']}:line:{item['line']}"
+    evidence = _file_evidence(
+        source_kind="event",
+        project_id=project["project_id"],
+        source="events",
+        kind=kind,
+        observed_at=item["observed_at"],
+        source_ref=source_ref,
+        recurrence_key=recurrence,
+        fields=fields,
+    )
+    fault = False
+    pressure = False
+    if kind == "job_end":
+        status = fields["status"]
+        bucket = status if status in {
+            "ok", "fail", "partial", "abort", "skipped"
+        } else "other"
+        project["jobs"]["by_status"][bucket] += 1
+        if fields["reason"]:
+            project["jobs"]["by_reason"][fields["reason"]] = (
+                project["jobs"]["by_reason"].get(fields["reason"], 0) + 1
+            )
+        project["jobs"]["last_end_at"] = max(
+            filter(
+                None,
+                [project["jobs"]["last_end_at"], item["observed_at"]],
+            ),
+            default=None,
+        )
+        if fields["duration_s"] is not None:
+            project.setdefault("_durations", []).append(fields["duration_s"])
+        project["jobs"]["evidence_ids"].append(evidence["id"])
+        fault = status in {"fail", "partial"}
+    elif kind == "incident_event":
+        incident_id = fields["incident_id"]
+        if incident_id is not None:
+            incidents = project.setdefault("_incident_map", {})
+            aggregate = incidents.setdefault(
+                incident_id,
+                {
+                    "incident_id": incident_id,
+                    "first_observed_at": item["observed_at"],
+                    "last_observed_at": item["observed_at"],
+                    "latest_event": fields["event"],
+                    "probe": fields["probe"],
+                    "http_status": fields["http_status"],
+                    "restart_action": fields["restart_action"],
+                    "outcome": fields["outcome"],
+                    "summary_present": fields["summary_present"],
+                    "evidence_ids": [],
+                },
+            )
+            if item["observed_at"] is not None:
+                if (
+                    aggregate["first_observed_at"] is None
+                    or item["observed_at"] < aggregate["first_observed_at"]
+                ):
+                    aggregate["first_observed_at"] = item["observed_at"]
+                if (
+                    aggregate["last_observed_at"] is None
+                    or item["observed_at"] >= aggregate["last_observed_at"]
+                ):
+                    aggregate.update(
+                        {
+                            "last_observed_at": item["observed_at"],
+                            "latest_event": fields["event"],
+                            "probe": fields["probe"],
+                            "http_status": fields["http_status"],
+                            "restart_action": fields["restart_action"],
+                            "outcome": fields["outcome"],
+                        }
+                    )
+            aggregate["summary_present"] = (
+                aggregate["summary_present"] or fields["summary_present"]
+            )
+            aggregate["evidence_ids"].append(evidence["id"])
+        fault = (
+            fields["event"] == "medic.action.restart"
+            and fields["outcome"] in {"fail", "failed"}
+        )
+    elif kind == "critique_event":
+        for key in ("block", "warn", "note", "files", "tokens"):
+            if fields[key] is not None:
+                project["critiques"][key] += fields[key]
+        event = fields["event"]
+        if event == "release.critique.spawn_failed":
+            project["critiques"]["spawn_failed"] += 1
+            fault = True
+        elif event == "release.critique.delivery_failed":
+            project["critiques"]["delivery_failed"] += 1
+            fault = True
+        project["critiques"]["evidence_ids"].append(evidence["id"])
+    elif kind == "design_control_event":
+        if role == "design" and fields["event"] == "design.proposal.skipped":
+            project["pressure"]["open_cap_deferrals"] = (
+                (project["pressure"]["open_cap_deferrals"] or 0) + 1
+            )
+            pressure = True
+            project["pressure"]["evidence_ids"].append(evidence["id"])
+    elif kind == "budget_control_event":
+        consumer = fields["consumer"]
+        expected_role = {
+            "design_runner": "design",
+            "build_runner": "build",
+            "release_runner": "release",
+            "release_shoulder_critic": "release",
+            "medic_runner": "medic",
+            "scribe_runner": "scribe",
+        }[consumer]
+        if role == expected_role:
+            current = project["pressure"]["budget_deferrals_by_consumer"][consumer]
+            project["pressure"]["budget_deferrals_by_consumer"][consumer] = (
+                (current or 0) + 1
+            )
+            if consumer == "release_shoulder_critic":
+                project["critiques"]["budget_deferred"] += 1
+            project["pressure"]["evidence_ids"].append(evidence["id"])
+            pressure = True
+    return evidence, fault, pressure
+
+
+def _finish_event_aggregates(project: dict[str, Any]) -> None:
+    durations = sorted(project.pop("_durations", []))
+    if durations:
+        project["jobs"]["duration_seconds_p50"] = durations[
+            math.ceil(0.50 * len(durations)) - 1
+        ]
+        project["jobs"]["duration_seconds_p95"] = durations[
+            math.ceil(0.95 * len(durations)) - 1
+        ]
+    incidents = list(project.pop("_incident_map", {}).values())
+    for incident in incidents:
+        incident["evidence_ids"] = sorted(set(incident["evidence_ids"]))
+    incidents.sort(key=lambda item: item["incident_id"])
+    incidents.sort(
+        key=lambda item: (
+            item["last_observed_at"] is not None,
+            item["last_observed_at"] or "",
+        ),
+        reverse=True,
+    )
+    project["incidents"] = incidents
+
+
+def _events_adapter(
+    *,
+    fleet: list[dict[str, Any]],
+    by_project: dict[str, list[dict[str, Any]]],
+    core_root: str,
+    window_start: datetime,
+    started_at: datetime,
+) -> tuple[
+    dict[tuple[str | None, str], dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, list[str]],
+    dict[str, list[str]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+]:
+    project_by_path = {project["project_path"]: project for project in fleet}
+    roots = _resolve_project_event_roots(by_project, core_root)
+    usable_roots = sorted(
+        {info["root"] for info in roots.values() if info["root"] is not None}
+    )
+    scans = {
+        root: _scan_root(Path(root), window_start, started_at)
+        for root in usable_roots
+    }
+    root_projects: dict[str, list[str]] = defaultdict(list)
+    for project_path, info in roots.items():
+        if info["root"] is not None:
+            root_projects[info["root"]].append(project_path)
+
+    counters: dict[str, dict[str, int]] = {
+        project_path: {
+            "total": 0,
+            "valid": 0,
+            "invalid": 0,
+            "out": 0,
+        }
+        for project_path in by_project
+    }
+    newest: dict[str, str | None] = {path: None for path in by_project}
+    global_counts = {
+        "total": 0,
+        "valid": 0,
+        "invalid": 0,
+        "out": 0,
+        "unattributed": 0,
+        "ambiguous": 0,
+    }
+    evidence: list[dict[str, Any]] = []
+    fault_ids: dict[str, list[str]] = defaultdict(list)
+    pressure_ids: dict[str, list[str]] = defaultdict(list)
+    attributed: dict[str, list[dict[str, Any]]] = defaultdict(list)
+
+    for root, scan in scans.items():
+        candidates = root_projects[root]
+        stem_roles: dict[str, list[tuple[str, str]]] = defaultdict(list)
+        for project_path in candidates:
+            for manifest in by_project[project_path]:
+                stem_roles[manifest["service_stem"]].append(
+                    (project_path, manifest["role"])
+                )
+        for item in scan["records"]:
+            global_counts["total"] += 1
+            if item["strict_error"]:
+                global_counts["invalid"] += 1
+                continue
+            record = item["object"]
+            timestamp = item["timestamp"]
+            svc = _nonempty_string(record.get("svc"))
+            if timestamp is None or svc is None:
+                global_counts["invalid"] += 1
+                continue
+            matches = stem_roles.get(svc, [])
+            if not (window_start <= timestamp < started_at):
+                global_counts["out"] += 1
+                if len(matches) == 1:
+                    project_path, _ = matches[0]
+                    counters[project_path]["total"] += 1
+                    counters[project_path]["out"] += 1
+                continue
+            if not matches:
+                global_counts["unattributed"] += 1
+                continue
+            if len(matches) > 1:
+                global_counts["ambiguous"] += 1
+                continue
+            project_path, role = matches[0]
+            project = project_by_path[project_path]
+            global_counts["valid"] += 1
+            counters[project_path]["total"] += 1
+            attributed[project_path].append(item)
+            newest[project_path] = max(
+                filter(None, [newest[project_path], item["observed_at"]]),
+                default=None,
+            )
+            route = _event_route(record, role)
+            if route is None:
+                counters[project_path]["valid"] += 1
+                continue
+            event_evidence, fault, pressure = _apply_event_evidence(
+                project, item, route, role
+            )
+            evidence.append(event_evidence)
+            if route[3]:
+                counters[project_path]["invalid"] += 1
+            else:
+                counters[project_path]["valid"] += 1
+            if fault:
+                fault_ids[project["project_id"]].append(event_evidence["id"])
+            if pressure:
+                pressure_ids[project["project_id"]].append(event_evidence["id"])
+
+    coverage: dict[tuple[str | None, str], dict[str, Any]] = {}
+    any_missing = False
+    any_malformed = False
+    for project_path, info in roots.items():
+        project = project_by_path[project_path]
+        project_id = project["project_id"]
+        if info["state"] == "mixed":
+            coverage[(project_id, "events")] = _coverage(
+                project_id, "events", "error", "mixed"
+            )
+            continue
+        scan = scans[info["root"]]
+        any_missing = any_missing or scan["state"] != "available"
+        any_malformed = any_malformed or scan["strict_invalid"] > 0
+        if scan["state"] != "available":
+            state, reason = "unavailable", scan["reason"]
+        elif scan["strict_invalid"] or counters[project_path]["invalid"]:
+            state, reason = "partial", "malformed"
+        else:
+            state, reason = "available", "ok"
+        count = counters[project_path]
+        coverage[(project_id, "events")] = _coverage(
+            project_id,
+            "events",
+            state,
+            reason,
+            total=count["total"],
+            valid=count["valid"],
+            invalid=count["invalid"],
+            out_of_window=count["out"],
+            newest_ts=newest[project_path],
+        )
+        _finish_event_aggregates(project)
+    if any_missing:
+        global_state, global_reason = "unavailable", "missing"
+    elif any_malformed or global_counts["invalid"]:
+        global_state, global_reason = "partial", "malformed"
+    else:
+        global_state, global_reason = "available", "ok"
+    coverage[(None, "events_attribution")] = _coverage(
+        None,
+        "events_attribution",
+        global_state,
+        global_reason,
+        total=global_counts["total"],
+        valid=global_counts["valid"],
+        invalid=global_counts["invalid"],
+        out_of_window=global_counts["out"],
+        unattributed=global_counts["unattributed"],
+        ambiguous=global_counts["ambiguous"],
+    )
+    return coverage, evidence, fault_ids, pressure_ids, roots, attributed
+
+
+def _bounded_jsonl_adapter(
+    *,
+    project: dict[str, Any],
+    source: str,
+    paths: list[Path],
+    window_start: datetime,
+    started_at: datetime,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if not paths:
+        return (
+            _coverage(
+                project["project_id"], source, "unavailable", "missing"
+            ),
+            [],
+        )
+    total = valid = invalid = out = 0
+    newest: str | None = None
+    evidence: list[dict[str, Any]] = []
+    unreadable = False
+    for path in sorted(paths):
+        try:
+            canonical = str(path.resolve(strict=True))
+            with path.open("r", encoding="utf-8") as handle:
+                for line_number, physical in enumerate(handle, 1):
+                    total += 1
+                    try:
+                        record = _strict_object(physical.rstrip("\r\n"))
+                    except _StrictJSONError:
+                        invalid += 1
+                        continue
+                    timestamp = _parse_rfc3339(record.get("ts"))
+                    if timestamp is None:
+                        invalid += 1
+                        continue
+                    if not (window_start <= timestamp < started_at):
+                        out += 1
+                        continue
+                    observed_at = _format_utc(timestamp)
+                    newest = max(
+                        filter(None, [newest, observed_at]), default=None
+                    )
+                    if source == "fyi":
+                        fields = {
+                            "id": _string(record.get("id")),
+                            "ts": observed_at,
+                            "text_present": bool(
+                                isinstance(record.get("text"), str)
+                                and record["text"]
+                            ),
+                        }
+                        kind = "fyi_request"
+                    else:
+                        fields = {
+                            "ts": observed_at,
+                            "action": _string(record.get("action")),
+                            "path": _path_without_query(record.get("path")),
+                        }
+                        kind = "usage_beacon"
+                    source_ref = f"file:{canonical}:line:{line_number}"
+                    evidence.append(
+                        _file_evidence(
+                            source_kind=source,
+                            project_id=project["project_id"],
+                            source=source,
+                            kind=kind,
+                            observed_at=observed_at,
+                            source_ref=source_ref,
+                            recurrence_key=None,
+                            fields=fields,
+                        )
+                    )
+                    valid += 1
+        except (OSError, UnicodeError):
+            unreadable = True
+    if unreadable:
+        state, reason = "unavailable", "unreadable"
+    elif invalid:
+        state, reason = "partial", "malformed"
+    else:
+        state, reason = "available", "ok"
+    return (
+        _coverage(
+            project["project_id"],
+            source,
+            state,
+            reason,
+            total=total,
+            valid=valid,
+            invalid=invalid,
+            out_of_window=out,
+            newest_ts=newest,
+        ),
+        evidence,
+    )
+
+
+def _fyi_usage_adapters(
+    project: dict[str, Any], window_start: datetime, started_at: datetime
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    project_path = Path(project["project_path"])
+    fyi_path = project_path / "data" / "fyi-requests.jsonl"
+    usage_dir = project_path / "data" / "usage"
+    fyi_paths = [fyi_path] if fyi_path.is_file() else []
+    try:
+        usage_paths = sorted(usage_dir.glob("*.jsonl")) if usage_dir.is_dir() else []
+    except OSError:
+        usage_paths = []
+    fyi_coverage, fyi_evidence = _bounded_jsonl_adapter(
+        project=project,
+        source="fyi",
+        paths=fyi_paths,
+        window_start=window_start,
+        started_at=started_at,
+    )
+    usage_coverage, usage_evidence = _bounded_jsonl_adapter(
+        project=project,
+        source="usage",
+        paths=usage_paths,
+        window_start=window_start,
+        started_at=started_at,
+    )
+    return (
+        {"fyi": fyi_coverage, "usage": usage_coverage},
+        fyi_evidence + usage_evidence,
+    )
+
+
+def _incident_state_adapter(
+    project: dict[str, Any], config: dict[str, Any] | None
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    result_dir = "tmp"
+    if isinstance(config, dict):
+        paths = config.get("paths")
+        if isinstance(paths, dict):
+            configured = paths.get("result_dir")
+            if isinstance(configured, str) and configured:
+                result_dir = configured
+    path = Path(project["project_path"]) / result_dir / "medic-incidents-current.json"
+    if not path.exists():
+        return (
+            _coverage(
+                project["project_id"],
+                "incident_state",
+                "unavailable",
+                "missing",
+            ),
+            [],
+        )
+    try:
+        canonical = str(path.resolve(strict=True))
+        value = _strict_json(path.read_text(encoding="utf-8"))
+        if not isinstance(value, list):
+            raise _StrictJSONError("current incident state is not an array")
+    except PermissionError:
+        return (
+            _coverage(
+                project["project_id"],
+                "incident_state",
+                "unavailable",
+                "unreadable",
+                total=1,
+                invalid=1,
+            ),
+            [],
+        )
+    except (OSError, UnicodeError):
+        return (
+            _coverage(
+                project["project_id"],
+                "incident_state",
+                "unavailable",
+                "unreadable",
+                total=1,
+                invalid=1,
+            ),
+            [],
+        )
+    except _StrictJSONError:
+        return (
+            _coverage(
+                project["project_id"],
+                "incident_state",
+                "error",
+                "malformed",
+                total=1,
+                invalid=1,
+            ),
+            [],
+        )
+
+    valid = invalid = 0
+    newest: str | None = None
+    evidence: list[dict[str, Any]] = []
+    incident_map = {item["incident_id"]: item for item in project["incidents"]}
+    for index, record in enumerate(value):
+        if not isinstance(record, dict):
+            invalid += 1
+            continue
+        incident_id = _nonempty_string(record.get("incident_id"))
+        if incident_id is None:
+            invalid += 1
+            continue
+        timestamp = _parse_rfc3339(
+            record.get("detected_at")
+            if record.get("detected_at") is not None
+            else record.get("ts")
+        )
+        observed_at = _format_utc(timestamp) if timestamp is not None else None
+        http_status = _finite_nonnegative(record.get("http_status"))
+        numeric_invalid = (
+            "http_status" in record and http_status is None
+        )
+        if observed_at is None or numeric_invalid:
+            invalid += 1
+        else:
+            valid += 1
+            newest = max(
+                filter(None, [newest, observed_at]), default=None
+            )
+        summary_present = bool(
+            isinstance(record.get("summary"), str) and record["summary"]
+        )
+        fields = {
+            "incident_id": incident_id,
+            "source": _string(record.get("source")),
+            "surface": _string(record.get("surface")),
+            "detected_at": observed_at,
+            "probe": _string(record.get("probe")),
+            "http_status": http_status,
+            "restart_action": _string(record.get("restart_action")),
+            "outcome": _string(record.get("outcome")),
+            "summary_present": summary_present,
+        }
+        source_ref = f"file:{canonical}:pointer:/{index}"
+        item = _file_evidence(
+            source_kind="incident_state",
+            project_id=project["project_id"],
+            source="incident_state",
+            kind="incident_state",
+            observed_at=observed_at,
+            source_ref=source_ref,
+            recurrence_key=None,
+            fields=fields,
+            limitations=["incident_summary_redacted"] if summary_present else [],
+        )
+        evidence.append(item)
+        if summary_present:
+            project["limitations"].append("incident_summary_redacted")
+        aggregate = incident_map.setdefault(
+            incident_id,
+            {
+                "incident_id": incident_id,
+                "first_observed_at": observed_at,
+                "last_observed_at": observed_at,
+                "latest_event": "incident_state",
+                "probe": fields["probe"],
+                "http_status": fields["http_status"],
+                "restart_action": fields["restart_action"],
+                "outcome": fields["outcome"],
+                "summary_present": summary_present,
+                "evidence_ids": [],
+            },
+        )
+        if observed_at is not None and (
+            aggregate["last_observed_at"] is None
+            or observed_at >= aggregate["last_observed_at"]
+        ):
+            aggregate.update(
+                {
+                    "last_observed_at": observed_at,
+                    "latest_event": "incident_state",
+                    "probe": fields["probe"],
+                    "http_status": fields["http_status"],
+                    "restart_action": fields["restart_action"],
+                    "outcome": fields["outcome"],
+                }
+            )
+        if observed_at is not None and (
+            aggregate["first_observed_at"] is None
+            or observed_at < aggregate["first_observed_at"]
+        ):
+            aggregate["first_observed_at"] = observed_at
+        aggregate["summary_present"] = (
+            aggregate["summary_present"] or summary_present
+        )
+        aggregate["evidence_ids"].append(item["id"])
+    for incident in incident_map.values():
+        incident["evidence_ids"] = sorted(set(incident["evidence_ids"]))
+    incidents = list(incident_map.values())
+    incidents.sort(key=lambda item: item["incident_id"])
+    incidents.sort(
+        key=lambda item: (
+            item["last_observed_at"] is not None,
+            item["last_observed_at"] or "",
+        ),
+        reverse=True,
+    )
+    project["incidents"] = incidents
+    state, reason = ("partial", "malformed") if invalid else ("available", "ok")
+    return (
+        _coverage(
+            project["project_id"],
+            "incident_state",
+            state,
+            reason,
+            total=len(value),
+            valid=valid,
+            invalid=invalid,
+            newest_ts=newest,
+        ),
+        evidence,
+    )
+
+
+def _caddy_domain(
+    config: dict[str, Any] | None,
+) -> tuple[str | None, bool]:
+    if not isinstance(config, dict):
+        return None, False
+    medic = config.get("medic")
+    if not isinstance(medic, dict):
+        return None, False
+    checks = medic.get("checks")
+    if not isinstance(checks, list):
+        return None, False
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        url = check.get("url")
+        if not isinstance(url, str):
+            continue
+        try:
+            parsed = urlsplit(url)
+            scheme = parsed.scheme.lower()
+            hostname = parsed.hostname
+        except ValueError:
+            if url.lower().startswith(("http://", "https://")):
+                return None, True
+            continue
+        if scheme in {"http", "https"}:
+            if hostname:
+                return hostname.lower(), False
+            return None, True
+    return None, False
+
+
+def _caddy_adapter(
+    project: dict[str, Any],
+    config: dict[str, Any] | None,
+    window_start: datetime,
+    started_at: datetime,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    domain, malformed_domain = _caddy_domain(config)
+    if malformed_domain:
+        return (
+            _coverage(
+                project["project_id"],
+                "caddy",
+                "partial",
+                "malformed",
+                total=1,
+                invalid=1,
+            ),
+            [],
+        )
+    if domain is None:
+        return (
+            _coverage(
+                project["project_id"],
+                "caddy",
+                "not_applicable",
+                "no_domain",
+            ),
+            [],
+        )
+    argv = [
+        "journalctl",
+        "--user",
+        "-u",
+        "caddy",
+        "-o",
+        "json",
+        "--no-pager",
+        "--output-fields=__REALTIME_TIMESTAMP,MESSAGE",
+        "--since",
+        _format_utc(window_start),
+        "--until",
+        _format_utc(started_at),
+    ]
+    try:
+        result = subprocess.run(
+            argv, text=True, capture_output=True, check=False
+        )
+    except FileNotFoundError:
+        return (
+            _coverage(
+                project["project_id"],
+                "caddy",
+                "unavailable",
+                "missing_dependency",
+            ),
+            [],
+        )
+    if result.returncode != 0:
+        return (
+            _coverage(
+                project["project_id"],
+                "caddy",
+                "error",
+                "command_failed",
+            ),
+            [],
+        )
+    total = valid = invalid = out = 0
+    newest: str | None = None
+    counts: dict[str, int] = defaultdict(int)
+    for physical in result.stdout.splitlines():
+        try:
+            outer = _strict_object(physical)
+        except _StrictJSONError:
+            total += 1
+            invalid += 1
+            continue
+        micros = outer.get("__REALTIME_TIMESTAMP")
+        if not isinstance(micros, str) or not ASCII_DECIMAL_MICROSECONDS.fullmatch(
+            micros
+        ):
+            total += 1
+            invalid += 1
+            continue
+        try:
+            timestamp = datetime.fromtimestamp(
+                int(micros, 10) / 1_000_000, tz=timezone.utc
+            )
+        except (OverflowError, OSError, ValueError):
+            total += 1
+            invalid += 1
+            continue
+        message = outer.get("MESSAGE")
+        if not isinstance(message, str):
+            total += 1
+            invalid += 1
+            continue
+        try:
+            inner = _strict_object(message)
+        except _StrictJSONError:
+            total += 1
+            invalid += 1
+            continue
+        request = inner.get("request")
+        if not isinstance(request, dict):
+            total += 1
+            invalid += 1
+            continue
+        host = request.get("host")
+        uri = request.get("uri")
+        if not isinstance(host, str) or not isinstance(uri, str):
+            total += 1
+            invalid += 1
+            continue
+        try:
+            hostname = urlsplit(f"//{host}").hostname
+        except ValueError:
+            total += 1
+            invalid += 1
+            continue
+        if hostname is None or hostname.lower() != domain:
+            continue
+        total += 1
+        if not (window_start <= timestamp < started_at):
+            out += 1
+            continue
+        path = _path_without_query(uri)
+        if path is None:
+            invalid += 1
+            continue
+        counts[path] += 1
+        valid += 1
+        observed = _format_utc(timestamp)
+        newest = max(filter(None, [newest, observed]), default=None)
+    evidence: list[dict[str, Any]] = []
+    for path, requests in sorted(counts.items()):
+        suffix = hashlib.sha256(
+            (domain + "\0" + path).encode("utf-8")
+        ).hexdigest()[:12]
+        fields = {
+            "domain": domain,
+            "path": path,
+            "requests": requests,
+            "window_start_at": _format_utc(window_start),
+            "window_end_at": _format_utc(started_at),
+        }
+        source_ref = f"command:caddy:{project['project_id']}:path:{suffix}"
+        evidence.append(
+            _file_evidence(
+                source_kind="caddy",
+                project_id=project["project_id"],
+                source="caddy",
+                kind="caddy_path_count",
+                observed_at=newest,
+                source_ref=source_ref,
+                recurrence_key=None,
+                fields=fields,
+            )
+        )
+    state, reason = ("partial", "malformed") if invalid else ("available", "ok")
+    return (
+        _coverage(
+            project["project_id"],
+            "caddy",
+            state,
+            reason,
+            total=total,
+            valid=valid,
+            invalid=invalid,
+            out_of_window=out,
+            newest_ts=newest,
+        ),
+        evidence,
+    )
+
+
+def _watcher_event_root(
+    lines: list[str], project_path: str
+) -> tuple[str, str | None]:
+    values: list[str] = []
+    for line in lines:
+        if not line.startswith("Environment="):
+            continue
+        try:
+            tokens = shlex.split(line[len("Environment=") :], posix=True)
+        except ValueError:
+            return "unknown", None
+        for token in tokens:
+            if token.startswith("QUARTET_EVENTS_DIR="):
+                values.append(token.split("=", 1)[1])
+    if len(values) != 1 or "%" in values[0]:
+        return "unknown", None
+    root = _canonical(values[0], strict=False)
+    if root is None:
+        return "unknown", None
+    project_default = str(
+        (Path(project_path) / "data" / "events").resolve(strict=False)
+    )
+    return (
+        ("project_default" if root == project_default else "configured"),
+        root,
+    )
+
+
+def _discover_shoulders(
+    *,
+    core_root: str,
+    unit_dir: str,
+    fleet: list[dict[str, Any]],
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+    expected_runner = _canonical(
+        Path(core_root) / "agents" / "release" / "critic-watch.sh",
+        strict=True,
+    )
+    by_path: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    evidence: list[dict[str, Any]] = []
+    if expected_runner is None:
+        return by_path, evidence
+    projects = {project["project_path"]: project for project in fleet}
+    try:
+        paths = sorted(Path(unit_dir).glob("*.service"))
+    except OSError:
+        return by_path, evidence
+    for path in paths:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            continue
+        working_raw = _single_value(lines, "WorkingDirectory=")
+        exec_raw = _single_value(lines, "ExecStart=")
+        if working_raw is None or exec_raw is None:
+            continue
+        try:
+            tokens = shlex.split(exec_raw, posix=True)
+        except ValueError:
+            continue
+        if (
+            len(tokens) != 4
+            or tokens[0] != "/bin/bash"
+            or tokens[2] != "--project"
+        ):
+            continue
+        runner = _canonical(tokens[1], strict=True)
+        project_path = _canonical(tokens[3], strict=True)
+        working = _canonical(working_raw, strict=True)
+        service_path = _canonical(path, strict=True)
+        if (
+            runner != expected_runner
+            or project_path is None
+            or project_path not in projects
+            or working != project_path
+            or service_path is None
+        ):
+            continue
+        root_state, root = _watcher_event_root(lines, project_path)
+        watcher = {
+            "service_stem": path.stem,
+            "project_path": project_path,
+            "working_directory": working,
+            "runner": runner,
+            "event_root_state": root_state,
+            "event_root": root,
+            "service_path": service_path,
+        }
+        by_path[project_path].append(watcher)
+        fields = {
+            "service_stem": watcher["service_stem"],
+            "project_path": project_path,
+            "working_directory": working,
+            "runner": runner,
+            "event_root_state": root_state,
+            "event_root": root,
+        }
+        source_ref = f"file:{service_path}:pointer:/"
+        item = _file_evidence(
+            source_kind="manifest",
+            project_id=projects[project_path]["project_id"],
+            source="manifest",
+            kind="shoulder_watcher_identity",
+            observed_at=None,
+            source_ref=source_ref,
+            recurrence_key=None,
+            fields=fields,
+        )
+        watcher["evidence_id"] = item["id"]
+        evidence.append(item)
+    return by_path, evidence
+
+
+def _consumer_matches(
+    consumer: str, record: dict[str, Any], svc: str
+) -> bool:
+    if _string(record.get("svc")) != svc:
+        return False
+    event = _string(record.get("event"))
+    if consumer == "design_runner":
+        return event is not None and event.startswith("design.")
+    if consumer == "release_shoulder_critic":
+        return event == "release.critique"
+    return event == "job.end"
+
+
+def _pressure_adapter(
+    *,
+    project: dict[str, Any],
+    manifests: list[dict[str, Any]],
+    root_info: dict[str, Any],
+    attributed: list[dict[str, Any]],
+    events_coverage: dict[str, Any],
+    config: dict[str, Any] | None,
+    watchers: list[dict[str, Any]],
+    started_at: datetime,
+    event_evidence: list[dict[str, Any]],
+    gate_cache: dict[tuple[str, str, str], int | None],
+    strict_cache: dict[str, tuple[int | None, bool]],
+) -> list[str]:
+    usable_events = events_coverage["state"] in {"available", "partial"}
+    manifest_by_role: dict[str, dict[str, Any]] = {}
+    for manifest in manifests:
+        manifest_by_role.setdefault(manifest["role"], manifest)
+    pressure = project["pressure"]
+    event_ids_by_ref = {
+        item["source_ref"]: item["id"]
+        for item in event_evidence
+        if item["project_id"] == project["project_id"]
+    }
+    config_ids = list(project["safety"]["evidence_ids"])
+    manifest_ids = {
+        unit["role"]: unit["evidence_ids"][0]
+        for unit in project["units"]
+        if unit["evidence_ids"]
+    }
+    project_provenance_ids = sorted(
+        set(config_ids + list(manifest_ids.values()))
+    )
+    pressure_fault_ids: list[str] = []
+    day_start = started_at.replace(hour=0, minute=0, second=0, microsecond=0)
+    shoulder_table = config.get("shoulder") if isinstance(config, dict) else None
+    shoulder_auto = (
+        shoulder_table.get("auto_wire", False)
+        if isinstance(shoulder_table, dict)
+        else False
+    )
+    if not isinstance(shoulder_auto, bool):
+        shoulder_auto = False
+    shoulder_env = Path(project["project_path"]) / ".agents" / "shoulder.env"
+    shoulder_applicable = bool(watchers) or shoulder_env.is_file() or shoulder_auto
+    if shoulder_applicable:
+        shoulder_state = "applicable"
+    elif config is None:
+        shoulder_state = "unknown"
+    else:
+        shoulder_state = "not_applicable"
+
+    for index, (consumer_name, role) in enumerate(CONSUMERS):
+        consumer = pressure["daily_budget_consumers"][index]
+        if consumer_name == "release_shoulder_critic":
+            applicability = shoulder_state
+        else:
+            applicability = (
+                "applicable"
+                if role in manifest_by_role
+                else "not_applicable"
+            )
+        consumer["applicability"] = applicability
+        if applicability != "applicable":
+            consumer["configured_daily_budget"] = None
+            pressure["budget_deferrals_by_consumer"][consumer_name] = None
+            continue
+        if usable_events:
+            current = pressure["budget_deferrals_by_consumer"][consumer_name]
+            pressure["budget_deferrals_by_consumer"][consumer_name] = current or 0
+        else:
+            pressure["budget_deferrals_by_consumer"][consumer_name] = None
+
+        svc = (
+            manifest_by_role[role]["service_stem"]
+            if role in manifest_by_role
+            else ""
+        )
+        provenance_ids = list(config_ids)
+        if role in manifest_ids:
+            provenance_ids.append(manifest_ids[role])
+        if consumer_name == "release_shoulder_critic":
+            provenance_ids.extend(
+                watcher["evidence_id"]
+                for watcher in watchers
+                if watcher.get("evidence_id")
+            )
+        provenance_ids = sorted(set(provenance_ids))
+        if consumer_name == "release_shoulder_critic":
+            consumer["gate_scope"] = "unscoped_event_root"
+            if len(watchers) == 1:
+                gate_state = watchers[0]["event_root_state"]
+                gate_root = watchers[0]["event_root"]
+            else:
+                gate_state, gate_root = "unknown", None
+        elif consumer_name == "design_runner":
+            consumer["gate_scope"] = "unscoped_event_root"
+            gate_state = root_info["state"]
+            gate_root = root_info["root"]
+        else:
+            consumer["gate_scope"] = "exact_service"
+            if root_info["state"] == "mixed":
+                gate_state, gate_root = "mixed", None
+            else:
+                manifest_root = manifest_by_role[role]["event_root_env"]
+                if manifest_root is None:
+                    gate_state, gate_root = "unset_sentinel", "/nonexistent"
+                else:
+                    gate_state, gate_root = "runner_manifest", manifest_root
+        consumer["event_root_state"] = gate_state
+        consumer["event_root"] = gate_root
+
+        attributed_total: int | float | None = 0 if usable_events else None
+        relevant_ids: list[str] = []
+        if attributed_total is not None:
+            for item in attributed:
+                timestamp = item["timestamp"]
+                record = item["object"]
+                if not (day_start <= timestamp < started_at):
+                    continue
+                if not _consumer_matches(consumer_name, record, svc):
+                    continue
+                tokens = _finite_nonnegative(record.get("tokens"))
+                if tokens is not None:
+                    attributed_total += tokens
+                source_ref = f"file:{item['path']}:line:{item['line']}"
+                if source_ref in event_ids_by_ref:
+                    relevant_ids.append(event_ids_by_ref[source_ref])
+        consumer["attributed_tokens_today"] = attributed_total
+        if gate_root is None:
+            gate_tokens = None
+            gate_invalid = None
+        else:
+            gate_path = Path(gate_root) / f"{started_at.date().isoformat()}.jsonl"
+            gate_tokens = _cached_gate_operand(
+                gate_path, consumer_name, svc, gate_cache
+            )
+            gate_invalid, parser_difference = _cached_strict_gate_invalid_count(
+                gate_path, strict_cache
+            )
+            if gate_tokens is None:
+                project["limitations"].append(
+                    "gate_operand_missing_dependency"
+                )
+            if parser_difference:
+                project["limitations"].append("gate_parser_differs_from_v1")
+        consumer["gate_tokens_today"] = gate_tokens
+        consumer["gate_records_invalid_today"] = gate_invalid
+        cap = consumer["configured_daily_budget"]
+        if isinstance(cap, int) and cap > 0 and attributed_total is not None:
+            consumer["attributed_fraction_today"] = attributed_total / cap
+        if isinstance(cap, int) and cap > 0 and gate_tokens is not None:
+            consumer["gate_fraction_today"] = gate_tokens / cap
+        consumer["evidence_ids"] = sorted(set(relevant_ids))
+        pressure["evidence_ids"].extend(relevant_ids)
+        if (
+            isinstance(cap, int)
+            and cap >= 0
+            and gate_tokens is not None
+            and gate_tokens >= cap
+        ):
+            reason_ids = sorted(set(relevant_ids)) or provenance_ids
+            consumer["evidence_ids"] = sorted(
+                set(consumer["evidence_ids"] + reason_ids)
+            )
+            pressure["evidence_ids"].extend(reason_ids)
+            pressure_fault_ids.extend(reason_ids)
+
+    if usable_events and "design" in manifest_by_role:
+        pressure["open_cap_deferrals"] = pressure["open_cap_deferrals"] or 0
+    else:
+        pressure["open_cap_deferrals"] = None
+    deferral_observed = any(
+        value is not None and value > 0
+        for value in pressure["budget_deferrals_by_consumer"].values()
+    )
+    open_cap_observed = (
+        pressure["open_cap_deferrals"] is not None
+        and pressure["open_cap_deferrals"] > 0
+    )
+    if deferral_observed or open_cap_observed:
+        reason_ids = sorted(set(pressure["evidence_ids"])) or project_provenance_ids
+        pressure["evidence_ids"].extend(reason_ids)
+        pressure_fault_ids.extend(reason_ids)
+    pressure["evidence_ids"] = sorted(set(pressure["evidence_ids"]))
+    project["limitations"] = sorted(set(project["limitations"]))
+    return sorted(set(pressure_fault_ids))
+
+
+def _pressure_skeleton(roles: list[str]) -> dict[str, Any]:
     daily = []
-    for consumer, role in consumers:
+    for consumer, role in CONSUMERS:
         if consumer == "release_shoulder_critic":
             applicability = "unknown"
         else:
@@ -1044,6 +2648,7 @@ def _fleet_record(
 def build_document(
     *, core_root: str, unit_dir: str, started_at: datetime, days: int
 ) -> dict[str, Any] | None:
+    window_start_at = started_at - timedelta(days=days)
     manifests = discover_manifests(core_root, unit_dir)
     if not manifests:
         return None
@@ -1106,8 +2711,11 @@ def build_document(
     }
 
     direct_fault_ids: dict[str, list[str]] = defaultdict(list)
+    exact_pressure_ids: dict[str, list[str]] = defaultdict(list)
+    config_by_path: dict[str, dict[str, Any] | None] = {}
     for project in fleet:
         config, config_coverage, config_evidence = _load_config_adapter(project)
+        config_by_path[project["project_path"]] = config
         coverage_by_key[(project["project_id"], "config")] = config_coverage
         if config_evidence is not None:
             evidence.append(config_evidence)
@@ -1130,6 +2738,74 @@ def build_document(
                 finding["evidence_id"] for finding in doctor["findings"]
             )
         project["limitations"] = [LATER_PHASE_LIMITATION]
+
+    (
+        events_coverage,
+        events_evidence,
+        events_faults,
+        events_pressure,
+        event_roots,
+        attributed_events,
+    ) = _events_adapter(
+        fleet=fleet,
+        by_project=by_project,
+        core_root=core_root,
+        window_start=window_start_at,
+        started_at=started_at,
+    )
+    coverage_by_key.update(events_coverage)
+    evidence.extend(events_evidence)
+    for project_id, ids in events_faults.items():
+        direct_fault_ids[project_id].extend(ids)
+    for project_id, ids in events_pressure.items():
+        exact_pressure_ids[project_id].extend(ids)
+
+    watchers_by_path, watcher_evidence = _discover_shoulders(
+        core_root=core_root,
+        unit_dir=unit_dir,
+        fleet=fleet,
+    )
+    evidence.extend(watcher_evidence)
+
+    gate_operand_cache: dict[tuple[str, str, str], int | None] = {}
+    strict_gate_cache: dict[str, tuple[int | None, bool]] = {}
+    for project in fleet:
+        project_path = project["project_path"]
+        project_id = project["project_id"]
+        config = config_by_path[project_path]
+        auxiliary_coverage, auxiliary_evidence = _fyi_usage_adapters(
+            project, window_start_at, started_at
+        )
+        for source, record in auxiliary_coverage.items():
+            coverage_by_key[(project_id, source)] = record
+        evidence.extend(auxiliary_evidence)
+
+        incident_coverage, incident_evidence = _incident_state_adapter(
+            project, config
+        )
+        coverage_by_key[(project_id, "incident_state")] = incident_coverage
+        evidence.extend(incident_evidence)
+
+        caddy_coverage, caddy_evidence = _caddy_adapter(
+            project, config, window_start_at, started_at
+        )
+        coverage_by_key[(project_id, "caddy")] = caddy_coverage
+        evidence.extend(caddy_evidence)
+
+        pressure_ids = _pressure_adapter(
+            project=project,
+            manifests=by_project[project_path],
+            root_info=event_roots[project_path],
+            attributed=attributed_events[project_path],
+            events_coverage=coverage_by_key[(project_id, "events")],
+            config=config,
+            watchers=watchers_by_path[project_path],
+            started_at=started_at,
+            event_evidence=events_evidence,
+            gate_cache=gate_operand_cache,
+            strict_cache=strict_gate_cache,
+        )
+        exact_pressure_ids[project_id].extend(pressure_ids)
 
     coverage = list(coverage_by_key.values())
     source_rank = {source: index for index, source in enumerate(COVERAGE_ORDER)}
@@ -1156,12 +2832,13 @@ def build_document(
             for source in ("manifest", "config", "systemd", "doctor", "events")
             if coverage_by_key[(project_id, source)]["state"] != "available"
         ]
-        if primary_gaps:
+        pressure_reasons = sorted(set(exact_pressure_ids[project_id]))
+        if primary_gaps or pressure_reasons:
             gap_evidence = [_coverage_evidence(record) for record in primary_gaps]
             evidence.extend(gap_evidence)
             project["state"] = "degraded_observed"
             project["state_reason_ids"] = sorted(
-                item["id"] for item in gap_evidence
+                {item["id"] for item in gap_evidence} | set(pressure_reasons)
             )
         else:
             project["state"] = "no_fault_observed"
@@ -1170,7 +2847,7 @@ def build_document(
     evidence.sort(key=lambda item: item["id"])
 
     started_text = _format_utc(started_at)
-    window_start = _format_utc(started_at - timedelta(days=days))
+    window_start = _format_utc(window_start_at)
     role_count = sum(len(project["roles"]) for project in fleet)
     state_counts = {
         "fault_observed": 0,
