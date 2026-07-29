@@ -6,6 +6,7 @@
 #
 #   status                     what's installed here (units, project blocks,
 #                              --doctor). Read-only. Exit 3 if nothing installed.
+#   inspect [--json] [--days N] fleet observation for this Shipyard core.
 #   add-specialist <subsystem> scaffold + wire the domain-specialist archetype.
 #   learn "<lesson>"           route a lesson through the ADAPTING.md taxonomy.
 #
@@ -23,12 +24,28 @@ SUBCMD=""
 PROJECT_DIR="$PWD"
 OPT_TO=""       # learn: explicit route (project|generic|install)
 OPT_ROLE=""     # learn --to project: which .agents/<role>.md
+OPT_JSON=0      # inspect: emit the schema-v1 source document
+OPT_DAYS="7"    # inspect: rolling UTC window in days
+OPT_PROJECT_SET=0
+OPT_TO_SET=0
+OPT_ROLE_SET=0
+OPT_DAYS_SET=0
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --project) PROJECT_DIR="$2"; shift 2 ;;
-    --to)      OPT_TO="$2";      shift 2 ;;
-    --role)    OPT_ROLE="$2";    shift 2 ;;
+    --project)
+      [ $# -ge 2 ] || { echo "shipyard: --project requires a value" >&2; exit 2; }
+      PROJECT_DIR="$2"; OPT_PROJECT_SET=1; shift 2 ;;
+    --to)
+      [ $# -ge 2 ] || { echo "shipyard: --to requires a value" >&2; exit 2; }
+      OPT_TO="$2"; OPT_TO_SET=1; shift 2 ;;
+    --role)
+      [ $# -ge 2 ] || { echo "shipyard: --role requires a value" >&2; exit 2; }
+      OPT_ROLE="$2"; OPT_ROLE_SET=1; shift 2 ;;
+    --days)
+      [ $# -ge 2 ] || { echo "shipyard: --days requires a value" >&2; exit 2; }
+      OPT_DAYS="$2"; OPT_DAYS_SET=1; shift 2 ;;
+    --json)    OPT_JSON=1; shift ;;
     -h|--help) SUBCMD="help"; shift ;;
     -*) echo "shipyard: unknown flag '$1'" >&2; exit 2 ;;
     *)
@@ -37,6 +54,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$SUBCMD" ] || SUBCMD="status"
+
+if [ "$SUBCMD" != "inspect" ] \
+  && { [ "$OPT_JSON" -eq 1 ] || [ "$OPT_DAYS_SET" -eq 1 ]; }; then
+  echo "shipyard $SUBCMD: --json/--days apply only to inspect" >&2
+  exit 2
+fi
 
 # ---- config (optional — status works on a bare dir too) --------------------
 # shellcheck disable=SC1091
@@ -60,6 +83,8 @@ usage() {
 shipyard — inspect and extend an installed crew.
 
   shipyard status                  what's installed here (default)
+  shipyard inspect [--json]        inspect this current-user Shipyard fleet
+    [--days N]                     rolling UTC window (default 7)
   shipyard add-specialist <sub>    scaffold a domain-specialist for <sub>
   shipyard learn "<lesson>"        route a lesson to the adaptation taxonomy
     [--to project|generic|install] explicit route (else keyword heuristic)
@@ -69,8 +94,36 @@ Exit: 0 ok · 2 bad invocation · 3 nothing installed.
 EOF
 }
 
+# ---- inspect ---------------------------------------------------------------
+cmd_inspect() {
+  [ "$OPT_PROJECT_SET" -eq 0 ] || {
+    echo "shipyard inspect: --project is not valid for fleet inspection" >&2
+    return 2
+  }
+  [ "$OPT_TO_SET" -eq 0 ] && [ "$OPT_ROLE_SET" -eq 0 ] || {
+    echo "shipyard inspect: --to/--role apply only to learn" >&2
+    return 2
+  }
+  [ "${#ARGS[@]}" -eq 0 ] || {
+    echo "shipyard inspect: unexpected positional argument '${ARGS[0]}'" >&2
+    return 2
+  }
+  local cmd=(
+    python3 "$QUARTET_DIR/skills/shipyard/inspect.py"
+    --core-root "$QUARTET_DIR"
+    --unit-dir "$HOME/.config/systemd/user"
+    --days "$OPT_DAYS"
+  )
+  [ "$OPT_JSON" -eq 1 ] && cmd+=(--json)
+  "${cmd[@]}"
+}
+
 # ---- status ----------------------------------------------------------------
 cmd_status() {
+  [ "$OPT_JSON" -eq 0 ] && [ "$OPT_DAYS" = "7" ] || {
+    echo "shipyard status: --json/--days apply only to inspect" >&2
+    return 2
+  }
   local unit_dir="$HOME/.config/systemd/user"
   local timers=() t
   if [ -d "$unit_dir" ]; then
@@ -329,6 +382,7 @@ cmd_learn() {
 case "$SUBCMD" in
   help)   usage; exit 0 ;;
   status) cmd_status; exit $? ;;
+  inspect) cmd_inspect; exit $? ;;
   add-specialist) cmd_add_specialist; exit $? ;;
   learn) cmd_learn; exit $? ;;
   *)

@@ -1937,3 +1937,31 @@ move, and push/publication result or explicit local-only stop.
 ```text
 execute-ticket docs/tickets/pending/shipyard-fleet-inspect-cli.md
 ```
+
+### Phase 1 Ledger — CLI, discovery, schema skeleton
+
+- Plan: add the explicit no-config `inspect` dispatch; implement exact
+  current-user/current-core manifest discovery, clock/window validation, v1
+  document skeleton, human/JSON entry points, and rc 0/2/3 while preserving
+  byte-behavior of default/status.
+- `builder: subagent (1 agent)`.
+- RED: the named discovery contract failed at its required `status == 0`
+  assertion (1/1 failed, rc 1) against the pre-change command; the independent
+  pre-edit status guard remained 6/6 green, rc 0.
+- Focused GREEN: all nine inspect cases passed, rc 0; the status guard stayed
+  6/6 green; the related status/add-specialist/learn compatibility sweep was
+  34/34 green; JSON validation, shell syntax, and Python compilation were rc 0.
+- Common Per-Commit Gate: full Bats 448/448, rc 0; syntax/compile rc 0;
+  leak-check clean; deck freshness/completeness rc 0; lifecycle rc 0;
+  `git diff --check` clean; worktree-symlink count 0.
+- Observable evidence/deviations: synthetic discovery proved two projects and
+  three unique roles; three same-project manifests deduped to two role units
+  while retaining three manifest evidence records. Live JSON and human smoke
+  both returned rc 0 with eight projects, 31 roles, and no non-manifest source
+  falsely available. Exit classes 0/2/3 were exercised. Golden SHA-256 is
+  `bfdacefad43f053d5fc0c90432a45f1bb1f94f076715a50542351f96e75c08f0`.
+  The additive catalogue golden is compared to runtime object-key shapes
+  rather than byte-for-byte because it intentionally enumerates later-phase
+  enums/nullability. Orchestrator review additionally closed inspect-option
+  leakage into other subcommands and exact explicit-option/positional rejection.
+- Commit: this phase's `feat: add fleet inspect schema skeleton` commit.

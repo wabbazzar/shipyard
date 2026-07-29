@@ -1,0 +1,485 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "inspection_started_at": "2026-07-29T12:00:00Z",
+    "window_start_at": "2026-07-22T12:00:00Z",
+    "window_end_at": "2026-07-29T12:00:00Z",
+    "window_days": 7,
+    "core_root": "/fixture/core",
+    "unit_dir": "/fixture/home/.config/systemd/user",
+    "scope": "current_user_matching_core_root",
+    "rule_version": "shipyard-inspect-v1",
+    "project_count": 1,
+    "role_count": 1,
+    "discovery_limitations": [
+      "skills_only_checkouts_excluded",
+      "byte_matching_service_spoof_indistinguishable",
+      "current_user_unit_scope_only",
+      "non_atomic_snapshot"
+    ],
+    "schema_catalog": {
+      "coverage_source": [
+        "manifest",
+        "config",
+        "systemd",
+        "doctor",
+        "events",
+        "events_attribution",
+        "fyi",
+        "usage",
+        "caddy",
+        "incident_state",
+        "proposals",
+        "decisions",
+        "overseer",
+        "delegation_claude",
+        "delegation_codex",
+        "delegation_hermes"
+      ],
+      "coverage_state": [
+        "available",
+        "partial",
+        "unavailable",
+        "error",
+        "not_applicable"
+      ],
+      "coverage_reason": [
+        "ok",
+        "missing",
+        "unreadable",
+        "malformed",
+        "missing_dependency",
+        "systemd_unavailable",
+        "unsupported",
+        "upper_bound_unsupported",
+        "not_autonomous",
+        "no_domain",
+        "no_result",
+        "stale",
+        "command_failed",
+        "mixed"
+      ],
+      "claim_kind": [
+        "fact",
+        "derived",
+        "assessment"
+      ],
+      "fleet_state": [
+        "fault_observed",
+        "degraded_observed",
+        "no_fault_observed",
+        "unknown"
+      ],
+      "timer_stale_state": [
+        "fresh",
+        "stale",
+        "unknown"
+      ],
+      "doctor_state": [
+        "clean",
+        "drift",
+        "unavailable",
+        "error"
+      ],
+      "consumer_applicability": [
+        "applicable",
+        "not_applicable",
+        "unknown"
+      ],
+      "gate_scope": [
+        "exact_service",
+        "unscoped_event_root",
+        null
+      ],
+      "event_root_state": [
+        "runner_manifest",
+        "core_fallback",
+        "unset_sentinel",
+        "configured",
+        "project_default",
+        "mixed",
+        "unknown",
+        null
+      ],
+      "config_state": [
+        "available",
+        "unavailable",
+        "error"
+      ],
+      "trunk_state": [
+        "configured",
+        "unavailable"
+      ],
+      "trunk_reason": [
+        "explicit_config",
+        "remote_resolution_not_attempted",
+        "config_unavailable"
+      ],
+      "overseer_applicability": [
+        "applicable",
+        "not_applicable",
+        "unknown"
+      ],
+      "overseer_state": [
+        "present",
+        "absent",
+        "malformed",
+        "unavailable"
+      ],
+      "overseer_reason": [
+        "ok",
+        "not_autonomous",
+        "config_unknown",
+        "no_result",
+        "malformed"
+      ],
+      "attention_kind": [
+        "open_proposal",
+        "observed_fault",
+        "install_drift",
+        "owner_decision",
+        "coverage_gap"
+      ],
+      "severity_advisory": [
+        "low",
+        "med",
+        "high",
+        null
+      ],
+      "effectiveness_state": [
+        "measured",
+        "partial",
+        "unmeasured"
+      ],
+      "target_operator": [
+        "gte",
+        "lte",
+        null
+      ],
+      "priority_category": [
+        "confirmed_failure",
+        "human_gate",
+        "recurring_failure",
+        "evidenced_opportunity",
+        "instrumentation_gap",
+        "hygiene"
+      ],
+      "priority_scope": [
+        "shipyard_core",
+        "core_candidate"
+      ],
+      "nullable_fields": [
+        "coverage.project_id",
+        "coverage.newest_ts",
+        "evidence.project_id",
+        "evidence.observed_at",
+        "evidence.recurrence_key",
+        "fleet.autonomous",
+        "unit.on_calendar",
+        "unit.unit_file_state",
+        "unit.exec_main_status",
+        "unit.last_trigger_at",
+        "unit.next_trigger_at",
+        "doctor.exit_code",
+        "jobs.last_end_at",
+        "jobs.duration_seconds_p50",
+        "jobs.duration_seconds_p95",
+        "consumer.gate_scope",
+        "consumer.event_root_state",
+        "consumer.event_root",
+        "consumer.attributed_tokens_today",
+        "consumer.gate_tokens_today",
+        "consumer.gate_records_invalid_today",
+        "consumer.configured_daily_budget",
+        "consumer.attributed_fraction_today",
+        "consumer.gate_fraction_today",
+        "pressure.open_cap_deferrals",
+        "pressure.undecided_open_proposals",
+        "pressure.configured_max_open_proposals",
+        "pressure.open_cap_remaining",
+        "safety.can_merge",
+        "safety.configured_branch",
+        "safety.trunk",
+        "overseer.healthy",
+        "overseer.status",
+        "overseer.summary",
+        "overseer.findings_count",
+        "overseer.assessed_at",
+        "attention.detected_at",
+        "attention.age_seconds",
+        "attention.severity_advisory",
+        "attention.approval_action",
+        "effectiveness.benchmark_window_days",
+        "effectiveness.target_operator",
+        "effectiveness.target_value",
+        "effectiveness.value",
+        "effectiveness.reason",
+        "priority.newest_ts"
+      ]
+    }
+  },
+  "coverage": [
+    {
+      "project_id": null,
+      "source": "events_attribution",
+      "state": "unavailable",
+      "reason": "unsupported",
+      "newest_ts": null,
+      "records_total": 0,
+      "records_valid": 0,
+      "records_invalid": 0,
+      "records_out_of_window": 0,
+      "records_unattributed": 0,
+      "records_ambiguous": 0,
+      "limitations": [
+        "synthetic_schema_catalog"
+      ]
+    },
+    {
+      "project_id": "31c3b3a51ec3",
+      "source": "manifest",
+      "state": "available",
+      "reason": "ok",
+      "newest_ts": null,
+      "records_total": 1,
+      "records_valid": 1,
+      "records_invalid": 0,
+      "records_out_of_window": 0,
+      "records_unattributed": 0,
+      "records_ambiguous": 0,
+      "limitations": []
+    }
+  ],
+  "evidence": [
+    {
+      "id": "542e6fbc274efa7cc67a",
+      "project_id": "31c3b3a51ec3",
+      "source": "manifest",
+      "claim_kind": "fact",
+      "kind": "manifest_identity",
+      "observed_at": null,
+      "source_ref": "file:/fixture/home/.config/systemd/user/example-release.service:pointer:/",
+      "recurrence_key": null,
+      "fields": {
+        "service_stem": "example-release",
+        "role": "release",
+        "project_path": "/fixture/projects/example",
+        "working_directory": "/fixture/projects/example",
+        "runner": "/fixture/core/agents/release/runner.sh",
+        "event_root_env": null
+      },
+      "limitations": []
+    }
+  ],
+  "fleet": [
+    {
+      "project_id": "31c3b3a51ec3",
+      "project_name": "example",
+      "project_path": "/fixture/projects/example",
+      "autonomous": null,
+      "state": "unknown",
+      "state_reason_ids": [],
+      "roles": [
+        "release"
+      ],
+      "units": [
+        {
+          "role": "release",
+          "display": "release",
+          "service_unit": "example-release.service",
+          "timer_unit": "example-release.timer",
+          "on_calendar": null,
+          "unit_file_state": null,
+          "timer_load_state": null,
+          "timer_active_state": null,
+          "timer_sub_state": null,
+          "timer_stale_state": "unknown",
+          "service_load_state": null,
+          "service_active_state": null,
+          "service_sub_state": null,
+          "service_result": null,
+          "exec_main_status": null,
+          "last_trigger_at": null,
+          "next_trigger_at": null,
+          "evidence_ids": [
+            "542e6fbc274efa7cc67a"
+          ]
+        }
+      ],
+      "doctor": {
+        "state": "unavailable",
+        "exit_code": null,
+        "findings": []
+      },
+      "jobs": {
+        "by_status": {
+          "ok": 0,
+          "fail": 0,
+          "partial": 0,
+          "abort": 0,
+          "skipped": 0,
+          "other": 0
+        },
+        "by_reason": {},
+        "last_end_at": null,
+        "duration_seconds_p50": null,
+        "duration_seconds_p95": null,
+        "evidence_ids": []
+      },
+      "incidents": [],
+      "critiques": {
+        "block": 0,
+        "warn": 0,
+        "note": 0,
+        "files": 0,
+        "tokens": 0,
+        "spawn_failed": 0,
+        "delivery_failed": 0,
+        "budget_deferred": 0,
+        "evidence_ids": []
+      },
+      "pressure": {
+        "budget_deferrals_by_consumer": {
+          "design_runner": null,
+          "build_runner": null,
+          "release_runner": null,
+          "release_shoulder_critic": null,
+          "medic_runner": null,
+          "scribe_runner": null
+        },
+        "open_cap_deferrals": null,
+        "daily_budget_consumers": [
+          {
+            "consumer": "release_shoulder_critic",
+            "role": "release",
+            "applicability": "unknown",
+            "gate_scope": null,
+            "event_root_state": null,
+            "event_root": null,
+            "attributed_tokens_today": null,
+            "gate_tokens_today": null,
+            "gate_records_invalid_today": null,
+            "configured_daily_budget": null,
+            "attributed_fraction_today": null,
+            "gate_fraction_today": null,
+            "evidence_ids": []
+          }
+        ],
+        "undecided_open_proposals": null,
+        "configured_max_open_proposals": null,
+        "open_cap_remaining": null,
+        "evidence_ids": []
+      },
+      "safety": {
+        "config_state": "unavailable",
+        "can_merge": null,
+        "allow_no_ci": null,
+        "forbidden_paths": [],
+        "release_verify_gate": null,
+        "configured_branch": null,
+        "trunk_state": "unavailable",
+        "trunk": null,
+        "trunk_reason": "config_unavailable",
+        "test_cmd_configured": null,
+        "typecheck_configured": null,
+        "daily_escalation_cap": null,
+        "evidence_ids": []
+      },
+      "overseer": {
+        "applicability": "unknown",
+        "state": "unavailable",
+        "reason": "config_unknown",
+        "healthy": null,
+        "status": null,
+        "summary": null,
+        "findings_count": null,
+        "assessed_at": null,
+        "evidence_ids": [],
+        "limitations": []
+      },
+      "limitations": [
+        "synthetic_schema_catalog"
+      ]
+    }
+  ],
+  "attention": [
+    {
+      "id": "att_174382981154c7c3",
+      "project_id": "31c3b3a51ec3",
+      "kind": "coverage_gap",
+      "claim_kind": "derived",
+      "title": "Synthetic coverage gap",
+      "detected_at": null,
+      "age_seconds": null,
+      "severity_advisory": null,
+      "approval_action": null,
+      "evidence_ids": [
+        "542e6fbc274efa7cc67a"
+      ],
+      "limitations": [
+        "synthetic_schema_catalog"
+      ]
+    }
+  ],
+  "effectiveness": [
+    {
+      "key": "execute_ticket_delegation_hermes",
+      "benchmark_label": "No presentation target",
+      "benchmark_window_days": null,
+      "target_operator": null,
+      "target_value": null,
+      "unit": "sessions",
+      "state": "unmeasured",
+      "value": null,
+      "components": {},
+      "evidence_ids": [],
+      "reason": "unsupported",
+      "limitations": [
+        "synthetic_schema_catalog"
+      ]
+    }
+  ],
+  "priorities": [
+    {
+      "id": "pri_d0756119651d5e1c",
+      "rank": 1,
+      "category": "instrumentation_gap",
+      "scope": "shipyard_core",
+      "claim_kind": "assessment",
+      "rule_id": "synthetic_schema_catalog_v1",
+      "title": "Synthetic schema priority",
+      "project_ids": [
+        "31c3b3a51ec3"
+      ],
+      "evidence_count": 1,
+      "newest_ts": null,
+      "evidence_ids": [
+        "542e6fbc274efa7cc67a"
+      ],
+      "operands": {},
+      "confidence_basis": "Synthetic schema coverage only.",
+      "limitations": [
+        "synthetic_schema_catalog"
+      ]
+    }
+  ],
+  "summary": {
+    "fleet_state": "unknown",
+    "project_state_counts": {
+      "fault_observed": 0,
+      "degraded_observed": 0,
+      "no_fault_observed": 0,
+      "unknown": 1
+    },
+    "attention_count": 1,
+    "effectiveness_state_counts": {
+      "measured": 0,
+      "partial": 0,
+      "unmeasured": 1
+    },
+    "priority_count": 1,
+    "top_priority_ids": [
+      "pri_d0756119651d5e1c"
+    ]
+  }
+}
