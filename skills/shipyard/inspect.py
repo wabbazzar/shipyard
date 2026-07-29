@@ -2317,6 +2317,499 @@ def _discover_shoulders(
     return by_path, evidence
 
 
+def _configured_result_path(
+    project: dict[str, Any], config: dict[str, Any]
+) -> Path:
+    paths = config.get("paths")
+    paths = paths if isinstance(paths, dict) else {}
+    result_dir = paths.get("result_dir", "tmp")
+    if isinstance(result_dir, str):
+        rendered_dir = result_dir
+    elif isinstance(result_dir, bool):
+        rendered_dir = "true" if result_dir else "false"
+    elif isinstance(result_dir, int):
+        rendered_dir = str(result_dir)
+    else:
+        raise ValueError("result_dir cannot be represented exactly")
+    names = config.get("names")
+    names = names if isinstance(names, dict) else {}
+    display = names.get("design")
+    if not isinstance(display, str) or not display:
+        display = "design"
+    filename = f"{project['project_name']}-{display}-result.json"
+    # The runner uses RESULT_DIR="$PROJECT_DIR/$RESULT_DIR_REL". Preserve that
+    # prefix even when the configured value begins with "/" and preserve an
+    # empty value as the project root.
+    result_root = Path(project["project_path"] + "/" + rendered_dir)
+    return result_root / filename
+
+
+def _decision_adapter(
+    project: dict[str, Any],
+) -> tuple[
+    dict[str, Any],
+    list[dict[str, Any]],
+    set[str],
+    dict[str, list[str]],
+]:
+    path = Path(project["project_path"]) / "data" / "decisions.jsonl"
+    if not path.exists():
+        return (
+            _coverage(
+                project["project_id"], "decisions", "unavailable", "missing"
+            ),
+            [],
+            set(),
+            {},
+        )
+    if not path.is_file():
+        return (
+            _coverage(
+                project["project_id"], "decisions", "unavailable", "unreadable"
+            ),
+            [],
+            set(),
+            {},
+        )
+    try:
+        canonical = path.resolve(strict=True)
+        physical_lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return (
+            _coverage(
+                project["project_id"], "decisions", "unavailable", "unreadable"
+            ),
+            [],
+            set(),
+            {},
+        )
+
+    evidence: list[dict[str, Any]] = []
+    decisions_by_id: dict[str, set[str]] = defaultdict(set)
+    evidence_by_id: dict[str, list[str]] = defaultdict(list)
+    valid = 0
+    invalid = 0
+    newest: datetime | None = None
+    for line_number, text in enumerate(physical_lines, 1):
+        try:
+            record = _strict_object(text)
+        except _StrictJSONError:
+            invalid += 1
+            continue
+        proposal_id = _nonempty_string(record.get("proposal_id"))
+        decision = _string(record.get("decision"))
+        timestamp = _parse_rfc3339(record.get("ts"))
+        if (
+            proposal_id is None
+            or decision not in {"approve", "deny"}
+            or timestamp is None
+        ):
+            invalid += 1
+            continue
+        valid += 1
+        newest = timestamp if newest is None else max(newest, timestamp)
+        observed_at = _format_utc(timestamp)
+        fields = {
+            "proposal_id": proposal_id,
+            "decision": decision,
+            "ts": observed_at,
+        }
+        item = _file_evidence(
+            source_kind="decision",
+            project_id=project["project_id"],
+            source="decisions",
+            kind="decision",
+            observed_at=observed_at,
+            source_ref=f"file:{canonical}:line:{line_number}",
+            recurrence_key=None,
+            fields=fields,
+        )
+        evidence.append(item)
+        decisions_by_id[proposal_id].add(decision)
+        evidence_by_id[proposal_id].append(item["id"])
+
+    conflicts = {
+        proposal_id: sorted(set(evidence_by_id[proposal_id]))
+        for proposal_id, values in decisions_by_id.items()
+        if len(values) > 1
+    }
+    if conflicts:
+        state, reason = "partial", "mixed"
+    elif invalid:
+        state, reason = "partial", "malformed"
+    else:
+        state, reason = "available", "ok"
+    coverage = _coverage(
+        project["project_id"],
+        "decisions",
+        state,
+        reason,
+        total=len(physical_lines),
+        valid=valid,
+        invalid=invalid,
+        newest_ts=_format_utc(newest) if newest is not None else None,
+    )
+    return coverage, evidence, set(decisions_by_id), conflicts
+
+
+def _proposal_adapter(
+    project: dict[str, Any],
+    config: dict[str, Any] | None,
+    decided_ids: set[str],
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    if config is None:
+        return (
+            _coverage(
+                project["project_id"],
+                "proposals",
+                "unavailable",
+                "malformed",
+            ),
+            [],
+            [],
+        )
+    try:
+        path = _configured_result_path(project, config)
+    except ValueError:
+        return (
+            _coverage(
+                project["project_id"],
+                "proposals",
+                "partial",
+                "malformed",
+                total=1,
+                invalid=1,
+                limitations=["result_dir_representation_unsupported"],
+            ),
+            [],
+            [],
+        )
+    if not path.exists():
+        return (
+            _coverage(
+                project["project_id"], "proposals", "unavailable", "missing"
+            ),
+            [],
+            [],
+        )
+    if not path.is_file():
+        return (
+            _coverage(
+                project["project_id"], "proposals", "unavailable", "unreadable"
+            ),
+            [],
+            [],
+        )
+    try:
+        canonical = path.resolve(strict=True)
+        root = _strict_object(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError):
+        return (
+            _coverage(
+                project["project_id"], "proposals", "unavailable", "unreadable"
+            ),
+            [],
+            [],
+        )
+    except _StrictJSONError:
+        return (
+            _coverage(
+                project["project_id"],
+                "proposals",
+                "partial",
+                "malformed",
+                total=1,
+                invalid=1,
+            ),
+            [],
+            [],
+        )
+
+    proposals = root.get("proposals")
+    if not isinstance(proposals, list):
+        return (
+            _coverage(
+                project["project_id"],
+                "proposals",
+                "partial",
+                "malformed",
+                total=1,
+                invalid=1,
+            ),
+            [],
+            [],
+        )
+    result_timestamp = _parse_rfc3339(root.get("ts"))
+    if result_timestamp is None:
+        rejected = max(1, len(proposals))
+        return (
+            _coverage(
+                project["project_id"],
+                "proposals",
+                "partial",
+                "malformed",
+                total=rejected,
+                invalid=rejected,
+            ),
+            [],
+            [],
+        )
+    observed_at = _format_utc(result_timestamp)
+    evidence: list[dict[str, Any]] = []
+    open_proposals: list[dict[str, Any]] = []
+    valid = 0
+    invalid = 0
+    for index, record in enumerate(proposals):
+        if not isinstance(record, dict):
+            invalid += 1
+            continue
+        proposal_id = _nonempty_string(record.get("id"))
+        proposal_type = _string(record.get("type"))
+        title = _nonempty_string(record.get("title"))
+        severity = _string(record.get("severity"))
+        status = _string(record.get("status"))
+        signal_raw = record.get("signal_ids", [])
+        signal_ids = (
+            sorted(set(signal_raw))
+            if isinstance(signal_raw, list)
+            and all(_nonempty_string(item) is not None for item in signal_raw)
+            else None
+        )
+        approval_raw = record.get("approval_action")
+        approval_present = (
+            isinstance(approval_raw, str) and bool(approval_raw)
+        )
+        if (
+            proposal_id is None
+            or proposal_type not in {"feature", "bug", "instrumentation"}
+            or title is None
+            or severity not in {"low", "med", "high"}
+            or status != "open"
+            or signal_ids is None
+            or (
+                "approval_action" in record
+                and approval_raw is not None
+                and not isinstance(approval_raw, str)
+            )
+        ):
+            invalid += 1
+            continue
+        valid += 1
+        if proposal_id in decided_ids:
+            continue
+        fields = {
+            "id": proposal_id,
+            "type": proposal_type,
+            "title": title,
+            "severity": severity,
+            "status": status,
+            "signal_ids": signal_ids,
+            "ts": observed_at,
+            "approval_action_present": approval_present,
+        }
+        item = _file_evidence(
+            source_kind="proposal",
+            project_id=project["project_id"],
+            source="proposals",
+            kind="open_proposal",
+            observed_at=observed_at,
+            source_ref=f"file:{canonical}:pointer:/proposals/{index}",
+            recurrence_key=f"proposal:{proposal_type}:{proposal_id}",
+            fields=fields,
+        )
+        item["claim_kind"] = "assessment"
+        evidence.append(item)
+        open_proposals.append(
+            {
+                "evidence_id": item["id"],
+                "title": title,
+                "severity": severity,
+                "signal_ids": signal_ids,
+                "approval_action": approval_raw if approval_present else None,
+                "detected_at": observed_at,
+            }
+        )
+    coverage = _coverage(
+        project["project_id"],
+        "proposals",
+        "partial" if invalid else "available",
+        "malformed" if invalid else "ok",
+        total=len(proposals),
+        valid=valid,
+        invalid=invalid,
+        newest_ts=observed_at if valid else None,
+    )
+    return coverage, evidence, open_proposals
+
+
+def _overseer_adapter(
+    project: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    autonomous = project["autonomous"]
+    if autonomous is False:
+        return (
+            _coverage(
+                project["project_id"],
+                "overseer",
+                "not_applicable",
+                "not_autonomous",
+            ),
+            [],
+        )
+    if autonomous is None:
+        return (
+            _coverage(
+                project["project_id"],
+                "overseer",
+                "unavailable",
+                "config_unknown",
+            ),
+            [],
+        )
+    path = Path(project["project_path"]) / "tmp" / "overseer-result.json"
+    if not path.exists():
+        return (
+            _coverage(
+                project["project_id"], "overseer", "unavailable", "no_result"
+            ),
+            [],
+        )
+    try:
+        canonical = path.resolve(strict=True)
+        root = _strict_object(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError):
+        project["overseer"].update({"state": "unavailable", "reason": "malformed"})
+        return (
+            _coverage(
+                project["project_id"], "overseer", "unavailable", "unreadable"
+            ),
+            [],
+        )
+    except _StrictJSONError:
+        project["overseer"].update({"state": "malformed", "reason": "malformed"})
+        return (
+            _coverage(
+                project["project_id"],
+                "overseer",
+                "partial",
+                "malformed",
+                total=1,
+                invalid=1,
+            ),
+            [],
+        )
+    healthy = root.get("healthy")
+    status = _nonempty_string(root.get("status"))
+    findings = root.get("findings")
+    timestamp = _parse_rfc3339(root.get("ts"))
+    if (
+        not isinstance(healthy, bool)
+        or status is None
+        or not isinstance(findings, list)
+        or timestamp is None
+    ):
+        project["overseer"].update({"state": "malformed", "reason": "malformed"})
+        return (
+            _coverage(
+                project["project_id"],
+                "overseer",
+                "partial",
+                "malformed",
+                total=1,
+                invalid=1,
+            ),
+            [],
+        )
+    observed_at = _format_utc(timestamp)
+    fields = {
+        "healthy": healthy,
+        "status": status,
+        "findings_count": len(findings),
+        "ts": observed_at,
+        "summary_present": bool(
+            isinstance(root.get("summary"), str) and root["summary"]
+        ),
+    }
+    item = _file_evidence(
+        source_kind="overseer",
+        project_id=project["project_id"],
+        source="overseer",
+        kind="overseer_assessment",
+        observed_at=observed_at,
+        source_ref=f"file:{canonical}:pointer:/",
+        recurrence_key=None,
+        fields=fields,
+    )
+    item["claim_kind"] = "assessment"
+    project["overseer"].update(
+        {
+            "state": "present",
+            "reason": "ok",
+            "healthy": healthy,
+            "status": status,
+            "summary": None,
+            "findings_count": len(findings),
+            "assessed_at": observed_at,
+            "evidence_ids": [item["id"]],
+        }
+    )
+    if fields["summary_present"]:
+        project["overseer"]["limitations"] = ["overseer_summary_redacted"]
+    return (
+        _coverage(
+            project["project_id"],
+            "overseer",
+            "available",
+            "ok",
+            total=1,
+            valid=1,
+            newest_ts=observed_at,
+        ),
+        [item],
+    )
+
+
+def _attention_id(kind: str, project_id: str, evidence_ids: list[str]) -> str:
+    operands = ",".join(sorted(set(evidence_ids)))
+    payload = f"{kind}\0{project_id}\0{operands}".encode("utf-8")
+    return "att_" + hashlib.sha256(payload).hexdigest()[:16]
+
+
+def _attention_record(
+    *,
+    kind: str,
+    project_id: str,
+    claim_kind: str,
+    title: str,
+    detected_at: str | None,
+    severity: str | None,
+    approval_action: str | None,
+    evidence_ids: list[str],
+    limitations: list[str],
+    started_at: datetime,
+) -> dict[str, Any]:
+    unique_evidence = sorted(set(evidence_ids))
+    detected = _parse_rfc3339(detected_at)
+    age = (
+        max(0, int((started_at - detected).total_seconds()))
+        if detected is not None
+        else None
+    )
+    return {
+        "id": _attention_id(kind, project_id, unique_evidence),
+        "project_id": project_id,
+        "kind": kind,
+        "claim_kind": claim_kind,
+        "title": title,
+        "detected_at": detected_at,
+        "age_seconds": age,
+        "severity_advisory": severity,
+        "approval_action": approval_action,
+        "evidence_ids": unique_evidence,
+        "limitations": sorted(set(limitations)),
+    }
+
+
 def _consumer_matches(
     consumer: str, record: dict[str, Any], svc: str
 ) -> bool:
@@ -2510,7 +3003,14 @@ def _pressure_adapter(
         pressure["open_cap_deferrals"] is not None
         and pressure["open_cap_deferrals"] > 0
     )
-    if deferral_observed or open_cap_observed:
+    current_open_cap_observed = (
+        isinstance(pressure["undecided_open_proposals"], int)
+        and isinstance(pressure["configured_max_open_proposals"], int)
+        and pressure["configured_max_open_proposals"] >= 0
+        and pressure["undecided_open_proposals"]
+        >= pressure["configured_max_open_proposals"]
+    )
+    if deferral_observed or open_cap_observed or current_open_cap_observed:
         reason_ids = sorted(set(pressure["evidence_ids"])) or project_provenance_ids
         pressure["evidence_ids"].extend(reason_ids)
         pressure_fault_ids.extend(reason_ids)
@@ -2713,6 +3213,8 @@ def build_document(
     direct_fault_ids: dict[str, list[str]] = defaultdict(list)
     exact_pressure_ids: dict[str, list[str]] = defaultdict(list)
     config_by_path: dict[str, dict[str, Any] | None] = {}
+    open_proposals_by_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    decision_conflicts_by_id: dict[str, dict[str, list[str]]] = defaultdict(dict)
     for project in fleet:
         config, config_coverage, config_evidence = _load_config_adapter(project)
         config_by_path[project["project_path"]] = config
@@ -2737,6 +3239,54 @@ def build_document(
             direct_fault_ids[project["project_id"]].extend(
                 finding["evidence_id"] for finding in doctor["findings"]
             )
+
+        if "design" in project["roles"]:
+            (
+                decision_coverage,
+                decision_evidence,
+                decided_ids,
+                decision_conflicts,
+            ) = _decision_adapter(project)
+            coverage_by_key[
+                (project["project_id"], "decisions")
+            ] = decision_coverage
+            evidence.extend(decision_evidence)
+            decision_conflicts_by_id[project["project_id"]] = decision_conflicts
+
+            (
+                proposal_coverage,
+                proposal_evidence,
+                open_proposals,
+            ) = _proposal_adapter(project, config, decided_ids)
+            coverage_by_key[
+                (project["project_id"], "proposals")
+            ] = proposal_coverage
+            evidence.extend(proposal_evidence)
+            open_proposals_by_id[project["project_id"]] = open_proposals
+            if proposal_coverage["state"] in {"available", "partial"}:
+                undecided = len(open_proposals)
+                project["pressure"]["undecided_open_proposals"] = undecided
+                cap = project["pressure"]["configured_max_open_proposals"]
+                project["pressure"]["open_cap_remaining"] = (
+                    max(0, cap - undecided) if isinstance(cap, int) else None
+                )
+                proposal_ids = sorted(
+                    proposal["evidence_id"] for proposal in open_proposals
+                )
+                project["pressure"]["evidence_ids"].extend(proposal_ids)
+        else:
+            for source in ("proposals", "decisions"):
+                coverage_by_key[(project["project_id"], source)] = _coverage(
+                    project["project_id"],
+                    source,
+                    "not_applicable",
+                    "unsupported",
+                    limitations=["design_role_not_installed"],
+                )
+
+        overseer_coverage, overseer_evidence = _overseer_adapter(project)
+        coverage_by_key[(project["project_id"], "overseer")] = overseer_coverage
+        evidence.extend(overseer_evidence)
         project["limitations"] = [LATER_PHASE_LIMITATION]
 
     (
@@ -2844,7 +3394,142 @@ def build_document(
             project["state"] = "no_fault_observed"
             project["state_reason_ids"] = []
 
-    evidence.sort(key=lambda item: item["id"])
+    evidence_by_id = {item["id"]: item for item in evidence}
+    attention: list[dict[str, Any]] = []
+    signal_evidence: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for item in evidence_by_id.values():
+        if item["project_id"] is None:
+            continue
+        fields = item["fields"]
+        for key in ("id", "incident_id"):
+            signal_id = _nonempty_string(fields.get(key))
+            if signal_id is not None and item["kind"] != "open_proposal":
+                signal_evidence[(item["project_id"], signal_id)].append(item["id"])
+
+    for project in fleet:
+        project_id = project["project_id"]
+        for proposal in open_proposals_by_id[project_id]:
+            linked_ids = [proposal["evidence_id"]]
+            unresolved = False
+            for signal_id in proposal["signal_ids"]:
+                resolved = signal_evidence.get((project_id, signal_id), [])
+                if resolved:
+                    linked_ids.extend(resolved)
+                else:
+                    unresolved = True
+            limitations: list[str] = []
+            if unresolved:
+                limitations.append("unresolved_signal_ids")
+            if proposal["approval_action"] is None:
+                limitations.append("approval_action_not_persisted")
+            attention.append(
+                _attention_record(
+                    kind="open_proposal",
+                    project_id=project_id,
+                    claim_kind="assessment",
+                    title=proposal["title"],
+                    detected_at=proposal["detected_at"],
+                    severity=proposal["severity"],
+                    approval_action=proposal["approval_action"],
+                    evidence_ids=linked_ids,
+                    limitations=limitations,
+                    started_at=started_at,
+                )
+            )
+
+        for evidence_ids in decision_conflicts_by_id[project_id].values():
+            timestamps = [
+                evidence_by_id[evidence_id]["observed_at"]
+                for evidence_id in evidence_ids
+                if evidence_id in evidence_by_id
+                and evidence_by_id[evidence_id]["observed_at"] is not None
+            ]
+            attention.append(
+                _attention_record(
+                    kind="owner_decision",
+                    project_id=project_id,
+                    claim_kind="derived",
+                    title="Resolve conflicting persisted proposal decisions",
+                    detected_at=max(timestamps, default=None),
+                    severity=None,
+                    approval_action=None,
+                    evidence_ids=evidence_ids,
+                    limitations=["conflicting_persisted_decisions"],
+                    started_at=started_at,
+                )
+            )
+
+        for evidence_id in sorted(set(direct_fault_ids[project_id])):
+            item = evidence_by_id.get(evidence_id)
+            if item is None or item["kind"] == "doctor_finding":
+                continue
+            attention.append(
+                _attention_record(
+                    kind="observed_fault",
+                    project_id=project_id,
+                    claim_kind="fact",
+                    title="Observed current fleet fault",
+                    detected_at=item["observed_at"],
+                    severity="high",
+                    approval_action=None,
+                    evidence_ids=[evidence_id],
+                    limitations=[],
+                    started_at=started_at,
+                )
+            )
+
+        if project["doctor"]["state"] == "drift":
+            for finding in project["doctor"]["findings"]:
+                evidence_id = finding["evidence_id"]
+                item = evidence_by_id.get(evidence_id)
+                if item is None:
+                    continue
+                attention.append(
+                    _attention_record(
+                        kind="install_drift",
+                        project_id=project_id,
+                        claim_kind="fact",
+                        title="Shipyard installation drift",
+                        detected_at=item["observed_at"],
+                        severity="med",
+                        approval_action=None,
+                        evidence_ids=[evidence_id],
+                        limitations=[],
+                        started_at=started_at,
+                    )
+                )
+
+    for record in coverage:
+        if (
+            record["project_id"] is None
+            or record["state"] in {"available", "not_applicable"}
+        ):
+            continue
+        item = _coverage_evidence(record)
+        evidence_by_id[item["id"]] = item
+        attention.append(
+            _attention_record(
+                kind="coverage_gap",
+                project_id=record["project_id"],
+                claim_kind="derived",
+                title=f"Coverage gap: {record['source']}",
+                detected_at=record["newest_ts"],
+                severity=None,
+                approval_action=None,
+                evidence_ids=[item["id"]],
+                limitations=list(record["limitations"]),
+                started_at=started_at,
+            )
+        )
+
+    evidence = sorted(evidence_by_id.values(), key=lambda item: item["id"])
+    attention.sort(
+        key=lambda item: (
+            item["detected_at"] is None,
+            item["detected_at"] or "",
+            item["id"],
+        )
+    )
 
     started_text = _format_utc(started_at)
     window_start = _format_utc(window_start_at)
@@ -2885,13 +3570,13 @@ def build_document(
         "coverage": coverage,
         "evidence": evidence,
         "fleet": fleet,
-        "attention": [],
+        "attention": attention,
         "effectiveness": [],
         "priorities": [],
         "summary": {
             "fleet_state": fleet_state,
             "project_state_counts": state_counts,
-            "attention_count": 0,
+            "attention_count": len(attention),
             "effectiveness_state_counts": {
                 "measured": 0,
                 "partial": 0,

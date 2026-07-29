@@ -223,9 +223,23 @@ run_phase3() {
 }
 
 phase3_hashes() {
-  find "$P3_CORE" "$P3_PROJECT" "$UNIT_DIR" -type f -print0 \
+  find "$P3_CORE" "$BATS_TEST_TMPDIR/projects" "$UNIT_DIR" -type f -print0 \
     | sort -z \
     | xargs -0 sha256sum
+}
+
+write_phase4_result() {
+  local relative_dir="$1" display="$2" proposals_json="$3"
+  mkdir -p "$P3_PROJECT/$relative_dir"
+  cat >"$P3_PROJECT/$relative_dir/$(basename "$P3_PROJECT")-$display-result.json" <<EOF
+{"ts":"2026-07-28T09:30:00Z","project":"$(basename "$P3_PROJECT")","proposals":$proposals_json}
+EOF
+}
+
+phase4_proposal() {
+  local id="$1" signal_ids="${2:-[]}" title="${3:-Proposal $1}"
+  printf '{"id":"%s","type":"feature","title":"%s","severity":"med","status":"open","signal_ids":%s}' \
+    "$id" "$title" "$signal_ids"
 }
 
 @test "inspect: discovers only matching current-root manifests and emits schema v1" {
@@ -1589,4 +1603,427 @@ EOF
     and (.fleet[0].limitations|index("incident_summary_redacted"))!=null
   ' <<<"$output"
   [[ "$output" != *"SYNTHETIC_REDACT_ME"* ]]
+}
+
+@test "inspect: configured result dir and themed design display locate proposals" {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-results"
+  mkdir -p "$root"
+
+  make_phase3_project plain "design" "$root"
+  write_phase4_result tmp design "[$(phase4_proposal plain-open)]"
+
+  make_phase3_project spacetime "design" "$root"
+  sed -i 's#result_dir = "tmp"#result_dir = "observations"#' \
+    "$P3_PROJECT/.agents/config.toml"
+  cat >>"$P3_PROJECT/.agents/config.toml" <<'EOF'
+[names]
+design = "mentat"
+EOF
+  write_phase4_result observations mentat "[$(phase4_proposal space-open)]"
+
+  make_phase3_project custom "design" "$root"
+  sed -i 's#result_dir = "tmp"#result_dir = "state/design"#' \
+    "$P3_PROJECT/.agents/config.toml"
+  cat >>"$P3_PROJECT/.agents/config.toml" <<'EOF'
+[names]
+design = "navigator"
+EOF
+  write_phase4_result state/design navigator "[$(phase4_proposal custom-open)]"
+
+  make_phase3_project absolute "design" "$root"
+  sed -i 's#result_dir = "tmp"#result_dir = "/abs"#' \
+    "$P3_PROJECT/.agents/config.toml"
+  write_phase4_result abs design "[$(phase4_proposal absolute-open)]"
+
+  make_phase3_project empty "design" "$root"
+  sed -i 's#result_dir = "tmp"#result_dir = ""#' \
+    "$P3_PROJECT/.agents/config.toml"
+  write_phase4_result . design "[$(phase4_proposal empty-open)]"
+
+  make_phase3_project integer "design" "$root"
+  sed -i 's#result_dir = "tmp"#result_dir = 7#' \
+    "$P3_PROJECT/.agents/config.toml"
+  write_phase4_result 7 design "[$(phase4_proposal integer-open)]"
+
+  make_phase3_project structured "design" "$root"
+  sed -i 's#result_dir = "tmp"#result_dir = ["not","silently","tmp"]#' \
+    "$P3_PROJECT/.agents/config.toml"
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.evidence[] | select(.kind=="open_proposal") | .fields.id] | sort)
+      ==["absolute-open","custom-open","empty-open","integer-open",
+         "plain-open","space-open"]
+    and ([.coverage[] | select(.source=="proposals" and .state=="available")]
+      | length)==6
+    and ([.coverage[] | select(.source=="proposals"
+      and .state=="partial" and .reason=="malformed")]|length)==1
+    and ([.evidence[] | select(.kind=="open_proposal")
+      | .source_ref | select(contains("/observations/spacetime-mentat-result.json:pointer:/proposals/0"))]
+      | length)==1
+    and ([.evidence[] | select(.kind=="open_proposal")
+      | .source_ref | select(contains("/state/design/custom-navigator-result.json:pointer:/proposals/0"))]
+      | length)==1
+    and ([.evidence[] | select(.kind=="open_proposal")
+      | .source_ref | select(contains("/absolute/abs/absolute-design-result.json:pointer:/proposals/0"))]
+      | length)==1
+    and ([.evidence[] | select(.kind=="open_proposal")
+      | .source_ref | select(contains("/empty/empty-design-result.json:pointer:/proposals/0"))]
+      | length)==1
+    and ([.evidence[] | select(.kind=="open_proposal")
+      | .source_ref | select(contains("/integer/7/integer-design-result.json:pointer:/proposals/0"))]
+      | length)==1
+  ' <<<"$output"
+}
+
+@test "inspect: suppresses exact approve deny decisions and counts malformed rows" {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-decisions"
+  mkdir -p "$root"
+  make_phase3_project decisions "design" "$root"
+  cat >"$P3_PROJECT/tmp/decisions-design-result.json" <<'EOF'
+{"ts":"2026-07-28T09:30:00Z","project":"decisions","proposals":[
+{"id":"approved","type":"feature","title":"Approved","severity":"med","status":"open","signal_ids":[]},
+{"id":"denied","type":"bug","title":"Denied","severity":"high","status":"open","signal_ids":[]},
+{"id":"malformed-only","type":"instrumentation","title":"Malformed target","severity":"low","status":"open"},
+{"id":"unknown-only","type":"feature","title":"Unknown target","severity":"med","status":"open","signal_ids":[]},
+{"id":"bad-ts-only","type":"feature","title":"Bad timestamp target","severity":"med","status":"open","signal_ids":[]},
+{"id":"signals-absent","type":"feature","title":"Signals absent","severity":"med","status":"open"},
+{"id":"signals-sorted","type":"feature","title":"Signals sorted","severity":"med","status":"open","signal_ids":["z","a","z"],"rationale":"RAW_RATIONALE","evidence":"RAW_EVIDENCE"},
+{"id":"","type":"feature","title":"Empty id","severity":"med","status":"open","signal_ids":[]},
+{"id":"empty-title","type":"feature","title":"","severity":"med","status":"open","signal_ids":[]},
+{"id":"unknown-type","type":"other","title":"Unknown type","severity":"med","status":"open","signal_ids":[]},
+{"id":"unknown-severity","type":"feature","title":"Unknown severity","severity":"urgent","status":"open","signal_ids":[]},
+{"id":"closed-status","type":"feature","title":"Closed","severity":"med","status":"closed","signal_ids":[]},
+{"id":"bad-signals","type":"feature","title":"Bad signals","severity":"med","status":"open","signal_ids":[""]}
+]}
+EOF
+  mkdir -p "$P3_PROJECT/data"
+  cat >"$P3_PROJECT/data/decisions.jsonl" <<'EOF'
+{"proposal_id":"approved","decision":"approve","ts":"2026-07-28T10:00:00Z","reason":"SYNTHETIC_SECRET"}
+{"proposal_id":"denied","decision":"deny","ts":"2026-07-28T10:01:00Z"}
+{"id":"malformed-only","decision":"approve","ts":"2026-07-28T10:02:00Z"}
+{"proposal_id":"unknown-only","decision":"later","ts":"2026-07-28T10:03:00Z"}
+{"proposal_id":"bad-ts-only","decision":"deny","ts":"not-a-time"}
+EOF
+
+  make_phase3_project duplicate-result "design" "$root"
+  cat >"$P3_PROJECT/tmp/duplicate-result-design-result.json" <<'EOF'
+{"ts":"2026-07-28T09:30:00Z","ts":"2026-07-28T09:31:00Z","project":"duplicate-result","proposals":[]}
+EOF
+  make_phase3_project nonfinite-result "design" "$root"
+  cat >"$P3_PROJECT/tmp/nonfinite-result-design-result.json" <<'EOF'
+{"ts":"2026-07-28T09:30:00Z","project":"nonfinite-result","score":NaN,"proposals":[]}
+EOF
+  make_phase3_project invalid-source-ts "design" "$root"
+  cat >"$P3_PROJECT/tmp/invalid-source-ts-design-result.json" <<'EOF'
+{"ts":"invalid","project":"invalid-source-ts","proposals":[{"id":"bad-source-ts","type":"feature","title":"Bad source ts","severity":"med","status":"open","signal_ids":[]}]}
+EOF
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.fleet[] | select(.project_name=="decisions")][0].project_id) as $pid
+    | (([.evidence[] | select(.kind=="open_proposal") | .fields.id] | sort)
+      ==["bad-ts-only","malformed-only","signals-absent","signals-sorted",
+         "unknown-only"]
+    and ([.evidence[] | select(.kind=="open_proposal"
+      and .fields.id=="signals-sorted")][0].fields.signal_ids)==["a","z"]
+    and ([.coverage[] | select(.project_id==$pid and .source=="proposals")][0]
+      | .state=="partial" and .reason=="malformed"
+        and .records_total==13 and .records_valid==7 and .records_invalid==6)
+    and ([.coverage[] | select(.project_id==$pid and .source=="decisions")][0]
+      | .state=="partial" and .reason=="malformed"
+        and .records_total==5 and .records_valid==2 and .records_invalid==3)
+    and ([.evidence[] | select(.kind=="decision")]|length)==2
+    and ([.evidence[] | select(.kind=="decision") | .source_ref]
+      | sort | map(endswith(":line:1") or endswith(":line:2")) | all)
+    and ([.coverage[] | select(.source=="proposals"
+      and .state=="partial" and .reason=="malformed"
+      and .records_total==1 and .records_valid==0 and .records_invalid==1)]
+      | length)==3
+    )
+  ' <<<"$output"
+  [[ "$output" != *"SYNTHETIC_SECRET"* ]]
+  [[ "$output" != *"RAW_RATIONALE"* ]]
+  [[ "$output" != *"RAW_EVIDENCE"* ]]
+}
+
+@test "inspect: conflicting valid decisions suppress with partial mixed coverage" {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-conflict"
+  mkdir -p "$root"
+  make_phase3_project conflict "design" "$root"
+  write_phase4_result tmp design "[$(phase4_proposal conflict-id)]"
+  mkdir -p "$P3_PROJECT/data"
+  cat >"$P3_PROJECT/data/decisions.jsonl" <<'EOF'
+{"proposal_id":"conflict-id","decision":"approve","ts":"2026-07-28T10:00:00Z"}
+{"proposal_id":"conflict-id","decision":"deny","ts":"2026-07-28T10:01:00Z"}
+EOF
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.evidence[] | select(.kind=="open_proposal" and .fields.id=="conflict-id")]
+      | length)==0
+    and ([.coverage[] | select(.source=="decisions")][0]
+      | .state=="partial" and .reason=="mixed"
+        and .records_total==2 and .records_valid==2 and .records_invalid==0)
+    and ([.attention[] | select(.kind=="owner_decision")]|length)==1
+    and ([.attention[] | select(.kind=="owner_decision")][0].evidence_ids|length)==2
+  ' <<<"$output"
+}
+
+@test "inspect: bogus signal proposal stays assessment not evidenced opportunity" {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-signals"
+  mkdir -p "$root"
+  make_phase3_project signals "design" "$root"
+  cat >"$P3_PROJECT/data/fyi-requests.jsonl" <<'EOF'
+{"id":"fyi-resolved","ts":"2026-07-28T08:00:00Z","text":"SYNTHETIC_REDACT_ME"}
+EOF
+  proposals="[$(phase4_proposal resolved '["fyi-resolved"]'),$(phase4_proposal bogus '["fyi-missing"]')]"
+  write_phase4_result tmp design "$proposals"
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.evidence[] | select(.kind=="fyi_request")][0].id) as $fyi_evidence
+    | ([.attention[] | select(.kind=="open_proposal")
+      | select(.title=="Proposal bogus")][0]
+      | .claim_kind=="assessment"
+        and (.limitations|index("unresolved_signal_ids"))!=null)
+    and ([.attention[] | select(.kind=="open_proposal")
+      | select(.title=="Proposal resolved")][0]
+      | (.limitations|index("unresolved_signal_ids"))==null
+        and (.evidence_ids|length)==2
+        and (.evidence_ids|index($fyi_evidence))!=null)
+    and ([.priorities[] | select(.category=="evidenced_opportunity")
+      | .title=="Proposal bogus"]|length)==0
+  ' <<<"$output"
+  [[ "$output" != *"SYNTHETIC_REDACT_ME"* ]]
+}
+
+@test "inspect: missing persisted approval action is explicit" {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-approval"
+  mkdir -p "$root"
+  make_phase3_project approval "design" "$root"
+  write_phase4_result tmp design "[$(phase4_proposal approval-missing)]"
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.evidence[] | select(.kind=="open_proposal")][0]
+      .fields.approval_action_present)==false
+    and ([.attention[] | select(.kind=="open_proposal")][0]
+      | .approval_action==null
+        and (.limitations|index("approval_action_not_persisted"))!=null)
+  ' <<<"$output"
+}
+
+@test "inspect: undecided proposals populate current open-cap pressure" {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-open-cap"
+  mkdir -p "$root"
+  make_phase3_project capped "design" "$root"
+  write_phase4_result tmp design "[$(phase4_proposal at-cap)]"
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    .fleet[0].pressure.undecided_open_proposals==1
+    and .fleet[0].pressure.configured_max_open_proposals==1
+    and .fleet[0].pressure.open_cap_remaining==0
+    and .fleet[0].state=="degraded_observed"
+    and (.fleet[0].state_reason_ids|length)>0
+  ' <<<"$output"
+}
+
+@test "inspect: Overseer distinguishes applicable absent and not applicable" {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-overseer-applicability"
+  mkdir -p "$root"
+  make_phase3_project auto "build" "$root"
+  sed -i '1iautonomous = true' "$P3_PROJECT/.agents/config.toml"
+  write_phase4_result tmp design "[$(phase4_proposal must-not-read)]"
+  cat >"$P3_PROJECT/data/decisions.jsonl" <<'EOF'
+{"proposal_id":"must-not-read","decision":"approve","ts":"2026-07-28T10:00:00Z"}
+EOF
+  make_phase3_project manual "build" "$root"
+  sed -i '1iautonomous = false' "$P3_PROJECT/.agents/config.toml"
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    .fleet as $fleet
+    | ([$fleet[] | select(.project_name=="auto")][0]) as $auto
+    | ([$fleet[] | select(.project_name=="manual")][0]) as $manual
+    | ($auto.overseer
+      | .applicability=="applicable" and .state=="absent"
+        and .reason=="no_result")
+    and ([.coverage[] | select(.project_id==
+      $auto.project_id
+      and .source=="overseer")][0]
+      | .state=="unavailable" and .reason=="no_result")
+    and ($manual.overseer
+      | .applicability=="not_applicable" and .state=="absent"
+        and .reason=="not_autonomous")
+    and ([.coverage[] | select(.project_id==
+      $manual.project_id
+      and .source=="overseer")][0]
+      | .state=="not_applicable" and .reason=="not_autonomous")
+    and ([.coverage[] | select((.project_id==$auto.project_id
+      or .project_id==$manual.project_id)
+      and (.source=="proposals" or .source=="decisions")
+      and .state=="not_applicable")]|length)==4
+    and ([.evidence[] | select(.project_id==$auto.project_id
+      and (.source=="proposals" or .source=="decisions"))]|length)==0
+    and ([.attention[] | select((.project_id==$auto.project_id
+      or .project_id==$manual.project_id)
+      and (.title=="Coverage gap: proposals"
+        or .title=="Coverage gap: decisions"))]|length)==0
+  ' <<<"$output"
+}
+
+@test "inspect: unknown autonomy makes Overseer unavailable not inapplicable" {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-overseer-unknown"
+  mkdir -p "$root"
+  make_phase3_project unknown "build" "$root"
+  printf '\n[broken\n' >>"$P3_PROJECT/.agents/config.toml"
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    .fleet[0].autonomous==null
+    and (.fleet[0].overseer
+      | .applicability=="unknown" and .state=="unavailable"
+        and .reason=="config_unknown")
+    and ([.coverage[] | select(.source=="overseer")][0]
+      | .state=="unavailable" and .reason=="config_unknown")
+  ' <<<"$output"
+}
+
+@test "inspect: attention contains faults drift gates and coverage gaps" {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-attention"
+  mkdir -p "$root"
+  make_phase3_project needs-focus "design" "$root"
+  write_phase4_result tmp design "[$(phase4_proposal needs-owner)]"
+  cat >"$P3_CORE/install.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'DOCTOR symlink_drift: synthetic install drift'
+exit 1
+EOF
+  chmod +x "$P3_CORE/install.sh"
+  cat >"$SHIM_LOG/needs-focus-design.service.stdout" <<'EOF'
+LoadState=loaded
+ActiveState=failed
+SubState=failed
+Result=failed
+ExecMainStatus=1
+EOF
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    (["open_proposal","observed_fault","install_drift","coverage_gap"]
+      - [.attention[].kind] | length)==0
+    and ([.attention[] | select(.kind=="open_proposal")]|length)==1
+    and ([.attention[] | select(.kind=="observed_fault")]|length)>0
+    and ([.attention[] | select(.kind=="install_drift")]|length)==1
+    and ([.attention[] | select(.kind=="coverage_gap")]|length)>0
+    and ([.attention[].evidence_ids[]] -
+      [.evidence[].id] | length)==0
+    and ([.attention[].id | test("^att_[0-9a-f]{16}$")] | all)
+    and .summary.attention_count==(.attention|length)
+  ' <<<"$output"
+}
+
+@test "inspect: never invokes Overseer or runner check-config" {
+  make_phase3_core
+  mkdir -p "$P3_CORE/agents/overseer"
+  cat >"$P3_CORE/agents/overseer/runner.sh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$SHIM_LOG/overseer.rejected"
+exit 97
+EOF
+  chmod +x "$P3_CORE/agents/overseer/runner.sh"
+  root="$BATS_TEST_TMPDIR/events-readonly-phase4"
+  mkdir -p "$root"
+  make_phase3_project readonly "design" "$root"
+  sed -i '1iautonomous = true' "$P3_PROJECT/.agents/config.toml"
+  write_phase4_result tmp design "[$(phase4_proposal readonly-open)]"
+  cat >"$P3_PROJECT/tmp/overseer-result.json" <<'EOF'
+{"healthy":false,"status":"concerns","summary":"SYNTHETIC_REDACT_ME","findings":[{"kind":"x"}],"ts":"2026-07-28T11:00:00Z"}
+EOF
+
+  make_phase3_project overseer-duplicate "build" "$root"
+  sed -i '1iautonomous = true' "$P3_PROJECT/.agents/config.toml"
+  cat >"$P3_PROJECT/tmp/overseer-result.json" <<'EOF'
+{"healthy":true,"healthy":false,"status":"bad","summary":"DUPLICATE_SECRET","findings":[],"ts":"2026-07-28T11:00:00Z"}
+EOF
+  make_phase3_project overseer-nonfinite "build" "$root"
+  sed -i '1iautonomous = true' "$P3_PROJECT/.agents/config.toml"
+  cat >"$P3_PROJECT/tmp/overseer-result.json" <<'EOF'
+{"healthy":true,"status":"bad","summary":"NONFINITE_SECRET","findings":[],"score":Infinity,"ts":"2026-07-28T11:00:00Z"}
+EOF
+  make_phase3_project overseer-malformed "build" "$root"
+  sed -i '1iautonomous = true' "$P3_PROJECT/.agents/config.toml"
+  cat >"$P3_PROJECT/tmp/overseer-result.json" <<'EOF'
+{"healthy":"yes","status":"","summary":"MALFORMED_SECRET","findings":{},"ts":"invalid"}
+EOF
+  before="$(phase3_hashes)"
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  [ "$before" = "$(phase3_hashes)" ]
+  jq -e '
+    ([.fleet[] | select(.project_name=="readonly")][0]) as $valid
+    | ($valid.overseer
+      | .applicability=="applicable" and .state=="present"
+        and .reason=="ok" and .healthy==false
+        and .status=="concerns" and .summary==null
+        and .findings_count==1
+        and .assessed_at=="2026-07-28T11:00:00Z"
+        and (.evidence_ids|length)==1)
+    and ([.evidence[] | select(.kind=="overseer_assessment")][0]
+      .claim_kind)=="assessment"
+    and ([.fleet[] | select(.project_name|startswith("overseer-"))
+      | .overseer
+      | .applicability=="applicable" and .state=="malformed"
+        and .reason=="malformed"]|all)
+    and ([.fleet[] | select(.project_name|startswith("overseer-"))
+      | .project_id] | sort) as $bad_ids
+    | ([.coverage[] | select(.source=="overseer"
+      and (.project_id as $id | $bad_ids|index($id))!=null)
+      | .state=="partial" and .reason=="malformed"
+        and .records_total==1 and .records_valid==0 and .records_invalid==1]
+      | length)==3
+    and ([.evidence[] | select(.kind=="overseer_assessment")]|length)==1
+  ' <<<"$output"
+  [[ "$output" != *"SYNTHETIC_REDACT_ME"* ]]
+  [[ "$output" != *"DUPLICATE_SECRET"* ]]
+  [[ "$output" != *"NONFINITE_SECRET"* ]]
+  [[ "$output" != *"MALFORMED_SECRET"* ]]
+  [ ! -s "$SHIM_LOG/overseer.rejected" ]
+  [ ! -s "$SHIM_LOG/runner.rejected" ]
+  [ ! -s "$SHIM_LOG/systemctl.rejected" ]
+  [ ! -s "$NOTIFY_LOG" ]
+  for command in curl wget nc gh claude codex hermes; do
+    [ ! -s "$SHIM_LOG/$command.rejected" ]
+  done
 }

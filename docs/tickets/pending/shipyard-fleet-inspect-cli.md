@@ -2080,4 +2080,51 @@ execute-ticket docs/tickets/pending/shipyard-fleet-inspect-cli.md
   proof was 11.14s, found no duplicate/unresolved evidence IDs, and every
   coverage row satisfied exact terminal-counter arithmetic. No
   semantic-repair deviation.
-- Commit: this phase's `feat: inspect fleet telemetry and pressure` commit.
+- Commit: `e503f05` (`feat: inspect fleet telemetry and pressure`).
+
+### Phase 4 Ledger — operator attention and persisted state
+
+- Plan: add exact proposal/result/decision/Overseer state adapters and build
+  evidence-linked operator attention without invoking any runner, assessment,
+  approval, or notification path.
+- `builder: subagent (1 agent)`.
+- RED: locked literal filter selected 6 cases and failed 0/6, rc=1; expanded
+  named-case filter failed 0/10, rc=1, before implementation.
+- Focused GREEN: locked literal filter passed 6/6, rc=0; expanded named-case
+  filter passed 10/10, rc=0; `py_compile` rc=0.
+- Common Per-Commit Gate: orchestrator full Bats passed 488/488, rc=0;
+  remaining repository-wide checks are recorded immediately before commit.
+- Observable evidence/deviations: configured plain/spacetime/custom result
+  names resolved; valid approve/deny/conflicting IDs were suppressed while
+  malformed-only targets survived; decision coverage was exact
+  `5 total/2 valid/3 invalid` and conflict `partial/mixed`. Resolvable signal
+  attention linked its FYI evidence, bogus signals stayed assessments, and all
+  attention evidence resolved. Overseer states covered present, applicable
+  absent, not applicable, and unknown autonomy without invocation. Dedicated
+  immutable-input digest was identical before/after
+  `de5f264e83fe20c1b850edaa4fb4cb95fe07bc0d43a84108abd1b2735a38b81d`;
+  rejected runner/Overseer/model/network/systemd-mutation/notify counts were
+  all zero. No deviation.
+- Repair evidence: adversarial extension selected 4 existing named cases;
+  pre-repair 1/4 passed and 3/4 failed, rc=1 (strict Overseer rejection was
+  already green). Post-repair selected cases passed 4/4, locked literal 6/6,
+  expanded named 10/10, and the full inspector suite 49/49, all rc=0.
+  Absolute, empty, and integer `result_dir` values now reproduce the runner's
+  project-prefixed path; an unrepresentable structured value is explicit
+  malformed coverage. Proposal duplicate/nonfinite/source-timestamp and exact
+  enum/status/signal validation are pinned, as are malformed Overseer results
+  and non-applicable proposal/decision coverage for projects without design.
+  Repair immutable-input digest was identical before/after
+  `b1df9f40cc3550adcee4d2a6d52b26f35b9b2aff2ef3f1e5021a94d8174588b9`;
+  forbidden invocation counts remained zero. No repair deviation.
+- Independent repair re-audit: PASS for runner-compatible `result_dir`
+  resolution, strict persisted schemas, malformed Overseer handling, and
+  suppression of proposal/decision noise on projects without design roles.
+- Orchestrator live proof: rc=0 in 12.21s across 8 projects and 31 roles.
+  All fleet states were `fault_observed` from persisted seven-day facts, the
+  137 attention items partitioned exactly into 21 coverage gaps, 4 install
+  drift items, 111 observed faults, and 1 open proposal, and every evidence
+  reference resolved. Projects without design roles reported proposal and
+  decision coverage as `not_applicable/unsupported`.
+- Commit: `feat: inspect operator attention and decisions` (orchestrator;
+  subagent was instructed not to commit).
