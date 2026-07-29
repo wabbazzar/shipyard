@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-29
 - **Owner:** wabbazzar
-- **Status:** Draft — reproduced and root-caused; ready for `polish-ticket`
+- **Status:** Polished — ready for `execute-ticket`
 - **Priority:** high
 - **Type:** bugfix
 - **Estimated Points:** 8 (3 phases, each capped at 5)
@@ -164,6 +164,38 @@ teardown. There is no HTTP-200/201 last-process regression case.
 | Existing notification capture test | sibling `wabbazzar-ice/scripts/tests/test_notify_capture.py` |
 | Sibling shell, systemd, event, notification, and cross-repo gates | sibling `wabbazzar-ice/.agents/gates.md` |
 
+### Repository state and workflow (measured while polishing, 2026-07-29)
+
+- **Shipyard:** canonical checkout, branch `main`; work directly on `main`.
+  `CLAUDE.md` forbids branches/worktrees because commits from a worktree can
+  relink the fleet. Existing unrelated changes in
+  `agents/release/role.md`, `agents/release/runner.sh`, and
+  `tests/release-blocking-gate.bats` belong to another task: do not edit,
+  stage, revert, or commit them. Use explicit `git add` paths, never `-A`.
+- **Ice:** sibling checkout `../wabbazzar-ice`, branch `master`, clean when
+  polished. Work directly on `master`; before writing, confirm it remains
+  clean. Commit its Phase 2 atomically before returning to Shipyard Phase 3.
+- Both checkouts are live operational surfaces. Never use a real notification
+  transport in this ticket; all execution uses PATH stubs or loopback HTTP.
+
+### Toolchain baseline (run while polishing, 2026-07-29)
+
+```text
+bats tests/overseer.bats
+→ 8/8 passed, rc=0
+
+cd ../wabbazzar-ice &&
+  .venv/bin/python -m pytest scripts/tests/test_notify_capture.py -q
+→ 1 passed, rc=0
+
+systemd-run --user --wait --collect \
+  --unit=polish-signal-integrity-<unique> /bin/true
+→ Finished with result: success; status=0; rc=0
+```
+
+The user systemd manager, Bats, Ice's uv-managed Python environment, pytest,
+and transient-service surface therefore exist. Do not install dependencies.
+
 ## Decisions
 
 ### Locked
@@ -178,6 +210,8 @@ teardown. There is no HTTP-200/201 last-process regression case.
 | L6 | Both regressions are proven red first with synthetic fixtures; live proof uses disposable systemd and fake local HTTP only | No test or build sends real Signal or calls a model |
 | L7 | No config flag is introduced | This restores existing stated invariants rather than adding an optional capability |
 | L8 | No historical event/body data is synthesized or rewritten | Missing history cannot be reconstructed honestly |
+| L9 | Shipyard work is direct on `main`, with no branch/worktree; Ice work is direct on `master` | These are the repositories' explicit operating rules for this build |
+| L10 | Preserve and exclude the three unrelated dirty Shipyard paths named in Repository state | Two agents share the canonical live checkout; scope every add/commit |
 
 ### Open decisions
 
@@ -191,8 +225,9 @@ None. The authorized work is local, reversible, and uses no real outward send.
 
 1. Change Shipyard's Overseer status propagation so a parsed unhealthy verdict
    still writes `status=problem`, notifies once through the existing policy,
-   and completes successfully, while judge/parse/internal `status=error`
-   remains nonzero. Fleet mode must aggregate errors separately from findings.
+   and completes successfully, while judge/parse/assessment-infrastructure
+   `status=error` remains nonzero. Fleet mode must aggregate errors separately
+   from findings.
 2. Preserve documented bad-invocation exit 2 and non-autonomous exit 3.
 3. Add red-first tests that distinguish `ok`, `problem`, and `error` at both
    runner and disposable oneshot-service boundaries. A test that merely
@@ -210,6 +245,17 @@ None. The authorized work is local, reversible, and uses no real outward send.
    sibling event/notification, systemd, and cross-repo gate classes before
    graduation.
 
+## Traps this build must pin
+
+- Preserve the three unrelated dirty Shipyard paths; explicit adds only.
+- Never make exit 1 universally successful: prove `problem` and `error` under
+  identical normal oneshot policy.
+- Redirect child descriptors in the Ice regression; inherited pipes can make
+  `capture_output=True` wait and hide the last-process race.
+- Inspect isolated UTC-dated event JSONL, not a local-date guess.
+- Clean unique transient units, fake servers, and delayed children even when a
+  test fails; empty final unit/process queries are gate evidence.
+
 ## Implementation Plan
 
 ### Phase 1 — Separate Overseer findings from execution failure (3 pts)
@@ -217,67 +263,250 @@ None. The authorized work is local, reversible, and uses no real outward send.
 **Goal:** make expected `problem` verdicts healthy at the process and systemd
 layers without hiding assessment errors.
 
-**Delegation:** subagent — implement and red-first test the three-way
-`ok`/`problem`/`error` contract, returning changed paths and exact outcome
-evidence.
+**Delegation: subagent — bounded build brief (≤40-line return).**
 
-- Add a regression that fails on the captured `problem → exit 1 → failed
-  oneshot` defect before changing the runner.
-- Separate domain findings from internal errors in single-project and fleet
-  exit aggregation.
-- Preserve notification/event payloads and the exit-2/exit-3 contracts.
-- Apply Shipyard's shell, bats, systemd, delegation, and public-hygiene gate
-  classes. This phase is independently committable in Shipyard.
+> Work only in Shipyard on `main`. Own `agents/overseer/runner.sh`,
+> `tests/overseer.bats`, and this ticket's Phase 1 Ledger fields. Do not touch
+> or stage the unrelated release-role/runner/blocking-gate paths. First change
+> or add exact Bats cases named `unhealthy crew: status=problem is a successful
+> assessment` and `assessment infrastructure failure remains nonzero`; add fleet
+> mixed-outcome coverage. Run the problem case against pre-change code and
+> record meaningful RED. Then make parsed findings return 0 while assessment /
+> infrastructure errors remain nonzero in both single and fleet modes.
+> Preserve events, one successful-stub notification, exit 2, and exit 3.
+> Return ≤40 lines: files; RED/GREEN commands and exits; test counts; exact
+> problem/error event and process-status evidence; blockers.
+>
+> Converge honestly or report the precise blocker with the actual evidence —
+> NEVER fake green, weaken a check, or hand-wave "should work". Run the real
+> command, read the real file, curl the real port, and report exact output
+> (exit codes, JSONL lines, HTTP codes), not adjectives.
+
+**RED first (before runner edit):**
+
+```bash
+bats --filter \
+  'unhealthy crew: status=problem is a successful assessment' \
+  tests/overseer.bats
+```
+
+It must fail because the current valid `problem` exits 1. Separately run the
+pre-existing error test as a guard; it must pass before the edit:
+
+```bash
+bats --filter 'judge returns no usable verdict' tests/overseer.bats
+```
+
+**Focused GREEN and observable contract:**
+
+```bash
+bats tests/overseer.bats tests/build-benign-abort.bats
+bash -n agents/overseer/runner.sh
+```
+
+The focused output must show: valid unhealthy JSON + successful notify stub →
+`overseer.assessed status=problem`, exactly one notification, process rc=0;
+unusable/failed assessment → `status=error`, process rc nonzero; findings-only
+fleet rc=0; any-error fleet rc nonzero; unknown arg rc=2; non-autonomous rc=3.
+
+**Disposable systemd proof (no live unit, model, or Signal):**
+
+Add local-only Bats cases named `systemd problem verdict leaves oneshot
+healthy` and `systemd error verdict fails oneshot`. They must use
+`systemd-run --user --wait --collect`, a unique unit name, synthetic project,
+PATH judge stub, successful notify stub, and temp event root. Skip with an
+explicit reason only when the user systemd manager is unavailable.
+
+```bash
+bats --filter \
+  'systemd (problem verdict leaves oneshot healthy|error verdict fails oneshot)' \
+  tests/overseer.bats
+systemctl --user list-units 'overseer-test-*' --all --no-legend
+```
+
+The first case must contain `Finished with result: success` and status 0; the
+second must contain `Finished with result: exit-code` and a nonzero status.
+The final list must be empty; `--collect` is mandatory.
+
+**Full Shipyard gate before the Phase 1 commit:**
+
+```bash
+bats tests/
+bash -n install.sh agents/lib/*.sh agents/*/runner.sh \
+  agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit
+python3 -m py_compile scripts/gen-deck-data.py scripts/delegation-report.py
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bash scripts/check-deck-complete.sh
+git diff --check -- agents/overseer/runner.sh tests/overseer.bats \
+  docs/tickets/pending/overseer-signaling-integrity.md
+git status --short
+```
+
+The status may still show the three pre-existing unrelated paths; it must show
+no other unexplained path. Commit only the Phase 1-owned paths explicitly.
 
 ### Phase 2 — Make Ice notification audits last-process durable (3 pts)
 
 **Goal:** make successful notification completion include durable audit event
 and body records, with BopBop registration deliberately bounded.
 
-**Delegation:** subagent — work in the sibling Ice repo on the notifier and its
-tests, returning red/green last-process evidence and the selected BopBop
-lifecycle behavior.
+**Delegation: subagent — bounded sibling build brief (≤40-line return).**
 
-- Add the fake-success, supervisor-teardown regression first and record its
-  failure against the current notifier.
-- Make both required audit writers complete before the script returns without
-  changing the foreground curl exit contract.
-- Preserve BopBop's successful-send-only, best-effort semantics while ensuring
-  its child-process lifecycle is intentional and bounded.
-- Apply Ice's shell, event/notification, systemd, and relevant test gate
-  classes. This phase is independently committable in the sibling repo.
+> Work only in clean sibling `../wabbazzar-ice` on `master`. Own
+> `scripts/notify.sh`, `scripts/tests/test_notify_capture.py`, and this ticket's
+> Phase 2 Ledger fields (the orchestrator writes the Ledger in Shipyard).
+> Before editing, add `test_successful_last_process_persists_audits_before_exit`
+> using isolated temp roots, a loopback 201 server, delayed audit children, and
+> last-process teardown; show it RED. Add a user-systemd companion test, skipped
+> only without a user manager. Make notify.send and body capture synchronous
+> completion work. Explicitly supervise BopBop's existing successful-send-only,
+> `-m 3`, best-effort registration; its failure must not alter the Signal curl
+> rc. Send no real Signal. Return ≤40 lines: files; RED/GREEN commands and
+> exits; HTTP/status/JSONL evidence; test counts; background cleanup; blockers.
+>
+> Converge honestly or report the precise blocker with the actual evidence —
+> NEVER fake green, weaken a check, or hand-wave "should work". Run the real
+> command, read the real file, curl the real port, and report exact output
+> (exit codes, JSONL lines, HTTP codes), not adjectives.
+
+**RED first (before notifier edit):**
+
+```bash
+cd ../wabbazzar-ice
+.venv/bin/python -m pytest \
+  scripts/tests/test_notify_capture.py::test_successful_last_process_persists_audits_before_exit \
+  -q
+```
+
+It must fail because the main curl exits 0 after HTTP 201 while teardown can
+leave zero/empty audit files. The existing
+`test_body_captured_and_event_still_emitted` must pass pre-change as a guard.
+
+**Focused GREEN and exact contract:**
+
+```bash
+cd ../wabbazzar-ice
+.venv/bin/python -m pytest scripts/tests/test_notify_capture.py -q
+bash -n scripts/notify.sh scripts/log_event.sh
+```
+
+The test module must cover HTTP 200 and 201, Signal curl rc preservation,
+nonempty parseable `notify.send` and notify-data before the main process exits,
+and BopBop refusal/timeout without changing the Signal result. It must assert
+the two-argument body remains `title + "\n" + body`.
+
+**Disposable user-systemd proof:**
+
+Add `test_successful_notify_survives_disposable_systemd_teardown` in the same
+test module. It must run the real `notify.sh` through
+`systemd-run --user --wait --collect --unit=notify-audit-test-<unique>`, with
+`SIGNAL_URL` and `BOPBOP_URL` pointing only to loopback fakes,
+`WABBAZZAR_ICE_DIR` and `WABBAZZAR_NOTIFY_DIR` pointing to temp roots, and no
+inherited live notification variables.
+
+```bash
+cd ../wabbazzar-ice
+.venv/bin/python -m pytest \
+  scripts/tests/test_notify_capture.py::test_successful_notify_survives_disposable_systemd_teardown \
+  -q
+systemctl --user list-units 'notify-audit-test-*' --all --no-legend
+```
+
+The test must observe `/v2/send` 200/201, main rc=0, one parseable
+`notify.send`, one parseable body record, and no remaining unit/process. A
+BopBop fake failure remains best-effort and cannot change rc=0.
+
+**Full applicable Ice gate before its atomic `master` commit:**
+
+```bash
+cd ../wabbazzar-ice
+.venv/bin/python -m pytest scripts/tests -q
+bash -n scripts/notify.sh scripts/log_event.sh
+git diff --check -- scripts/notify.sh scripts/tests/test_notify_capture.py
+git status --short
+```
+
+Ice started clean and must be clean immediately after committing exactly those
+paths. Do not edit the dashboard, restart `dashboard.service`, or send Signal.
 
 ### Phase 3 — Cross-repo live proof and ticket graduation (2 pts)
 
 **Goal:** prove the complete alert path under real supervision without an
 outward send, then graduate the ticket.
 
-**Delegation:** subagent — independently audit both commits and their same-class
-surfaces, returning only contract deviations and gate evidence.
+**Delegation: subagent — bounded independent audit brief (≤40-line return).**
 
-- Re-run the two captured reproductions with disposable user transient units,
-  stubbed Overseer transport, and local fake HTTP 200/201.
-- Confirm `problem` leaves the unit healthy, `error` fails it, successful
-  notify writes both durable records before exit, and a BopBop failure cannot
-  change the Signal transport result.
-- Run both repositories' complete applicable gates and confirm both worktrees
-  are clean at their phase boundaries.
-- Graduate this ticket from `pending/` to `complete/` only after both
-  repository changes and the cross-repo proof are complete.
+> Read both phase commits and run the two focused regression surfaces without
+> editing either implementation. Check same-class exit semantics in Shipyard
+> and every `&` child in Ice `notify.sh`. Return ≤40 lines: commit ids; commands
+> and exits; exact problem/error/HTTP/JSONL evidence; leaked unit/process
+> counts; deviations/blockers. Do not send Signal, touch dashboard state,
+> rewrite data, or weaken/skip a gate except the documented no-user-systemd
+> skip.
+>
+> Converge honestly or report the precise blocker with the actual evidence —
+> NEVER fake green, weaken a check, or hand-wave "should work". Run the real
+> command, read the real file, curl the real port, and report exact output
+> (exit codes, JSONL lines, HTTP codes), not adjectives.
+
+The orchestrator personally re-runs:
+
+```bash
+# Start in the Shipyard repository root.
+shipyard_root="$(pwd -P)"
+bats tests/overseer.bats tests/build-benign-abort.bats
+bats tests/
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bash scripts/check-deck-complete.sh
+
+cd ../wabbazzar-ice
+.venv/bin/python -m pytest scripts/tests/test_notify_capture.py -q
+.venv/bin/python -m pytest scripts/tests -q
+bash -n scripts/notify.sh scripts/log_event.sh
+
+systemctl --user list-units \
+  'overseer-test-*' 'notify-audit-test-*' --all --no-legend
+git status --short
+git -C "$shipyard_root" status --short
+```
+
+The unit list is empty. Ice is clean. Shipyard contains no ticket-scope
+changes except the pending→complete move; the three unrelated pre-existing
+paths remain untouched.
+
+Graduate deterministically, verify, then commit the move alone:
+
+```bash
+cd "$shipyard_root"
+# First set the opening Status to "Complete — built and verified <UTC date>"
+# and finish every Ledger/DoD field.
+bash scripts/ticket-lifecycle.sh --project . --graduate \
+  docs/tickets/pending/overseer-signaling-integrity.md
+bash scripts/ticket-lifecycle.sh --check --project .
+test -f docs/tickets/complete/overseer-signaling-integrity.md
+test ! -e docs/tickets/pending/overseer-signaling-integrity.md
+git diff --check -- docs/tickets/complete/overseer-signaling-integrity.md
+```
+
+Use explicit adds for the old/new ticket paths only. Record both repository
+commit ids and every final gate exit in the Ledger before the graduation
+commit.
 
 ## Testing Strategy
 
-- **Red-first regression:** every new contract case is shown failing against
-  the unfixed code for the captured reason, then green after the minimum fix.
-- **Shipyard:** extend the hermetic Bats Overseer surface; run the configured
-  Bats, syntax, leak, and deck-fresh gates even though no deck change is
-  expected.
-- **Ice:** extend the existing notification capture tests with a loopback fake
-  success and last-process supervisor teardown; apply its shell,
-  event/notification, and systemd gate classes.
-- **Cross-repo:** use only disposable units, temporary fixture directories,
-  stub notification commands, and local fake HTTP. Never send real Signal,
-  invoke a model, rewrite live data, or wait for a scheduled timer.
+- **RED is named, not inferred:** record the exact failing assertion and rc for
+  each new test before implementation. Existing guards must pass pre-change.
+- **No false systemd green:** `problem` and `error` each run through a normal
+  disposable oneshot; do not set `SuccessExitStatus=1`.
+- **No false notify green:** the fake server records the actual `/v2/send`
+  request/status; tests parse both JSONL sinks after the main process has
+  exited and supervisor cleanup has occurred.
+- **No outward effects:** PATH stubs and loopback endpoints only. Never call
+  `$QUARTET_NOTIFY_CMD`, the live Signal URL, a model, or the dashboard.
+- **Cleanup is a gate:** every fake server, delayed child, and transient unit
+  is terminated/collected even when an assertion fails.
 
 ## Roll-up Definition of Done
 
@@ -294,7 +523,8 @@ surfaces, returning only contract deviations and gate evidence.
 - [ ] BopBop registration is successful-send-only, best-effort, bounded, and
   unable to alter the main Signal transport exit result.
 - [ ] Regression tests were captured red before implementation and green after.
-- [ ] Shipyard and Ice applicable gates are green and both worktrees are clean.
+- [ ] Ice is clean; Shipyard has no new unexplained changes and its three
+  unrelated pre-existing paths are untouched.
 - [ ] No real Signal/model/network call, historical data rewrite, dashboard
   edit, or routine-message expansion occurred.
 - [ ] The ticket is moved to `docs/tickets/complete/` only after both repos and
@@ -335,23 +565,42 @@ surfaces, returning only contract deviations and gate evidence.
 
 - plan:
 - builder:
-- RED:
-- verification:
+- RED command / failing assertion / exit:
+- pre-change error guard / exit:
+- focused GREEN command / count / exit:
+- problem event + notify count + process/systemd status:
+- error event + process/systemd status:
+- full Shipyard gates / counts / exits:
+- unrelated-path preservation proof:
 - commit:
 
 ### Phase 2 — Make Ice notification audits last-process durable
 
 - plan:
 - builder:
-- RED:
-- verification:
+- RED command / failing assertion / exit:
+- pre-change capture guard / exit:
+- focused GREEN command / count / exit:
+- HTTP requests + main exit + notify.send/body JSONL:
+- BopBop failure/timeout evidence:
+- disposable-unit and child cleanup proof:
+- full Ice gates / counts / exits:
 - commit:
 
 ### Phase 3 — Cross-repo live proof and ticket graduation
 
 - plan:
 - builder:
-- verification:
+- independent audit verdict:
+- cross-repo focused/full gates / counts / exits:
+- final transient unit/process query:
+- final Shipyard status (including preserved unrelated paths):
+- final Ice status:
 - Shipyard commit:
 - Ice commit:
-- graduation:
+- status header + lifecycle check / exit:
+- graduation commit:
+
+Run with: `execute-ticket docs/tickets/pending/overseer-signaling-integrity.md`.
+There are no open decisions; the parent explicitly owns the transition from
+polish to execution.
