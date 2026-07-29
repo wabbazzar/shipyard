@@ -33,6 +33,24 @@ You will be invoked in one of three modes:
 
 The mode is in `RUN CONTEXT.mode`. Branch on it.
 
+## Runner-owned blocking gate
+
+`RUN CONTEXT.runner_owned_gate` is either `null` or a validated object with
+`runner_owned: true`, `command`, `timeout_sec`, `modes`, and `result_key`.
+When it is present:
+
+- Do **not** invoke, background, poll, or report that command yourself. The
+  release runner executes it exactly once, synchronously, after your turn.
+- Run every other project check normally, but omit the runner-owned command
+  even if the project-specific prompt still lists it.
+- Do not write the configured `result_key`; the runner owns and overwrites that
+  field with the command's completed status, pass/fail, and exit code.
+- `RUN CONTEXT.result_file` is a private same-directory staging path. Write
+  valid model results there as usual. The runner reconciles the blocking gate
+  and atomically publishes the public result only after the command exits.
+
+An absent or `null` value means the legacy model-owned flow is unchanged.
+
 ## Hard rules
 
 - **Never touch main directly when in attempt-mode** — fix attempts
@@ -62,7 +80,9 @@ The mode is in `RUN CONTEXT.mode`. Branch on it.
   Before starting any step that can exceed 10 minutes, write a minimal
   `result.json` (`pass: false`, `"errors": ["run-in-progress"]`) and
   overwrite it with the real result at the end — a budget or timeout
-  death mid-step then still leaves a diagnosable result.
+  death mid-step then still leaves a diagnosable result. This sentinel rule
+  applies only to model-owned work; never run or wait on a
+  `RUN CONTEXT.runner_owned_gate`.
 
 ## Security sweep (daily mode, config-gated)
 
