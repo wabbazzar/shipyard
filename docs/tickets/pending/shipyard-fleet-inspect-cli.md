@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-29
 - **Owner:** wabbazzar
-- **Status:** Hardened — 2 owner decisions open; execution is gated
+- **Status:** Ratified — execution in progress
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 20 (7 phases, each within the 5-point cap)
@@ -194,21 +194,18 @@ declared time window. The assessment must:
 | L29 | Caddy domain is the lowercase hostname of the first configured HTTP(S) medic probe URL. Query strings and fragments are removed before path aggregation/evidence; no query value enters output. | Raw request URIs can contain secrets and are not stable path keys. |
 | L30 | A project decision is valid only when a JSONL object has a nonempty string `proposal_id`, `decision` exactly `approve|deny`, and an RFC3339 `ts`. Only valid records suppress a matching open proposal. Malformed/unknown records are counted and do not suppress; conflicting valid decisions for one ID make decisions coverage `partial/mixed` but still suppress that ID. | Pins the dispatch mirror schema and prevents arbitrary ledger text from silently hiding operator work. |
 | L31 | Daily budget consumption uses `[00:00:00Z on inspection_started_at's UTC date, inspection_started_at)`, not L7, and is reported by independently enforced consumer: `design_runner`, `build_runner`, `release_runner`, `release_shoulder_critic`, `medic_runner`, `scribe_runner`. Attribute every measurable consumer by exact service stem using L27's event root. Design charges `design.*.tokens`; shoulder charges `release.critique.tokens`; the other runners charge `job.end.tokens`. Expose the gate operand the current code actually sums: design and shoulder use `unscoped_event_root`, while the four other runners use `exact_service`. Design's gate root is L27's explicit manifest root or core fallback. Build/release/medic/scribe use an explicit manifest `QUARTET_EVENTS_DIR`, but when absent their literal gate root is `/nonexistent`; inspect the same `/nonexistent/<UTC-date>.jsonl` if present (including its `fromjson?` behavior), otherwise the operand is zero. This `unset_sentinel` root differs from emitted events' core fallback. Shoulder root is `configured` only from an exact matching current-user critic-watch service manifest with explicit `QUARTET_EVENTS_DIR`, `project_default` only when that manifest explicitly pins `<project>/data/events`, otherwise `unknown`; never infer it from crew manifests or `.agents/shoulder.env`. Unknown shoulder roots produce null operands/fractions. Both same-day fractions use the consumer's configured daily cap. | A seven-day numerator divided by a daily budget is dimensionally false; release runner and shoulder critic enforce separate caps; four unset runner gates and runtime shoulder overrides diverge from event emission; proven operand mismatches are actionable Shipyard evidence. |
+| U1 | **No config key.** Explicitly invoking `shipyard inspect` is the opt-in; unset/no-argument behavior remains `status`. | Owner answer on 2026-07-29: “no config”. The gate file limits config-gated additivity to runner/installer changes; this explicit read-only console command changes neither. |
+| U2 | After every local gate passes, **push `main`** and verify the configured deck/mirror publication cascade. | Owner answer on 2026-07-29: “push”. This explicitly authorizes the outward-facing publication named by the ticket. |
 
 ### Open decisions
 
-**None with defaults.** The two unresolved items below are owner-decision class
-and therefore cannot be defaulted by the builder.
+**None.**
 
 ### User-decision class
 
-| # | Question | Why owner input is required |
-|---|---|---|
-| U1 | Does the explicit `shipyard inspect` invocation itself satisfy additivity, allowing **no config key**, or must v1 add a `[shipyard] inspect_enabled=true` gate whose unset value refuses the command? | `.agents/config.toml` literally says every new behavior gets a config key, while `.agents/gates.md` narrows that rule to runner/installer changes. The two choices materially change the public CLI. |
-| U2 | After all local gates pass, may execution **push `main`**, which publishes the changed public deck and triggers its configured mirror cascade, or must it stop with clean local commits for the owner to push later? | Publication is outward-facing. Updating the canonical README/deck is required, but authorization to publish cannot be inferred from authorization to design/build locally. |
+**None. U1 and U2 are locked above.**
 
-**Auto-gate: STOP** until U1 and U2 are answered. All implementation phases are
-otherwise decision-complete.
+**Auto-gate: PROCEED.** The implementation is decision-complete.
 
 ## Versioned Output Contract
 
@@ -1920,8 +1917,22 @@ move, and push/publication result or explicit local-only stop.
 
 ---
 
-`polish-ticket` complete. Auto-gate is **STOPPED** on U1 and U2. After both are
-answered, update the locked decision table/Ledger and run:
+### Execution preflight — 2026-07-29T19:05:27Z
+
+- Owner answers, verbatim: U1 “no config”; U2 “push”.
+- `builder: inline (decision recording is a change under 30 lines; baseline
+  gates are orchestrator-owned verification)`.
+- Clean canonical `main`; no skill symlink resolves through a worktree.
+- Live baseline: `install.sh --doctor --project .` rc=0; `shipyard status`
+  lists six timers and a clean doctor; `systemctl --user list-timers
+  'shipyard-*'` lists all six expected next fires.
+- Green baseline: `bats tests/` 439/439; syntax/pycompile rc=0; leak-check
+  clean; deck fresh/complete/render pass; lifecycle rc=0.
+- `$QUARTET_NOTIFY_CMD` and `$QUARTET_EVENTS_DIR` are unset in this interactive
+  shell; completion notification cannot be fired through the configured path
+  from this process, so final proof will record that limitation.
+
+`polish-ticket` complete. Auto-gate is **PROCEEDING** through:
 
 ```text
 execute-ticket docs/tickets/pending/shipyard-fleet-inspect-cli.md
