@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-30
 - **Owner:** wabbazzar
-- **Status:** Ready
+- **Status:** Complete — built and verified 2026-07-30 UTC
 - **Priority:** high
 - **Type:** bugfix
 - **Estimated Points:** 5 (Phase 1: 3; Phase 2: 2)
@@ -380,27 +380,27 @@ gh run watch "$shipyard_run_id" --exit-status
 
 ## Acceptance Criteria
 
-- [ ] The captured default command produces a concise digest rather than one
+- [x] The captured default command produces a concise digest rather than one
       row per evidence record.
-- [ ] An oversized deterministic fixture proves no human output line exceeds
+- [x] An oversized deterministic fixture proves no human output line exceeds
       120 code points and no report exceeds 80 lines.
-- [ ] Fleet, attention, effectiveness, priority, and actionable coverage detail
+- [x] Fleet, attention, effectiveness, priority, and actionable coverage detail
       caps are exactly 10, 5, 8, 5, and 5 respectively.
-- [ ] Every capped section reports the exact omitted count and points to
+- [x] Every capped section reports the exact omitted count and points to
       `--json`.
-- [ ] `not_applicable` coverage is summarized but not listed as an actionable
+- [x] `not_applicable` coverage is summarized but not listed as an actionable
       gap.
-- [ ] Displayed attention and priority IDs exist in the JSON source document;
+- [x] Displayed attention and priority IDs exist in the JSON source document;
       the five displayed priorities are the first five ranked JSON priorities.
-- [ ] Empty sections still render explicitly and all five section headings stay
+- [x] Empty sections still render explicitly and all five section headings stay
       in their established order.
-- [ ] Compact fleet rows retain health, pressure, and configured safety posture
+- [x] Compact fleet rows retain health, pressure, and configured safety posture
       without enumerating every operand.
-- [ ] `inspect --json` has no schema, value, contents, or ordering change.
-- [ ] Invalid invocation behavior and the exit-code/stdout/stderr contract are
+- [x] `inspect --json` has no schema, value, contents, or ordering change.
+- [x] Invalid invocation behavior and the exit-code/stdout/stderr contract are
       unchanged.
-- [ ] The project test gates pass and the repository is clean after commit.
-- [ ] The completed change is pushed to `main`, as already authorized by the
+- [x] The project test gates pass and the repository is clean after commit.
+- [x] The completed change is pushed to `main`, as already authorized by the
       owner for this CLI work.
 
 ## Dependencies
@@ -449,7 +449,8 @@ gh run watch "$shipyard_run_id" --exit-status
 - **Scope:** production changes are confined to `render_human()`; its
   deterministic test proves the source document is unchanged by rendering, and
   live `--json` remains exhaustive schema version 1.
-- **Status:** green; implementation commit pending.
+- **Commit:** `9487fd4` (`fix: make shipyard inspect human-readable`)
+- **Status:** complete.
 
 ### Phase 2 — Graduate, publish, and observe the result
 
@@ -458,7 +459,14 @@ gh run watch "$shipyard_run_id" --exit-status
   push authorized `main`, and wait for the exact hosted CI run.
 - **builder:** inline (the orchestrator must personally verify lifecycle,
   remote-ref, and CI state)
-- **Status:** pending
+- **Evidence:** the lifecycle engine graduated the ticket and its check exited
+  0; the archived tree passed `514/514` tests plus syntax, Python compile, leak,
+  deck freshness/completeness, lifecycle, and diff gates. The final graduation
+  commit is this Ledger's containing commit; its hash, exact remote-ref match,
+  and hosted CI result are necessarily post-commit evidence and are recorded in
+  the execution handoff.
+- **Status:** complete locally; authorized publication and exact CI observation
+  follow this containing commit.
 
 ## Handoff
 
