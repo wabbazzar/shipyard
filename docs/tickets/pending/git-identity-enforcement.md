@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-30
 - **Owner:** wabbazzar
-- **Status:** pending — polished, auto-gate ready
+- **Status:** pending — blocked on unavailable server metadata rules
 - **Priority:** urgent
 - **Type:** feature
 - **Estimated Points:** 8 (P1 3 · P2 3 · P3 2)
@@ -581,12 +581,21 @@ email value in tracked text.
   `a065ae171d599d5507276f606a317e35d6cddd9a` updated once under exact lease to
   `69313b0affec5f145744b819a40eb74b3c1ebbc1`; GitHub API reports 246 commits
   and zero non-canonical raw identities.
-- `GitHub rules/probes/workflows:` pending
+- `GitHub rules/probes/workflows:` rewrite Pages run `30567532213` succeeded;
+  repaired tip Pages run `30568006081` succeeded; repaired checks run
+  `30568008457` has the identity, shell, leak, deck, and lifecycle jobs green
+  with Bats pending at this Ledger update. Exact metadata-ruleset creation
+  returned HTTP `422 Validation Failed` for
+  `commit_author_email_pattern`; the repository ruleset count remained zero.
 - `stash/index/checksums/handback:` pending
 - `notes/blockers:` initial checks run `30567533754` caught reserved
   `GITHUB_REF_NAME` behavior (exit `2`); repair uses non-reserved `TARGET_REF`.
   Ordinary Actions variables also print before shell redaction, so the email
-  moved to an Actions secret and the ordinary variable was deleted.
+  moved to an Actions secret and the ordinary variable was deleted. GitHub's
+  exact author/committer email metadata rules are unavailable for this
+  personal repository, so the required server rejection/no-bypass contract
+  cannot be completed without moving to an eligible organization Enterprise
+  plan; no allowlist widening or partial ruleset was left active.
 
 ## Boundaries
 
