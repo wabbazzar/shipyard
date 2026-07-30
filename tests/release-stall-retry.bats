@@ -59,7 +59,8 @@ job_end_status() { events_json | jq -r 'select(.event=="job.end" and (.svc|endsw
 
 @test "stall_retries=2: a stall then a written pass self-heals (one retry, no fail)" {
   PROJ="$(make_fixture_project stallpass can-merge-true.toml)"
-  sed -i "/^\[release\]/a stall_retries = 2" "$PROJ/.agents/config.toml"
+  fixture_replace_in_place "$PROJ/.agents/config.toml" '^\[release\]$' \
+    $'[release]\nstall_retries = 2'
   stub_claude '[ "$n" -ge 2 ] && printf "%s" "{\"pass\":true,\"mode\":\"daily\",\"timestamp\":\"t\"}" > "$rf"'
   run_release
   [ "$(n_retry_events)" -eq 1 ]                   # retried exactly once
@@ -71,7 +72,8 @@ job_end_status() { events_json | jq -r 'select(.event=="job.end" and (.svc|endsw
 
 @test "stall_retries=2: a genuine pass:false verdict is NEVER retried" {
   PROJ="$(make_fixture_project genuinefail can-merge-true.toml)"
-  sed -i "/^\[release\]/a stall_retries = 2" "$PROJ/.agents/config.toml"
+  fixture_replace_in_place "$PROJ/.agents/config.toml" '^\[release\]$' \
+    $'[release]\nstall_retries = 2'
   stub_claude 'printf "%s" "{\"pass\":false,\"mode\":\"daily\",\"timestamp\":\"t\",\"errors\":[\"real gate failure\"]}" > "$rf"'
   run_release
   [ "$(n_retry_events)" -eq 0 ]         # a real verdict is not a stall
@@ -82,7 +84,8 @@ job_end_status() { events_json | jq -r 'select(.event=="job.end" and (.svc|endsw
 
 @test "stall_retries=2: a persistent stall exhausts the retries then fails" {
   PROJ="$(make_fixture_project stallexhaust can-merge-true.toml)"
-  sed -i "/^\[release\]/a stall_retries = 2" "$PROJ/.agents/config.toml"
+  fixture_replace_in_place "$PROJ/.agents/config.toml" '^\[release\]$' \
+    $'[release]\nstall_retries = 2'
   stub_claude ':'                       # never writes → stall every attempt
   run_release
   [ "$(n_retry_events)" -eq 2 ]         # retried twice (1 + 2 = 3 spawns)

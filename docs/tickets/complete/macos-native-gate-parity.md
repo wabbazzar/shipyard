@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-30
 - **Owner:** wabbazzar
-- **Status:** pending — polished and ready for autonomous build
+- **Status:** complete — native Mac gate verified; server integration underway
 - **Priority:** high
 - **Type:** bugfix
 - **Estimated Points:** 5 (3 phases, each capped at 2)
@@ -357,18 +357,18 @@ watches GitHub CI; this Mac performs no GitHub push.
 
 ## Acceptance Criteria / Definition of Done
 
-- [ ] `/bin/bash -n` succeeds for every shipped shell entrypoint, including
+- [x] `/bin/bash -n` succeeds for every shipped shell entrypoint, including
       `agents/design/runner.sh`.
-- [ ] The design role launched with the installer-selected interpreter reaches
+- [x] The design role launched with the installer-selected interpreter reaches
       its deterministic self-test and returns 0.
 - [ ] A planted current-day event is counted inside the seven-day collector
       window on both macOS and Linux.
-- [ ] The 40-day self-test incident is excluded without GNU-only `touch -d`.
-- [ ] Test fixture mutation reaches the product assertion under BSD and GNU sed.
-- [ ] The regression coverage fails against `a065ae1` for the captured causes.
+- [x] The 40-day self-test incident is excluded without GNU-only `touch -d`.
+- [x] Test fixture mutation reaches the product assertion under BSD and GNU sed.
+- [x] The regression coverage fails against `a065ae1` for the captured causes.
 - [ ] The complete repository gate is green on the Mac, and Linux GitHub CI is
-      green after server-side integration.
-- [ ] No live LaunchAgent is reloaded and no event file is changed by this
+      green after server-side integration. Mac: 528/528; server/CI pending.
+- [x] No live LaunchAgent is reloaded and no event file is changed by this
       ticket.
 
 ## Dependencies
@@ -403,7 +403,7 @@ GREEN evidence, and honest deferrals before moving to the next phase.
 | Phase | Plan | Builder | Commit | Evidence / notes |
 |---|---|---|---|---|
 | 1 — Bash 3.2 contract | Add a RED launchd-interpreter regression, make the embedded Python comment parser-safe, then run native + modern syntax gates. | builder: subagent (1 agent) | `4bbc319` | RED: `/bin/bash -n agents/design/runner.sh` rc=2 with unmatched backtick. GREEN: portability Bats 1/1, native + modern full syntax PASS, compile/leak/deck PASS; render rc=3 (Playwright unavailable). |
-| 2 — portable UTC/mtime | Add RED native cases for current-day collection and stale self-test data, replace GNU-relative time operations with bounded Python, and prove source checksums stay unchanged. | builder: subagent (1 agent) | this phase commit; exact hash recorded in Phase 3 update | RED: native design Bats 0/2, current-day `job_fail=0`, BSD touch rejected relative time. GREEN: design + portability Bats 13/13; seven UTC days counted; stale incident excluded; SHA-256 sources unchanged; native/modern syntax, compile/leak/deck PASS. |
-| 3 — fixture utilities/final | pending | pending | pending | RED captured during polish: BSD `sed -i` aborts before product assertion. |
+| 2 — portable UTC/mtime | Add RED native cases for current-day collection and stale self-test data, replace GNU-relative time operations with bounded Python, and prove source checksums stay unchanged. | builder: subagent (1 agent) | `e9a85e8` | RED: native design Bats 0/2, current-day `job_fail=0`, BSD touch rejected relative time. GREEN: design + portability Bats 13/13; seven UTC days counted; stale incident excluded; SHA-256 sources unchanged; native/modern syntax, compile/leak/deck PASS. |
+| 3 — fixture utilities/final | Add named fixture mutation/mtime helpers, migrate every reproduced GNU-only fixture form, prove the static contract, run the full Mac gate, and graduate the ticket. | builder: subagent (1 agent) + lead integration | this phase commit | RED: BSD `sed -i` aborted before the deck assertion; the first native full pass exposed Bash 3.2 runtime failures from nested `case` in command substitution and `${var^}`, GNU relative-date cooldown writes, lock-fixture mismatch, and `/var` ↔ `/private/var` manifest identity. GREEN: all 25 reproduced failures pass; native ARM64 `/bin/bash` Bats 528/528 (exit 0); native + modern syntax, Python compile, leak, deck freshness/completeness, and `git diff --check` pass. Render gate exits 3 only because Playwright is absent. Live LaunchAgents and event files were not mutated. Linux/server gate and GitHub CI are the receiving agent's integration check. |
 
 Run this ticket with the `execute-ticket` skill.

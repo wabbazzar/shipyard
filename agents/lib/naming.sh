@@ -35,6 +35,17 @@ role_display() {
   printf '%s\n' "$role"
 }
 
+# display_title <display>
+#
+# Uppercase the first ASCII character for notification titles. Keep this in
+# the shared naming layer instead of using Bash 4's ${var^}: launchd invokes
+# the runners with macOS /bin/bash 3.2.
+display_title() {
+  LC_ALL=C awk '{
+    print toupper(substr($0, 1, 1)) substr($0, 2)
+  }' <<<"$1"
+}
+
 # dir_for_role <role> — the agent directory for a role: an identity map
 # (the legacy display-name dir aliases are retired).
 dir_for_role() {

@@ -118,7 +118,11 @@ decisions() {
 }
 
 @test "dedup lock failure fails open instead of swallowing the alert" {
-  mkdir "$PROJECT_DIR/tmp/notification-dedup.lock"
+  if command -v flock >/dev/null 2>&1; then
+    mkdir "$PROJECT_DIR/tmp/notification-dedup.lock"
+  else
+    mkdir "$PROJECT_DIR/tmp/notification-dedup.lock.d"
+  fi
 
   quartet_notify --class urgent --episode lock-failed "must deliver" "body"
 

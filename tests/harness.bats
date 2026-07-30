@@ -296,7 +296,8 @@ esac'
 @test "run_runner surfaces a failing deterministic gate as a fail event" {
   proj="$(make_fixture_project evfail)"
   # Make the test command fail — post-merge must report status=fail, exit 1.
-  sed -i 's/^test_cmd .*/test_cmd     = "false"/' "$proj/.agents/config.toml"
+  fixture_replace_in_place "$proj/.agents/config.toml" \
+    '^test_cmd .*$' 'test_cmd     = "false"'
 
   run run_runner release "$proj" --mode post-merge --merge-sha "$(git -C "$proj" rev-parse HEAD)"
   [ "$status" -eq 1 ]

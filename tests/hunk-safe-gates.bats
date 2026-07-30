@@ -37,7 +37,7 @@ seed_phantom_and_real() {
   # tracked.ts is NOT modified → it is a phantom (listed, no hunk).
   printf 'src/tracked.ts %s\nsrc/real.ts %s\n' "$(date +%s)" "$(date +%s)" \
     > "$P/tmp/critic-queue-s1"
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
 }
 
 @test "flag ON: phantom (no-hunk) entry is marked, real entry is not" {

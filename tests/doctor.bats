@@ -122,8 +122,9 @@ retired_word_a() { printf '%s' "au""gur"; }
 
 @test "doctor (a): ExecStart runner not under \$QUARTET_DIR -> finding" {
   doctor_install
-  sed -i "s#$QUARTET_ROOT/agents/build/runner.sh#/opt/stale-quartet/agents/build/runner.sh#" \
-    "$UNITS/docp-build.service"
+  fixture_replace_in_place "$UNITS/docp-build.service" \
+    "$QUARTET_ROOT/agents/build/runner.sh" \
+    '/opt/stale-quartet/agents/build/runner.sh'
   run_doctor
   echo "$output"
   [ "$status" -eq 1 ]

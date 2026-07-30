@@ -307,8 +307,9 @@ make_phase5_benchmark_fixture() {
   make_phase3_project outcomes "design build release" "$root"
   write_phase4_result tmp design \
     "[$(phase4_proposal bug-open '[]' 'Disconnected bug'),$(phase4_proposal feature-open '[]' 'Disconnected feature')]"
-  sed -i 's/"type":"feature","title":"Disconnected bug"/"type":"bug","title":"Disconnected bug"/' \
-    "$P3_PROJECT/tmp/outcomes-design-result.json"
+  fixture_replace_in_place "$P3_PROJECT/tmp/outcomes-design-result.json" \
+    '"type":"feature","title":"Disconnected bug"' \
+    '"type":"bug","title":"Disconnected bug"'
   cat >"$P3_PROJECT/data/decisions.jsonl" <<'EOF'
 {"proposal_id":"unrelated-decision","decision":"approve","ts":"2026-07-28T10:00:00Z"}
 EOF
@@ -387,14 +388,16 @@ print(hashlib.sha256(("manifest\0" + e["source_ref"] + "\0" + operand)
   ' <<<"$output"
   [ "$(jq -r '.fleet[0].state' <<<"$output")" != "fault_observed" ]
 
-  sed -i 's/ActiveState=active/ActiveState=activating/; s/UnitFileState=enabled/UnitFileState=enabled-runtime/' \
-    "$SHIM_LOG/normal-release.timer.stdout"
+  fixture_replace_in_place "$SHIM_LOG/normal-release.timer.stdout" \
+    'ActiveState=active' 'ActiveState=activating'
+  fixture_replace_in_place "$SHIM_LOG/normal-release.timer.stdout" \
+    'UnitFileState=enabled' 'UnitFileState=enabled-runtime'
   run run_inspect
   [ "$status" -eq 0 ]
   [ "$(jq -r '.fleet[0].state' <<<"$output")" != "fault_observed" ]
 
-  sed -i 's/ActiveState=activating/ActiveState=failed/' \
-    "$SHIM_LOG/normal-release.timer.stdout"
+  fixture_replace_in_place "$SHIM_LOG/normal-release.timer.stdout" \
+    'ActiveState=activating' 'ActiveState=failed'
   run run_inspect
   [ "$status" -eq 0 ]
   [ "$(jq -r '.fleet[0].state' <<<"$output")" = "fault_observed" ]
@@ -488,7 +491,7 @@ EOF
     and .fleet[0].pressure.configured_max_open_proposals == 7
   ' <<<"$output"
 
-  sed -i 's/"007"/1.5/' "$P/.agents/config.toml"
+  fixture_replace_in_place "$P/.agents/config.toml" '"007"' '1.5'
   run run_inspect
   [ "$status" -eq 0 ]
   jq -e '
@@ -536,8 +539,8 @@ EOF
     and .fleet[0].units[0].timer_stale_state == "fresh"
   ' <<<"$output"
 
-  sed -i 's/Thu 2026-07-30 06:00:00 UTC/Thu 2026-07-30 01:00:00 CDT/' \
-    "$SHIM_LOG/timestamps-release.timer.stdout"
+  fixture_replace_in_place "$SHIM_LOG/timestamps-release.timer.stdout" \
+    'Thu 2026-07-30 06:00:00 UTC' 'Thu 2026-07-30 01:00:00 CDT'
   run run_inspect
   [ "$status" -eq 0 ]
   jq -e '
@@ -549,7 +552,8 @@ EOF
   ' <<<"$output"
 
   seed_show_output timestamps-release
-  sed -i '/ExecMainStatus=/d' "$SHIM_LOG/timestamps-release.service.stdout"
+  fixture_replace_in_place "$SHIM_LOG/timestamps-release.service.stdout" \
+    '^ExecMainStatus=.*\n?' ''
   run run_inspect
   [ "$status" -eq 0 ]
   jq -e '
@@ -559,13 +563,13 @@ EOF
   ' <<<"$output"
 
   seed_show_output timestamps-release
-  sed -i 's/Thu 2026-07-30 06:00:00 UTC/Wed 2026-07-29 11:55:00 UTC/' \
-    "$SHIM_LOG/timestamps-release.timer.stdout"
+  fixture_replace_in_place "$SHIM_LOG/timestamps-release.timer.stdout" \
+    'Thu 2026-07-30 06:00:00 UTC' 'Wed 2026-07-29 11:55:00 UTC'
   run run_inspect
   [ "$status" -eq 0 ]
   [ "$(jq -r '.fleet[0].units[0].timer_stale_state' <<<"$output")" = "fresh" ]
-  sed -i 's/Wed 2026-07-29 11:55:00 UTC/Wed 2026-07-29 11:54:59 UTC/' \
-    "$SHIM_LOG/timestamps-release.timer.stdout"
+  fixture_replace_in_place "$SHIM_LOG/timestamps-release.timer.stdout" \
+    'Wed 2026-07-29 11:55:00 UTC' 'Wed 2026-07-29 11:54:59 UTC'
   run run_inspect
   [ "$status" -eq 0 ]
   [ "$(jq -r '.fleet[0].units[0].timer_stale_state' <<<"$output")" = "stale" ]
@@ -576,7 +580,8 @@ UnexpectedProperty=value
 LoadState=duplicate
 malformed-line
 EOF
-  sed -i '/ExecMainStatus=/d' "$SHIM_LOG/timestamps-release.service.stdout"
+  fixture_replace_in_place "$SHIM_LOG/timestamps-release.service.stdout" \
+    '^ExecMainStatus=.*\n?' ''
   run run_inspect
   [ "$status" -eq 0 ]
   jq -e '
@@ -595,8 +600,12 @@ EOF
   write_timer faults-release
   make_strict_show_stub
   seed_show_output faults-release
-  sed -i 's/ActiveState=active/ActiveState=inactive/; s/SubState=waiting/SubState=dead/; s/UnitFileState=enabled/UnitFileState=disabled/' \
-    "$SHIM_LOG/faults-release.timer.stdout"
+  fixture_replace_in_place "$SHIM_LOG/faults-release.timer.stdout" \
+    'ActiveState=active' 'ActiveState=inactive'
+  fixture_replace_in_place "$SHIM_LOG/faults-release.timer.stdout" \
+    'SubState=waiting' 'SubState=dead'
+  fixture_replace_in_place "$SHIM_LOG/faults-release.timer.stdout" \
+    'UnitFileState=enabled' 'UnitFileState=disabled'
 
   run run_inspect
 
@@ -610,8 +619,12 @@ EOF
   ' <<<"$output"
 
   seed_show_output faults-release
-  sed -i 's/ActiveState=inactive/ActiveState=failed/; s/Result=success/Result=failed/; s/ExecMainStatus=0/ExecMainStatus=1/' \
-    "$SHIM_LOG/faults-release.service.stdout"
+  fixture_replace_in_place "$SHIM_LOG/faults-release.service.stdout" \
+    'ActiveState=inactive' 'ActiveState=failed'
+  fixture_replace_in_place "$SHIM_LOG/faults-release.service.stdout" \
+    'Result=success' 'Result=failed'
+  fixture_replace_in_place "$SHIM_LOG/faults-release.service.stdout" \
+    'ExecMainStatus=0' 'ExecMainStatus=1'
   run run_inspect
   [ "$status" -eq 0 ]
   jq -e '
@@ -700,8 +713,8 @@ EOF
   ' <<<"$output"
 
   cp "$QUARTET_ROOT/AGENTS.md" "$P/AGENTS.md"
-  sed -i 's/^project_name.*/project_name = "missing dependency: gh"/' \
-    "$P/.agents/config.toml"
+  fixture_replace_in_place "$P/.agents/config.toml" '^project_name.*$' \
+    'project_name = "missing dependency: gh"'
   run run_inspect
   [ "$status" -eq 0 ]
   jq -e '
@@ -711,9 +724,9 @@ EOF
       | .state=="available" and .reason=="ok")
   ' <<<"$output"
 
-  sed -i 's/^project_name.*/project_name = "doctor-state"/' \
-    "$P/.agents/config.toml"
-  sed -i '/^project_name/d' "$P/.agents/config.toml"
+  fixture_replace_in_place "$P/.agents/config.toml" '^project_name.*$' \
+    'project_name = "doctor-state"'
+  fixture_replace_in_place "$P/.agents/config.toml" '^project_name.*\n?' ''
   run run_inspect
   [ "$status" -eq 0 ]
   jq -e '
@@ -1601,8 +1614,8 @@ EOF
   ' <<<"$output"
 
   : >"$root/2026-07-29.jsonl"
-  sed -i '0,/budget_tokens_daily = 100/s//budget_tokens_daily = 0/' \
-    "$P3_PROJECT/.agents/config.toml"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    'budget_tokens_daily = 100' 'budget_tokens_daily = 0' 1
   run run_phase3
   [ "$status" -eq 0 ]
   jq -e '
@@ -1689,8 +1702,8 @@ EOF
   [ "$(cat "$SHIM_LOG/journalctl.argv")" = \
     "--user -u caddy -o json --no-pager --output-fields=__REALTIME_TIMESTAMP,MESSAGE --since 2026-07-22T12:00:00Z --until 2026-07-29T12:00:00Z" ]
   journal_calls="$(wc -l <"$SHIM_LOG/journalctl.argv")"
-  sed -i 's#https://Example.TEST/health?fixture=ignored#https://[broken#' \
-    "$P3_PROJECT/.agents/config.toml"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    'https://Example\.TEST/health\?fixture=ignored' 'https://[broken'
   run run_phase3
   [ "$status" -eq 0 ]
   jq -e '
@@ -1746,8 +1759,8 @@ EOF
   write_phase4_result tmp design "[$(phase4_proposal plain-open)]"
 
   make_phase3_project spacetime "design" "$root"
-  sed -i 's#result_dir = "tmp"#result_dir = "observations"#' \
-    "$P3_PROJECT/.agents/config.toml"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    'result_dir = "tmp"' 'result_dir = "observations"'
   cat >>"$P3_PROJECT/.agents/config.toml" <<'EOF'
 [names]
 design = "mentat"
@@ -1755,8 +1768,8 @@ EOF
   write_phase4_result observations mentat "[$(phase4_proposal space-open)]"
 
   make_phase3_project custom "design" "$root"
-  sed -i 's#result_dir = "tmp"#result_dir = "state/design"#' \
-    "$P3_PROJECT/.agents/config.toml"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    'result_dir = "tmp"' 'result_dir = "state/design"'
   cat >>"$P3_PROJECT/.agents/config.toml" <<'EOF'
 [names]
 design = "navigator"
@@ -1764,23 +1777,23 @@ EOF
   write_phase4_result state/design navigator "[$(phase4_proposal custom-open)]"
 
   make_phase3_project absolute "design" "$root"
-  sed -i 's#result_dir = "tmp"#result_dir = "/abs"#' \
-    "$P3_PROJECT/.agents/config.toml"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    'result_dir = "tmp"' 'result_dir = "/abs"'
   write_phase4_result abs design "[$(phase4_proposal absolute-open)]"
 
   make_phase3_project empty "design" "$root"
-  sed -i 's#result_dir = "tmp"#result_dir = ""#' \
-    "$P3_PROJECT/.agents/config.toml"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    'result_dir = "tmp"' 'result_dir = ""'
   write_phase4_result . design "[$(phase4_proposal empty-open)]"
 
   make_phase3_project integer "design" "$root"
-  sed -i 's#result_dir = "tmp"#result_dir = 7#' \
-    "$P3_PROJECT/.agents/config.toml"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    'result_dir = "tmp"' 'result_dir = 7'
   write_phase4_result 7 design "[$(phase4_proposal integer-open)]"
 
   make_phase3_project structured "design" "$root"
-  sed -i 's#result_dir = "tmp"#result_dir = ["not","silently","tmp"]#' \
-    "$P3_PROJECT/.agents/config.toml"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    'result_dir = "tmp"' 'result_dir = ["not","silently","tmp"]'
 
   run run_phase3
 
@@ -1985,13 +1998,15 @@ EOF
   root="$BATS_TEST_TMPDIR/events-overseer-applicability"
   mkdir -p "$root"
   make_phase3_project auto "build" "$root"
-  sed -i '1iautonomous = true' "$P3_PROJECT/.agents/config.toml"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    '\A' $'autonomous = true\n' 1
   write_phase4_result tmp design "[$(phase4_proposal must-not-read)]"
   cat >"$P3_PROJECT/data/decisions.jsonl" <<'EOF'
 {"proposal_id":"must-not-read","decision":"approve","ts":"2026-07-28T10:00:00Z"}
 EOF
   make_phase3_project manual "build" "$root"
-  sed -i '1iautonomous = false' "$P3_PROJECT/.agents/config.toml"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    '\A' $'autonomous = false\n' 1
 
   run run_phase3
 
@@ -2096,24 +2111,28 @@ EOF
   root="$BATS_TEST_TMPDIR/events-readonly-phase4"
   mkdir -p "$root"
   make_phase3_project readonly "design" "$root"
-  sed -i '1iautonomous = true' "$P3_PROJECT/.agents/config.toml"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    '\A' $'autonomous = true\n' 1
   write_phase4_result tmp design "[$(phase4_proposal readonly-open)]"
   cat >"$P3_PROJECT/tmp/overseer-result.json" <<'EOF'
 {"healthy":false,"status":"concerns","summary":"SYNTHETIC_REDACT_ME","findings":[{"kind":"x"}],"ts":"2026-07-28T11:00:00Z"}
 EOF
 
   make_phase3_project overseer-duplicate "build" "$root"
-  sed -i '1iautonomous = true' "$P3_PROJECT/.agents/config.toml"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    '\A' $'autonomous = true\n' 1
   cat >"$P3_PROJECT/tmp/overseer-result.json" <<'EOF'
 {"healthy":true,"healthy":false,"status":"bad","summary":"DUPLICATE_SECRET","findings":[],"ts":"2026-07-28T11:00:00Z"}
 EOF
   make_phase3_project overseer-nonfinite "build" "$root"
-  sed -i '1iautonomous = true' "$P3_PROJECT/.agents/config.toml"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    '\A' $'autonomous = true\n' 1
   cat >"$P3_PROJECT/tmp/overseer-result.json" <<'EOF'
 {"healthy":true,"status":"bad","summary":"NONFINITE_SECRET","findings":[],"score":Infinity,"ts":"2026-07-28T11:00:00Z"}
 EOF
   make_phase3_project overseer-malformed "build" "$root"
-  sed -i '1iautonomous = true' "$P3_PROJECT/.agents/config.toml"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    '\A' $'autonomous = true\n' 1
   cat >"$P3_PROJECT/tmp/overseer-result.json" <<'EOF'
 {"healthy":"yes","status":"","summary":"MALFORMED_SECRET","findings":{},"ts":"invalid"}
 EOF

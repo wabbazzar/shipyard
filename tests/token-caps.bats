@@ -34,7 +34,8 @@ banned_regex() {
 # fix_trunk <project-dir> — absent-keys.toml deliberately omits `branch`
 # and fixtures have no origin; pin trunk so detect-trunk resolves.
 fix_trunk() {
-  sed -i '1i branch = "main"' "$1/.agents/config.toml"
+  fixture_replace_in_place "$1/.agents/config.toml" \
+    '\A' $'branch = "main"\n' 1
 }
 
 # stage_ops_incident <project-dir> <name> — a failed systemd unit in ops.json

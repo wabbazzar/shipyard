@@ -302,13 +302,31 @@ run_configure_git_identity() {
 # crew_units_for_role <role> — this project's scheduler basenames (without
 # .service/.plist) whose command runs agents/<role>/runner.sh for THIS project
 # dir. One per line; empty if none. Non-crew jobs never match.
+manifest_matches_project() {
+  local manifest="$1" claimed claimed_real
+  grep -Fq -- "--project $PROJECT_DIR " "$manifest" 2>/dev/null && return 0
+  grep -Fq "<string>$PROJECT_DIR</string>" "$manifest" 2>/dev/null && return 0
+
+  while IFS= read -r claimed; do
+    [ -d "$claimed" ] || continue
+    claimed_real="$(cd "$claimed" 2>/dev/null && pwd -P)" || continue
+    [ "$claimed_real" = "$(cd "$PROJECT_DIR" && pwd -P)" ] && return 0
+  done < <(
+    {
+      sed -n 's#.*--project \([^ ]*\) .*#\1#p' "$manifest"
+      sed -n 's#.*<string>\([^<]*\)</string>.*#\1#p' "$manifest"
+    } 2>/dev/null
+  )
+  return 1
+}
+
 crew_units_for_role() {
   local role="$1" manifest
   case "$SCHEDULER" in
     systemd)
       for manifest in "$SYSTEMD_DIR/${PROJECT_NAME}-"*.service; do
         [ -e "$manifest" ] || continue
-        grep -Fq -- "--project $PROJECT_DIR " "$manifest" 2>/dev/null || continue
+        manifest_matches_project "$manifest" || continue
         grep -Fq "agents/$role/runner.sh" "$manifest" 2>/dev/null || continue
         basename "${manifest%.service}"
       done
@@ -316,7 +334,7 @@ crew_units_for_role() {
     launchd)
       for manifest in "$LAUNCHD_DIR/${PROJECT_NAME}-"*.plist; do
         [ -e "$manifest" ] || continue
-        grep -Fq "<string>$PROJECT_DIR</string>" "$manifest" 2>/dev/null || continue
+        manifest_matches_project "$manifest" || continue
         grep -Fq "agents/$role/runner.sh" "$manifest" 2>/dev/null || continue
         basename "${manifest%.plist}"
       done

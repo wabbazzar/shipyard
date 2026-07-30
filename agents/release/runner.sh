@@ -75,6 +75,7 @@ export QUARTET_ROLE="$ROLE"
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/naming.sh"
 DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
+DISPLAY_TITLE="$(display_title "$DISPLAY")"
 SVC="$PROJECT_NAME-$DISPLAY"
 
 RESULT_DIR_REL="$(jq -r '.paths.result_dir // "tmp"' <<<"$CFG_JSON")"
@@ -464,7 +465,7 @@ if [ "$BLOCKING_GATE_ACTIVE" -eq 1 ]; then
 fi
 
 quartet_notify --class "$RUN_CLASS" --episode "$RUN_EPISODE" \
-  "$(release_notify_title "$PROJECT_NAME" "${DISPLAY^}" "$MODE" "$PASS" "$INCOMPLETE")" \
+  "$(release_notify_title "$PROJECT_NAME" "$DISPLAY_TITLE" "$MODE" "$PASS" "$INCOMPLETE")" \
   "$SUMMARY" || true
 
 JOB_DUR=$(( $(date +%s) - JOB_START ))

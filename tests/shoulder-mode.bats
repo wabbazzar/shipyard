@@ -107,7 +107,7 @@ critique_events() {
   P="$(make_fixture_project critc)"
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
   queue_files "$P" s1 2
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   export CRITIC_BATCH_FILES=100 CRITIC_IDLE_SEC=1
 
   run run_watch "$P" --session s1 --once
@@ -141,7 +141,7 @@ critique_events() {
   P="$(make_fixture_project critq-empty)"
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
   printf 'src/ghost.ts %s\n' "$(date +%s)" >> "$P/tmp/critic-queue-s1"
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   export CRITIC_IDLE_SEC=1 CRITIC_BATCH_FILES=100
 
   run run_watch "$P" --session s1 --once
@@ -172,13 +172,13 @@ critique_events() {
   queue_files "$P" s1 2
   export CRITIC_IDLE_SEC=1
 
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   run run_watch "$P" --session s1 --once
   [ "$status" -eq 0 ]
   [ -s "$P/tmp/critic-queue-s1" ]          # queue survives for next window
   [ "$(stub_calls claude)" = "0" ]
 
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   run run_watch "$P" --session s1 --once
   [ "$status" -eq 0 ]
   [ -s "$P/tmp/critic-queue-s1" ]
@@ -194,13 +194,13 @@ critique_events() {
   export CRITIC_IDLE_SEC=1
 
   for i in 1 2; do
-    touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+    fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
     run run_watch "$P" --session s1 --once
     [ "$status" -eq 0 ]
     [ -s "$P/tmp/critic-queue-s1" ]        # kept for retry
   done
 
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   run run_watch "$P" --session s1 --once
   [ "$status" -eq 0 ]
   [ ! -e "$P/tmp/critic-queue-s1" ]        # 3rd failure: gave up
@@ -218,7 +218,7 @@ critique_events() {
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
   make_stub claude-note 0
   queue_files "$P" s1 2
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
 
   run run_watch "$P" --session s1 --once
@@ -258,7 +258,7 @@ critique_events() {
     '{"ts":"2026-01-01T00:00:00Z","svc":"crite-release","event":"release.critique","tokens":999999999}' \
     >> "$(events_file)"
   queue_files "$P" s1 2
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   export CRITIC_IDLE_SEC=1
 
   run run_watch "$P" --session s1 --once
@@ -281,7 +281,7 @@ critique_events() {
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
   make_stub claude-note 3
   queue_files "$P" s1 2
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
 
   run run_watch "$P" --session s1 --once
@@ -289,7 +289,7 @@ critique_events() {
   [ -s "$P/tmp/critic-queue-s1" ]   # intact for retry
 
   make_stub claude-note 0                     # session freed up
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   run run_watch "$P" --session s1 --once
   [ "$status" -eq 0 ]
   [ ! -e "$P/tmp/critic-queue-s1" ]  # cleared after delivery
@@ -300,7 +300,7 @@ critique_events() {
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
   make_stub claude-note 2
   queue_files "$P" s1 2
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
 
   run run_watch "$P" --session s1 --once
@@ -312,7 +312,7 @@ critique_events() {
   P="$(make_fixture_project critf3)"
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
   queue_files "$P" s1 2
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   export CRITIC_IDLE_SEC=1
   unset CLAUDE_NOTE_CMD
 
@@ -331,13 +331,13 @@ critique_events() {
   export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
 
   for i in 1 2; do
-    touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+    fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
     run run_watch "$P" --session s1 --once
     [ "$status" -eq 0 ]
     [ -s "$P/tmp/critic-queue-s1" ]        # kept for retry
   done
 
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   run run_watch "$P" --session s1 --once
   [ "$status" -eq 0 ]
   [ ! -e "$P/tmp/critic-queue-s1" ]        # 3rd failure: gave up
@@ -362,7 +362,7 @@ EOF
   printf '// stub\n' > "$P/src/early.ts"
   printf '// stub\n' > "$P/src/late.ts"
   printf 'src/early.ts %s\n' "$(date +%s)" >> "$P/tmp/critic-queue-s1"
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
 
   run run_watch "$P" --session s1 --once

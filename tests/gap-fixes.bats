@@ -341,7 +341,8 @@ prep_build_incident() {
 @test "1d: build --mode incident is RETIRED — exits 3, prints the message, emits no events" {
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" can-merge-true.toml a1d
-  sed -i '/^wall_clock_sec/a in_scope_paths = ["*"]' "$p/.agents/config.toml"
+  fixture_replace_in_place "$p/.agents/config.toml" '^wall_clock_sec.*$' \
+    $'\\g<0>\nin_scope_paths = ["*"]'
   topo_commit_all "$p"
   prep_build_incident "$p" a1d
 
@@ -360,7 +361,8 @@ prep_build_incident() {
 @test "1d: incident retirement holds regardless of allow_no_ci/can_merge config" {
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" allow-no-ci-true.toml a1dw
-  sed -i '/^wall_clock_sec/a in_scope_paths = ["*"]' "$p/.agents/config.toml"
+  fixture_replace_in_place "$p/.agents/config.toml" '^wall_clock_sec.*$' \
+    $'\\g<0>\nin_scope_paths = ["*"]'
   topo_commit_all "$p"
   prep_build_incident "$p" a1dw
 
@@ -692,7 +694,7 @@ EOF
   mkdir -p "$P/tmp" "$P/src"
   printf '// stub\n' > "$P/src/a.ts"   # real untracked file: empty-diff queues are skipped
   printf 'src/a.ts %s\n' "$(date +%s)" >"$P/tmp/critic-queue-s9"
-  touch -d "2 minutes ago" "$P/tmp/critic-queue-s9"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s9"
   export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
 
   QUARTET_EVENTS_DIR="$EVENTS_DIR" \

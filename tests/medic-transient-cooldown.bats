@@ -95,9 +95,11 @@ run_medic_scan() {
   [ "$status" -eq 0 ]
 
   # The cooldown is recorded for the stable per-UTC-day id, reason transient_stuck.
-  local reason
+  local reason frozen_until
   reason="$(jq -r --arg iid "$IID" '.cooldowns[$iid].reason // "MISSING"' "$p/tmp/medic-state.json")"
+  frozen_until="$(jq -r --arg iid "$IID" '.cooldowns[$iid].frozen_until // "MISSING"' "$p/tmp/medic-state.json")"
   [ "$reason" = "transient_stuck" ]
+  [[ "$frozen_until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
 
   # A frozen event was emitted on the transient→stuck path (parity w/ siblings).
   ev="$(events_json | jq -c --arg iid "$IID" \

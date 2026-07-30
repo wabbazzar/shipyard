@@ -68,6 +68,7 @@ export QUARTET_ROLE="$ROLE"
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/naming.sh"
 DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
+DISPLAY_TITLE="$(display_title "$DISPLAY")"
 SVC="$PROJECT_NAME-$DISPLAY"
 
 # Trunk branch — config wins, else origin/HEAD; unresolvable fails loudly.
@@ -273,10 +274,10 @@ $RUN_CONTEXT"
   RUN_EPISODE="$(agent_episode "$PROJECT_NAME" "$ROLE" "$MODE" "$RUN_CAUSE" "$RESULT_FILE")"
   if [ "$PASS" = "true" ]; then
     quartet_notify --class "$RUN_CLASS" --episode "$RUN_EPISODE" \
-      "$PROJECT_NAME ${DISPLAY^} ($MODE)" "$SUMMARY" || true
+      "$PROJECT_NAME $DISPLAY_TITLE ($MODE)" "$SUMMARY" || true
   else
     quartet_notify --class "$RUN_CLASS" --episode "$RUN_EPISODE" \
-      "$PROJECT_NAME ${DISPLAY^} FAILED ($MODE)" "$SUMMARY" || true
+      "$PROJECT_NAME $DISPLAY_TITLE FAILED ($MODE)" "$SUMMARY" || true
   fi
   # A nonzero claude exit with a usable result is a PARTIAL run — never ok.
   [ "$JOB_STATUS" = "ok" ] && [ "$EXIT" -ne 0 ] && JOB_STATUS="partial"

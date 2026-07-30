@@ -32,8 +32,12 @@ printf "%s" "{\"result\":\"x\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1
 # set [release] test_cmd / typecheck to <cmd> and (optionally) enable verify_gate
 setup_cfg() {
   local proj="$1" testcmd="$2" verify="${3:-}"
-  sed -i "s|^test_cmd .*|test_cmd     = \"$testcmd\"|; s|^typecheck .*|typecheck    = \"true\"|" "$proj/.agents/config.toml"
-  [ "$verify" = "on" ] && sed -i "/^\[release\]/a verify_gate = true" "$proj/.agents/config.toml"
+  fixture_replace_in_place "$proj/.agents/config.toml" \
+    '^test_cmd .*$' "test_cmd     = \"$testcmd\""
+  fixture_replace_in_place "$proj/.agents/config.toml" \
+    '^typecheck .*$' 'typecheck    = "true"'
+  [ "$verify" = "on" ] && fixture_replace_in_place \
+    "$proj/.agents/config.toml" '^\[release\]$' $'[release]\nverify_gate = true'
   return 0
 }
 

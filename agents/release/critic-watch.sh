@@ -287,9 +287,9 @@ critique_queue() {
       # Absolute paths outside this project were queued by older hooks or a
       # cross-repo session — reviewing them here applies the wrong project's
       # conventions and trunk. Their own project's watcher covers them.
-      case "$f" in
-        /*) case "$f" in "$PROJECT_DIR"/*) ;; *) continue ;; esac ;;
-      esac
+      if [ "${f#/}" != "$f" ] && [ "${f#"$PROJECT_DIR"/}" = "$f" ]; then
+        continue
+      fi
       git -C "$PROJECT_DIR" check-ignore -q "$f" 2>/dev/null || printf '%s\n' "$f"
     done)"
   changed="$(printf '%s\n%s\n' "$changed" "$queued_files" | grep -v '^$' | sort -u)"

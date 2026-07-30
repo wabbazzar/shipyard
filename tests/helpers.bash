@@ -103,6 +103,65 @@ stub_calls() {
   [ -f "$f" ] && wc -l <"$f" | tr -d ' ' || echo 0
 }
 
+# fixture_replace_in_place <path> <regex> <replacement> [count]
+#
+# Replaces matching fixture text without depending on GNU/BSD sed flags.
+# Patterns use Python regular-expression syntax and match across line starts;
+# count defaults to all matches. A missing target is an error so fixture drift
+# cannot silently weaken the test.
+fixture_replace_in_place() {
+  [ "$#" -ge 3 ] && [ "$#" -le 4 ] || {
+    echo "usage: fixture_replace_in_place <path> <regex> <replacement> [count]" >&2
+    return 2
+  }
+  python3 - "$1" "$2" "$3" "${4:-0}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+pattern = sys.argv[2]
+replacement = sys.argv[3]
+count = int(sys.argv[4])
+original = path.read_text()
+updated, replacements = re.subn(
+    pattern, replacement, original, count=count, flags=re.MULTILINE
+)
+if replacements == 0:
+    print(f"fixture_replace_in_place: target not found in {path}", file=sys.stderr)
+    raise SystemExit(1)
+path.write_text(updated)
+PY
+}
+
+# fixture_set_mtime_ago <seconds> <path> [path...]
+#
+# Ages fixture mtimes by an exact duration without GNU touch's relative parser.
+fixture_set_mtime_ago() {
+  [ "$#" -ge 2 ] || {
+    echo "usage: fixture_set_mtime_ago <seconds> <path> [path...]" >&2
+    return 2
+  }
+  python3 - "$@" <<'PY'
+import os
+from pathlib import Path
+import sys
+import time
+
+seconds = int(sys.argv[1])
+if seconds < 0:
+    print("fixture_set_mtime_ago: seconds must be non-negative", file=sys.stderr)
+    raise SystemExit(2)
+timestamp = time.time() - seconds
+for raw_path in sys.argv[2:]:
+    path = Path(raw_path)
+    if not path.exists():
+        print(f"fixture_set_mtime_ago: no such fixture: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    os.utime(path, (timestamp, timestamp))
+PY
+}
+
 # make_notify_stub — a recording QUARTET_NOTIFY_CMD. Each call appends
 # "<title>|<body>" to $SHIM_LOG/notify.log.
 make_notify_stub() {

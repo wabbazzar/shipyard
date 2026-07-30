@@ -174,6 +174,7 @@ export QUARTET_ROLE="$ROLE"
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/naming.sh"
 DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
+DISPLAY_TITLE="$(display_title "$DISPLAY")"
 BUILD_DISPLAY="$(role_display build "$CFG_JSON")"
 SVC="$PROJECT_NAME-$DISPLAY"
 
@@ -242,6 +243,15 @@ init_state
 
 today_utc() { date -u +%Y-%m-%d; }
 now_iso()   { date -u +%Y-%m-%dT%H:%M:%SZ; }
+utc_after_seconds() {
+  python3 - "$1" <<'PY'
+from datetime import datetime, timedelta, timezone
+import sys
+
+future = datetime.now(timezone.utc) + timedelta(seconds=int(sys.argv[1]))
+print(future.strftime("%Y-%m-%dT%H:%M:%SZ"))
+PY
+}
 
 state_get() { jq -r "$1" "$STATE_FILE"; }
 state_set() {
@@ -381,13 +391,13 @@ detect_scan_runners() {
     if [ "$name" = "$PROJECT_NAME-$BUILD_DISPLAY" ] || [ "$name" = "$SVC" ]; then
       echo "[medic] self-failure $name → auto-classify forbidden, skip Claude" >> "$LOG_FILE"
       local until_ts
-      until_ts="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
+      until_ts="$(utc_after_seconds 86400)"
       state_set ".cooldowns[\"$id\"] = {\"frozen_until\":\"$until_ts\",\"reason\":\"self_failure\"}"
       [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" medic.incident.frozen \
         incident_id="$id" project="$PROJECT_NAME" frozen_until="$until_ts" \
         reason="self_failure" unit="$name" || true
       quartet_notify --class actionable --episode "$id" \
-        "${DISPLAY^} $PROJECT_NAME (self_failure)" \
+        "$DISPLAY_TITLE $PROJECT_NAME (self_failure)" \
         "$name systemd unit failed. Cannot self-escalate (forbidden_paths recursion). Frozen 24h — needs human inspection." || true
       i=$((i+1)); continue
     fi
@@ -843,7 +853,7 @@ if [ "$TOKENS_USED" -ge "$BUDGET_TOKENS" ]; then
     incidents="$INCIDENTS_DETECTED" || true
   BUDGET_EPISODE="$(agent_episode "$PROJECT_NAME" "$ROLE" "$MODE" budget "")"
   quartet_notify --class routine --episode "$BUDGET_EPISODE" \
-    "${DISPLAY^} $PROJECT_NAME (budget)" \
+    "$DISPLAY_TITLE $PROJECT_NAME (budget)" \
     "over daily token budget ($TOKENS_USED/$BUDGET_TOKENS); $INCIDENTS_DETECTED incident(s) unclassified until tomorrow" || true
   jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --argjson n "$INCIDENTS_DETECTED" '{
     pass: true, mode: $mode, timestamp: $ts,
@@ -919,7 +929,7 @@ if [ ! -s "$RESULT_FILE" ]; then
       "classifier_no_result:$NO_RESULT_IDS" "")"
   fi
   quartet_notify --class actionable --episode "$NO_RESULT_EPISODE" \
-    "${DISPLAY^} ($PROJECT_NAME) FAILED" \
+    "$DISPLAY_TITLE ($PROJECT_NAME) FAILED" \
     "Medic detected $INCIDENTS_DETECTED incident(s) but claude did not classify. See $LOG_FILE."
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
     mode="$MODE" status="fail" exit_code="$CLAUDE_EXIT" tokens="$TOKENS" || true
@@ -1008,10 +1018,10 @@ while [ "$i" -lt "$N_CLASS" ]; do
     forbidden|infra|cap_hit)
       [ "$cls" = "cap_hit" ] && CAP_HIT=true
       quartet_notify --class actionable --episode "$notify_episode" \
-        "${DISPLAY^} $PROJECT_NAME ($cls)" \
+        "$DISPLAY_TITLE $PROJECT_NAME ($cls)" \
         "Incident: $summary"$'\n'"Action: notify-only ($cls)."
       # Freeze for 24h (cooldown).
-      until_ts="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
+      until_ts="$(utc_after_seconds 86400)"
       state_set ".cooldowns[\"$iid\"] = {\"frozen_until\":\"$until_ts\",\"reason\":\"$cls\"}"
       emit medic.incident.frozen "$iid" frozen_until="$until_ts" reason="$cls"
       push_action "$(jq -n --arg iid "$iid" --arg cls "$cls" \
@@ -1037,10 +1047,10 @@ while [ "$i" -lt "$N_CLASS" ]; do
         # The id rolls at UTC midnight, so a persistent failure re-alerts once
         # per day, matching restart's one-per-UTC-day policy.
         quartet_notify --class actionable --episode "$notify_episode" \
-          "${DISPLAY^} $PROJECT_NAME (transient→stuck)" \
+          "$DISPLAY_TITLE $PROJECT_NAME (transient→stuck)" \
           "Retry didn't clear: $summary"
         push_action "$(jq -n --arg iid "$iid" '{incident_id:$iid, action:"retry", outcome:"still_failing"}')"
-        until_ts="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
+        until_ts="$(utc_after_seconds 86400)"
         state_set ".cooldowns[\"$iid\"] = {\"frozen_until\":\"$until_ts\",\"reason\":\"transient_stuck\"}"
         emit medic.incident.frozen "$iid" frozen_until="$until_ts" reason="transient_stuck"
       fi
@@ -1061,7 +1071,7 @@ while [ "$i" -lt "$N_CLASS" ]; do
           emit medic.action.restart "$iid" unit="$unit" outcome="$outcome"
           if [ "$outcome" = "fail" ]; then
             quartet_notify --class urgent --episode "$notify_episode" \
-              "${DISPLAY^} $PROJECT_NAME (restart failed)" \
+              "$DISPLAY_TITLE $PROJECT_NAME (restart failed)" \
               "Incident: $summary"$'\n'"systemctl restart $unit failed."
           fi
           push_action "$(jq -n --arg iid "$iid" --arg u "$unit" --arg o "$outcome" \
@@ -1080,9 +1090,9 @@ while [ "$i" -lt "$N_CLASS" ]; do
           emit medic.action.restart "$iid" via="restart_cmd" outcome="$outcome"
           if [ "$outcome" = "fail" ]; then restart_class="urgent"; else restart_class="routine"; fi
           quartet_notify --class "$restart_class" --episode "$notify_episode" \
-            "${DISPLAY^} $PROJECT_NAME (restart)" \
+            "$DISPLAY_TITLE $PROJECT_NAME (restart)" \
             "Incident: $summary"$'\n'"Ran restart_cmd → $outcome. Re-fire suppressed until tomorrow (UTC)."
-          until_ts="$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ)"
+          until_ts="$(utc_after_seconds 86400)"
           state_set ".cooldowns[\"$iid\"] = {\"frozen_until\":\"$until_ts\",\"reason\":\"restart_cmd\"}"
           emit medic.incident.frozen "$iid" frozen_until="$until_ts" reason="restart_cmd"
           push_action "$(jq -n --arg iid "$iid" --arg o "$outcome" \
@@ -1106,7 +1116,7 @@ while [ "$i" -lt "$N_CLASS" ]; do
       if [ "$DAILY_USED" -ge "$DAILY_CAP" ]; then
         CAP_HIT=true
         quartet_notify --class actionable --episode "$notify_episode" \
-          "${DISPLAY^} $PROJECT_NAME (cap_hit)" \
+          "$DISPLAY_TITLE $PROJECT_NAME (cap_hit)" \
           "Daily incident-repair cap ($DAILY_CAP) reached. Notify-only: $summary"
         push_action "$(jq -n --arg iid "$iid" \
           '{incident_id:$iid, action:"propose_repair", outcome:"cap_hit"}')"
@@ -1150,7 +1160,7 @@ while [ "$i" -lt "$N_CLASS" ]; do
 
       # One page — the dispatch is where a human stamps it.
       quartet_notify --class actionable --episode "$notify_episode" \
-        "${DISPLAY^} $PROJECT_NAME (incident-repair)" \
+        "$DISPLAY_TITLE $PROJECT_NAME (incident-repair)" \
         "incident-repair proposed: $summary — awaiting stamp in the dispatch"
 
       DAILY_USED=$((DAILY_USED + 1))

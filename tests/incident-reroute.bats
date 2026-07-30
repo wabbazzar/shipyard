@@ -216,7 +216,8 @@ esac'
   p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
   install_agents "$p" branch-present.toml rr5
   # Enable the flag inside the existing [build] table (no duplicate header).
-  sed -i '/^\[build\]/a ticket_mode = true' "$p/.agents/config.toml"
+  fixture_replace_in_place "$p/.agents/config.toml" '^\[build\]$' \
+    $'[build]\nticket_mode = true'
   topo_commit_all "$p"
   # Stub claude to record its argv (the dispatch).
   make_stub claude 0

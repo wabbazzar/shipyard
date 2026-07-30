@@ -104,7 +104,8 @@ sync() { env DECK_MIRROR_DIR="$MIRROR" QUARTET_DIR="$SRC" bash "$SCRIPT" "${1:-$
 }
 
 @test "determinism guard: a missing transform target aborts (exit 2)" {
-  sed -i "s#const SOURCES = \['./shipyard-data.json'\];#const SOURCES = [];#" "$SRC/docs/index.html"
+  fixture_replace_in_place "$SRC/docs/index.html" \
+    "const SOURCES = \\['\\./shipyard-data\\.json'\\];" 'const SOURCES = [];'
   git -C "$SRC" commit -q -am "break the transform target"
   bad="$(git -C "$SRC" rev-parse HEAD)"
   run sync "$bad"

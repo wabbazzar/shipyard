@@ -18,6 +18,82 @@ for raw_path in sys.argv[1:]:
 PY
 }
 
+@test "fixture mutation helpers replace text and set an exact relative mtime" {
+  local fixture="$BATS_TEST_TMPDIR/portable-fixture"
+  printf 'alpha\nbeta\n' >"$fixture"
+
+  fixture_replace_in_place "$fixture" '^beta$' 'gamma'
+  [ "$(cat "$fixture")" = $'alpha\ngamma' ]
+
+  local before after age
+  before="$(date +%s)"
+  fixture_set_mtime_ago 120 "$fixture"
+  after="$(date +%s)"
+  age="$(python3 - "$fixture" "$before" "$after" <<'PY'
+from pathlib import Path
+import sys
+
+mtime = int(Path(sys.argv[1]).stat().st_mtime)
+before, after = map(int, sys.argv[2:])
+print(before - 121 <= mtime <= after - 119)
+PY
+)"
+  [ "$age" = "True" ]
+}
+
+@test "test fixtures contain no non-portable in-place edits or relative touch dates" {
+  run python3 - "$QUARTET_ROOT/tests" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+tests = Path(sys.argv[1])
+bare_in_place = re.compile(r"(^|[;&|\s])" + r"sed\s+" + r"-i(?:\s|$)")
+relative_mtime = re.compile(
+    r"touch\s+" + r"-d\s+[\"']\d+\s+(?:minute|day)s?\s+ago"
+)
+violations = []
+for path in sorted(tests.glob("*.bats")):
+    text = path.read_text()
+    for line_number, line in enumerate(text.splitlines(), 1):
+        if bare_in_place.search(line) or relative_mtime.search(line):
+            violations.append(f"{path.relative_to(tests.parent)}:{line_number}:{line}")
+if violations:
+    print("\n".join(violations))
+    raise SystemExit(1)
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "launchd runtime scripts avoid Bash 4 case transforms and GNU date arithmetic" {
+  run python3 - "$QUARTET_ROOT" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+paths = [root / "install.sh", root / ".githooks/pre-commit"]
+paths.extend((root / "agents/lib").glob("*.sh"))
+paths.extend((root / "agents").glob("*/runner.sh"))
+paths.extend((root / "agents/release").glob("critic-*.sh"))
+paths.extend((root / "scripts").glob("*.sh"))
+
+bash4_case = re.compile(r"\$\{[^}\n]+\^(?:\^)?\}")
+gnu_relative_date = re.compile(r"\bdate\b[^\n]*\s-d\s")
+violations = []
+for path in sorted(paths):
+    for line_number, line in enumerate(path.read_text().splitlines(), 1):
+        if line.lstrip().startswith("#"):
+            continue
+        if bash4_case.search(line) or gnu_relative_date.search(line):
+            violations.append(f"{path.relative_to(root)}:{line_number}:{line}")
+if violations:
+    print("\n".join(violations))
+    raise SystemExit(1)
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "launchd interpreter parses every shipped shell entrypoint" {
   local entrypoint
   local entrypoints=(
