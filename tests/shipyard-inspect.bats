@@ -2786,17 +2786,240 @@ PY
   ' <<<"$output"
 }
 
-@test "inspect: human attention and priority ids map exactly to JSON" {
+@test "inspect: human output is bounded and summarized" {
   make_phase6_priority_fixture
   run run_phase3
   [ "$status" -eq 0 ]
-  json_ids="$(jq -r '.attention[].id,.priorities[].id' <<<"$output" | sort)"
-  run run_phase3_human
-  [ "$status" -eq 0 ]
-  human_ids="$(grep -oE '(att|pri)_[0-9a-f]{16}' <<<"$output" | sort)"
-  [ "$human_ids" = "$json_ids" ]
-  printf 'JSON_IDS=%s\nHUMAN_IDS=%s\n' \
-    "$(tr '\n' ',' <<<"$json_ids")" "$(tr '\n' ',' <<<"$human_ids")"
+  document="$BATS_TEST_TMPDIR/oversized-human-document.json"
+  printf '%s\n' "$output" >"$document"
+
+  python3 - "$QUARTET_ROOT/skills/shipyard/inspect.py" "$document" <<'PY'
+import copy
+import importlib.util
+import json
+import re
+import sys
+
+spec = importlib.util.spec_from_file_location("shipyard_inspect", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with open(sys.argv[2], encoding="utf-8") as handle:
+    document = json.load(handle)
+
+long_project = "project-" + ("界" * 180)
+long_title = "operator focus " + ("x" * 240)
+long_reason = "source reason " + ("y" * 240)
+
+project_states = (
+    "fault_observed",
+    "degraded_observed",
+    "no_fault_observed",
+    "unknown",
+)
+base_project = document["fleet"][0]
+fleet = []
+for index in range(13):
+    item = copy.deepcopy(base_project)
+    item["project_id"] = f"{index + 1:012x}"
+    item["project_name"] = f"{long_project}-{index}"
+    item["state"] = project_states[index % len(project_states)]
+    item["safety"]["configured_branch"] = "branch-" + ("z" * 180)
+    for consumer_index, consumer in enumerate(
+        item["pressure"]["daily_budget_consumers"]
+    ):
+        consumer["applicability"] = "applicable"
+        consumer["gate_fraction_today"] = (consumer_index + 1) / 10
+        consumer["configured_daily_budget"] = 100
+        item["pressure"]["budget_deferrals_by_consumer"][
+            consumer["consumer"]
+        ] = consumer_index
+    item["pressure"]["undecided_open_proposals"] = index
+    item["pressure"]["configured_max_open_proposals"] = 20
+    item["pressure"]["open_cap_deferrals"] = index % 3
+    fleet.append(item)
+document["fleet"] = fleet
+document["meta"]["project_count"] = len(fleet)
+document["meta"]["role_count"] = sum(len(item["roles"]) for item in fleet)
+document["summary"]["project_state_counts"] = {
+    state: sum(item["state"] == state for item in fleet)
+    for state in project_states
+}
+
+attention_kinds = (
+    "open_proposal",
+    "owner_decision",
+    "observed_fault",
+    "install_drift",
+    "coverage_gap",
+)
+base_attention = document["attention"][0]
+attention = []
+for index in range(12):
+    item = copy.deepcopy(base_attention)
+    item["id"] = f"att_{index + 1:016x}"
+    item["project_id"] = fleet[index]["project_id"]
+    item["kind"] = attention_kinds[index % len(attention_kinds)]
+    item["title"] = f"{long_title}-{index}"
+    item["limitations"] = [long_reason]
+    attention.append(item)
+document["attention"] = attention
+document["summary"]["attention_count"] = len(attention)
+
+effectiveness_states = ("measured", "partial", "unmeasured")
+effectiveness = copy.deepcopy(document["effectiveness"][:8])
+assert len(effectiveness) == 8
+for index, item in enumerate(effectiveness):
+    item["state"] = effectiveness_states[index % len(effectiveness_states)]
+    item["reason"] = long_reason
+    item["limitations"] = [long_reason]
+document["effectiveness"] = effectiveness
+document["summary"]["effectiveness_state_counts"] = {
+    state: sum(item["state"] == state for item in effectiveness)
+    for state in effectiveness_states
+}
+
+base_priority = document["priorities"][0]
+priorities = []
+for index in range(9):
+    item = copy.deepcopy(base_priority)
+    item["id"] = f"pri_{index + 1:016x}"
+    item["rank"] = index + 1
+    item["title"] = f"{long_title}-{index}"
+    item["project_ids"] = [fleet[index]["project_id"]]
+    priorities.append(item)
+document["priorities"] = priorities
+document["summary"]["priority_count"] = len(priorities)
+document["summary"]["top_priority_ids"] = [
+    item["id"] for item in priorities[:3]
+]
+
+coverage_states = (
+    "available",
+    "not_applicable",
+    "partial",
+    "error",
+    "unavailable",
+    "partial",
+    "available",
+    "unavailable",
+    "error",
+    "partial",
+    "unavailable",
+    "partial",
+)
+coverage_sources = (
+    "manifest",
+    "config",
+    "systemd",
+    "doctor",
+    "events",
+    "events_attribution",
+    "fyi",
+    "usage",
+    "caddy",
+    "incident_state",
+    "proposals",
+    "decisions",
+)
+base_coverage = document["coverage"][0]
+coverage = []
+for index, state in enumerate(coverage_states):
+    item = copy.deepcopy(base_coverage)
+    item["project_id"] = fleet[index]["project_id"]
+    item["source"] = coverage_sources[index]
+    item["state"] = state
+    item["reason"] = f"{long_reason}-{index}"
+    item["records_total"] = index + 2
+    item["records_valid"] = index + 1
+    coverage.append(item)
+document["coverage"] = coverage
+
+before = json.dumps(
+    document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+)
+human = module.render_human(document)
+after = json.dumps(
+    document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+)
+assert before == after, "render_human mutated its source document"
+
+lines = human.splitlines()
+headings = ("FLEET", "ATTENTION", "EFFECTIVENESS", "NEXT SHIPYARD PR", "COVERAGE")
+assert [line for line in lines if line in headings] == list(headings)
+
+def section(name, following=None):
+    start = lines.index(name) + 1
+    end = lines.index(following) if following is not None else len(lines)
+    return [line for line in lines[start:end] if line]
+
+fleet_rows = section("FLEET", "ATTENTION")
+attention_rows = section("ATTENTION", "EFFECTIVENESS")
+effectiveness_rows = section("EFFECTIVENESS", "NEXT SHIPYARD PR")
+priority_rows = section("NEXT SHIPYARD PR", "COVERAGE")
+coverage_rows = section("COVERAGE")
+
+expected_fleet = (
+    "  counts: fault_observed=4 degraded_observed=3 "
+    "no_fault_observed=3 unknown=3"
+)
+assert fleet_rows[0] == expected_fleet, (
+    f"FLEET aggregate mismatch: {fleet_rows[0]!r}"
+)
+assert attention_rows[0] == (
+    "  counts: open_proposal=3 owner_decision=3 observed_fault=2 "
+    "install_drift=2 coverage_gap=2"
+)
+assert effectiveness_rows[0] == (
+    "  counts: measured=3 partial=3 unmeasured=2"
+)
+assert priority_rows[0] == "  candidates: 9"
+assert coverage_rows[0] == (
+    "  counts: available=2 partial=4 unavailable=3 error=2 not_applicable=1"
+)
+
+assert len([line for line in fleet_rows if re.match(r"^  \[[^]]+\]", line)]) == 10
+assert len([line for line in fleet_rows if line.startswith("  pressure:")]) == 10
+assert fleet_rows[-1] == "  … 3 more; use --json for full evidence"
+assert len(attention_rows[1:-1]) == 5
+assert attention_rows[-1] == "  … 7 more; use --json for full evidence"
+assert len(effectiveness_rows[1:]) == 8
+assert all("more; use --json" not in line for line in effectiveness_rows)
+assert len(priority_rows[1:-1]) == 5
+assert priority_rows[-1] == "  … 4 more; use --json for full evidence"
+assert len(coverage_rows[1:-1]) == 5
+assert coverage_rows[-1] == "  … 4 more; use --json for full evidence"
+assert all("not_applicable" not in line for line in coverage_rows[1:])
+
+attention_ids = re.findall(r"att_[0-9a-f]{16}", "\n".join(attention_rows[1:]))
+priority_ids = re.findall(r"pri_[0-9a-f]{16}", "\n".join(priority_rows[1:]))
+source_attention_ids = [item["id"] for item in document["attention"]]
+source_priority_ids = [item["id"] for item in document["priorities"]]
+assert attention_ids == source_attention_ids[:5]
+assert priority_ids == source_priority_ids[:5]
+assert set(attention_ids) <= set(source_attention_ids)
+assert set(priority_ids) <= set(source_priority_ids)
+
+actionable = [
+    item for item in coverage
+    if item["state"] in {"partial", "unavailable", "error"}
+]
+displayed_coverage = [
+    re.match(r"^  - ([^/]+)/([^ ]+) ", line).groups()
+    for line in coverage_rows[1:-1]
+]
+assert displayed_coverage == [
+    (item["project_id"], item["source"]) for item in actionable[:5]
+]
+assert len(lines) <= 80, f"human output has {len(lines)} lines"
+assert max(map(len, lines), default=0) <= 120, (
+    f"human output max width is {max(map(len, lines), default=0)}"
+)
+assert any(line.endswith("…") for line in lines), "overlong text was not clipped"
+print(
+    f"lines={len(lines)} max_width={max(map(len, lines), default=0)} "
+    "caps=10/5/8/5/5 omissions=3/7/0/4/4"
+)
+PY
 }
 
 @test "inspect: human fleet lines expose pressure and configured safety posture" {
@@ -2804,21 +3027,69 @@ PY
   run run_phase3_human
   [ "$status" -eq 0 ]
   [[ "$output" == *"FLEET"* ]]
-  [[ "$output" == *"roles=2("* ]]
+  [[ "$output" == *"roles=2 doctor=clean"* ]]
+  [[ "$output" != *"roles=2("* ]]
   [[ "$output" == *"doctor=clean"* ]]
-  [[ "$output" == *"budget="* ]]
-  [[ "$output" == *"open-cap="* ]]
+  [[ "$output" == *"  pressure: budget=max:"* ]]
+  [[ "$output" == *" deferred="* ]]
+  [[ "$output" == *" open="* ]]
+  [[ "$output" == *" def="* ]]
   [[ "$output" == *"gates=merge:false,no-ci:false,verify:true,branch:main"* ]]
 }
 
 @test "inspect: empty and unavailable sections render explicitly" {
   make_phase6_empty_fixture
-  run run_phase3_human
+  run run_phase3
   [ "$status" -eq 0 ]
-  [[ "$output" == *$'ATTENTION\n  none'* ]]
-  [[ "$output" == *$'NEXT SHIPYARD PR\n  none'* ]]
-  [[ "$output" == *"delegation_claude: unavailable"* ]]
-  [[ "$output" != *$'COVERAGE\n\n'* ]]
+  document="$BATS_TEST_TMPDIR/empty-unavailable-document.json"
+  printf '%s\n' "$output" >"$document"
+  run python3 - "$QUARTET_ROOT/skills/shipyard/inspect.py" "$document" <<'PY'
+import importlib.util
+import json
+import sys
+
+spec = importlib.util.spec_from_file_location("shipyard_inspect", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with open(sys.argv[2], encoding="utf-8") as handle:
+    document = json.load(handle)
+
+actionable_states = {"partial", "unavailable", "error"}
+actionable = sum(
+    item["state"] in actionable_states for item in document["coverage"]
+)
+for item in document["coverage"]:
+    if actionable >= 7:
+        break
+    if item["state"] not in actionable_states:
+        item["state"] = "unavailable"
+        item["reason"] = "guard_missing"
+        actionable += 1
+
+states = ("available", "partial", "unavailable", "error", "not_applicable")
+counts = {
+    state: sum(item["state"] == state for item in document["coverage"])
+    for state in states
+}
+coverage_row = "  counts: " + " ".join(
+    f"{state}={counts[state]}" for state in states
+)
+human = module.render_human(document)
+assert (
+    "ATTENTION\n"
+    "  counts: open_proposal=0 owner_decision=0 observed_fault=0 "
+    "install_drift=0 coverage_gap=0\n"
+    "  none"
+) in human
+assert "NEXT SHIPYARD PR\n  candidates: 0\n  none" in human
+assert coverage_row in human
+assert (
+    f"  … {actionable - 5} more; use --json for full evidence"
+) in human
+assert "COVERAGE\n\n" not in human
+print(human)
+PY
+  [ "$status" -eq 0 ]
 }
 
 @test "inspect: JSON stdout contains JSON only and diagnostics use stderr" {

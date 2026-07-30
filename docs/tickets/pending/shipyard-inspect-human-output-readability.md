@@ -430,9 +430,35 @@ gh run watch "$shipyard_run_id" --exit-status
 
 ## Ledger
 
-The builder appends the phase plan, `builder: subagent (<N> agents)`, commit
-hash, exact gate results, live line/width measurement, remote/CI result, and any
-honest deferral here before graduation.
+### Phase 1 — Bound and simplify the human renderer
+
+- **Plan:** add the oversized renderer contract and record RED against the
+  exhaustive baseline; implement only the locked human digest; independently
+  run focused, live, and full repository gates; commit a green vertical slice.
+- **builder:** subagent (1 agent)
+- **RED:** the new named Bats case exited 1 against the pre-change renderer:
+  `not ok 1 inspect: human output is bounded and summarized`; its first
+  assertion found the missing fleet aggregate and the exhaustive
+  `roles=2(design,build)` row.
+- **GREEN:** root independently observed focused renderer tests `4/4`, live
+  `lines=61 max_width=120 projects=8 attention=138 priorities=18`, installed
+  alias `alias_lines=61 alias_max_width=120`, and empty stderr. Full
+  `bats tests/` passed `514/514`; syntax, Python compile, leak, deck freshness,
+  deck completeness, lifecycle, diff, and canonical skill-link checks all
+  exited 0.
+- **Scope:** production changes are confined to `render_human()`; its
+  deterministic test proves the source document is unchanged by rendering, and
+  live `--json` remains exhaustive schema version 1.
+- **Status:** green; implementation commit pending.
+
+### Phase 2 — Graduate, publish, and observe the result
+
+- **Plan:** after Phase 1 is committed and re-verified, record final evidence,
+  graduate the ticket through the lifecycle engine, commit the lifecycle state,
+  push authorized `main`, and wait for the exact hosted CI run.
+- **builder:** inline (the orchestrator must personally verify lifecycle,
+  remote-ref, and CI state)
+- **Status:** pending
 
 ## Handoff
 

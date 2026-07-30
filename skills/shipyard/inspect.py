@@ -4640,6 +4640,8 @@ def build_document(
 
 
 def render_human(document: dict[str, Any]) -> str:
+    line_limit = 120
+
     def scalar(value: Any) -> str:
         if value is None:
             return "unavailable"
@@ -4647,29 +4649,67 @@ def render_human(document: dict[str, Any]) -> str:
             return "true" if value else "false"
         return str(value)
 
-    def budget_pressure(project: dict[str, Any]) -> str:
-        members = []
-        deferrals = project["pressure"]["budget_deferrals_by_consumer"]
-        for consumer in project["pressure"]["daily_budget_consumers"]:
-            name = consumer["consumer"]
-            if consumer["applicability"] != "applicable":
-                members.append(f"{name}:{consumer['applicability']}")
-                continue
-            members.append(
-                f"{name}:{scalar(consumer['gate_tokens_today'])}/"
-                f"{scalar(consumer['configured_daily_budget'])}"
-                f"(deferred={scalar(deferrals[name])})"
-            )
-        return "[" + ",".join(members) + "]"
+    def clipped(value: Any, width: int) -> str:
+        text = str(value)
+        if len(text) <= width:
+            return text
+        if width <= 0:
+            return ""
+        if width == 1:
+            return "…"
+        return text[: width - 1] + "…"
 
-    def open_pressure(project: dict[str, Any]) -> str:
-        pressure = project["pressure"]
+    def clipped_tail(prefix: str, text: str) -> str:
+        return prefix + clipped(text, line_limit - len(prefix))
+
+    def clipped_middle(prefix: str, text: str, suffix: str) -> str:
         return (
-            f"{scalar(pressure['undecided_open_proposals'])}/"
-            f"{scalar(pressure['configured_max_open_proposals'])}"
-            f"(remaining={scalar(pressure['open_cap_remaining'])},"
-            f"deferred={scalar(pressure['open_cap_deferrals'])})"
+            prefix
+            + clipped(text, line_limit - len(prefix) - len(suffix))
+            + suffix
         )
+
+    def value_counts(
+        records: list[dict[str, Any]], key: str, values: tuple[str, ...]
+    ) -> dict[str, int]:
+        return {
+            value: sum(record.get(key) == value for record in records)
+            for value in values
+        }
+
+    def add_omission(lines: list[str], omitted: int) -> None:
+        if omitted > 0:
+            lines.append(
+                f"  … {omitted} more; use --json for full evidence"
+            )
+
+    def budget_fraction(project: dict[str, Any]) -> str:
+        fractions = [
+            consumer["gate_fraction_today"]
+            for consumer in project["pressure"]["daily_budget_consumers"]
+            if consumer["applicability"] == "applicable"
+            and isinstance(consumer["gate_fraction_today"], (int, float))
+            and not isinstance(consumer["gate_fraction_today"], bool)
+            and math.isfinite(consumer["gate_fraction_today"])
+        ]
+        if not fractions:
+            return "unavailable"
+        return f"{max(fractions) * 100:.0f}%"
+
+    def budget_deferrals(project: dict[str, Any]) -> str:
+        values = [
+            value
+            for value in project["pressure"][
+                "budget_deferrals_by_consumer"
+            ].values()
+            if isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+        ]
+        return scalar(sum(values)) if values else "unavailable"
+
+    def pressure_value(value: Any) -> str:
+        return "unknown" if value is None else scalar(value)
 
     meta = document["meta"]
     lines = [
@@ -4683,74 +4723,174 @@ def render_human(document: dict[str, Any]) -> str:
         "",
         "FLEET",
     ]
-    for project in document["fleet"]:
-        roles = ",".join(project["roles"])
+    fleet_states = (
+        "fault_observed",
+        "degraded_observed",
+        "no_fault_observed",
+        "unknown",
+    )
+    fleet_counts = value_counts(document["fleet"], "state", fleet_states)
+    lines.append(
+        "  counts: "
+        + " ".join(
+            f"{state}={fleet_counts[state]}" for state in fleet_states
+        )
+    )
+    displayed_fleet = document["fleet"][:10]
+    for project in displayed_fleet:
         safety = project["safety"]
+        project_suffix = (
+            f" state={project['state']} roles={len(project['roles'])} "
+            f"doctor={project['doctor']['state']}"
+        )
         lines.append(
-            f"  - {project['project_id']} {project['project_name']}: "
-            f"state={project['state']} roles={len(project['roles'])}({roles}) "
-            f"doctor={project['doctor']['state']} "
-            f"budget={budget_pressure(project)} "
-            f"open-cap={open_pressure(project)} "
+            clipped_middle(
+                f"  [{project['project_id']}] ",
+                project["project_name"],
+                project_suffix,
+            )
+        )
+        pressure = project["pressure"]
+        pressure_prefix = (
+            f"  pressure: budget=max:{budget_fraction(project)} "
+            f"deferred={budget_deferrals(project)} "
+            f"open={pressure_value(pressure['undecided_open_proposals'])}/"
+            f"{pressure_value(pressure['configured_max_open_proposals'])} "
+            f"def={pressure_value(pressure['open_cap_deferrals'])},"
             f"gates=merge:{scalar(safety['can_merge'])},"
             f"no-ci:{scalar(safety['allow_no_ci'])},"
-            f"verify:{scalar(safety['release_verify_gate'])},"
-            f"branch:{scalar(safety['configured_branch'])}"
+            f"verify:{scalar(safety['release_verify_gate'])},branch:"
         )
+        lines.append(
+            clipped_tail(
+                pressure_prefix, scalar(safety["configured_branch"])
+            )
+        )
+    add_omission(lines, len(document["fleet"]) - len(displayed_fleet))
     if not document["fleet"]:
         lines.append("  none")
 
     lines.extend(["", "ATTENTION"])
+    attention_kinds = (
+        "open_proposal",
+        "owner_decision",
+        "observed_fault",
+        "install_drift",
+        "coverage_gap",
+    )
+    attention_counts = value_counts(
+        document["attention"], "kind", attention_kinds
+    )
+    lines.append(
+        "  counts: "
+        + " ".join(
+            f"{kind}={attention_counts[kind]}" for kind in attention_kinds
+        )
+    )
     if document["attention"]:
-        for item in document["attention"]:
+        displayed_attention = document["attention"][:5]
+        for item in displayed_attention:
             limitations = ",".join(item["limitations"]) or "none"
             lines.append(
-                f"  - [{item['id']}] {item['kind']} project={item['project_id']} "
-                f"{item['title']} limitations={limitations}"
+                clipped_tail(
+                    f"  - [{item['id']}] {item['kind']} "
+                    f"project={item['project_id']} ",
+                    f"{item['title']} limitations={limitations}",
+                )
             )
+        add_omission(
+            lines, len(document["attention"]) - len(displayed_attention)
+        )
     else:
         lines.append("  none")
 
     lines.extend(["", "EFFECTIVENESS"])
+    effectiveness_states = ("measured", "partial", "unmeasured")
+    effectiveness_counts = value_counts(
+        document["effectiveness"], "state", effectiveness_states
+    )
+    lines.append(
+        "  counts: "
+        + " ".join(
+            f"{state}={effectiveness_counts[state]}"
+            for state in effectiveness_states
+        )
+    )
     if document["effectiveness"]:
-        for item in document["effectiveness"]:
+        displayed_effectiveness = document["effectiveness"][:8]
+        for item in displayed_effectiveness:
             limitations = ",".join(item["limitations"]) or "none"
             lines.append(
-                f"  - {item['key']}: {item['state']} "
-                f"value={scalar(item['value'])} evidence={len(item['evidence_ids'])} "
-                f"reason={scalar(item['reason'])} limitations={limitations}"
+                clipped_tail(
+                    f"  - {item['key']}: state={item['state']} "
+                    f"value={scalar(item['value'])} "
+                    f"evidence={len(item['evidence_ids'])} ",
+                    f"reason={scalar(item['reason'])} "
+                    f"limitations={limitations}",
+                )
             )
+        add_omission(
+            lines,
+            len(document["effectiveness"]) - len(displayed_effectiveness),
+        )
     else:
         lines.append("  none")
 
     lines.extend(["", "NEXT SHIPYARD PR"])
+    lines.append(f"  candidates: {len(document['priorities'])}")
     if document["priorities"]:
-        for item in document["priorities"]:
-            limitations = ",".join(item["limitations"]) or "none"
+        displayed_priorities = document["priorities"][:5]
+        for item in displayed_priorities:
             lines.append(
-                f"  - [{item['id']}] {item['category']}/{item['scope']} "
-                f"{item['title']} rule={item['rule_id']}"
+                clipped_middle(
+                    f"  {item['rank']}. [{item['id']}] "
+                    f"{item['category']}/{item['scope']} ",
+                    item["title"],
+                    f" evidence={item['evidence_count']}",
+                )
             )
-            lines.append(
-                f"    why: evidence={item['evidence_count']}; "
-                f"limitations={limitations}"
-            )
+        add_omission(
+            lines, len(document["priorities"]) - len(displayed_priorities)
+        )
     else:
         lines.append("  none")
 
     lines.extend(["", "COVERAGE"])
+    coverage_states = (
+        "available",
+        "partial",
+        "unavailable",
+        "error",
+        "not_applicable",
+    )
+    coverage_counts = value_counts(
+        document["coverage"], "state", coverage_states
+    )
+    lines.append(
+        "  counts: "
+        + " ".join(
+            f"{state}={coverage_counts[state]}" for state in coverage_states
+        )
+    )
     gaps = [
-        item for item in document["coverage"] if item["state"] != "available"
+        item
+        for item in document["coverage"]
+        if item["state"] in {"partial", "unavailable", "error"}
     ]
     if gaps:
-        for item in gaps:
+        displayed_gaps = gaps[:5]
+        for item in displayed_gaps:
             owner = item["project_id"] or "global"
-            limitations = ",".join(item["limitations"]) or "none"
             lines.append(
-                f"  - {owner}/{item['source']}: {item['state']} "
-                f"reason={item['reason']} valid={item['records_valid']}/"
-                f"{item['records_total']} limitations={limitations}"
+                clipped_middle(
+                    f"  - {owner}/{item['source']} state={item['state']} "
+                    "reason=",
+                    item["reason"],
+                    f" valid={item['records_valid']}/"
+                    f"{item['records_total']}",
+                )
             )
+        add_omission(lines, len(gaps) - len(displayed_gaps))
     else:
         lines.append("  none")
     return "\n".join(lines)
