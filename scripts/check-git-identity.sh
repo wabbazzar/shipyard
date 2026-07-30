@@ -82,7 +82,7 @@ done
 
 ROOT="$(git -C "$PROJECT" rev-parse --show-toplevel 2>/dev/null)" ||
   config_error "project is not a Git worktree"
-POLICY_FILE="$ROOT/.agents/config.toml"
+POLICY_FILE="$ROOT/.shipyard-git-identity.toml"
 [ -f "$POLICY_FILE" ] || config_error "identity policy is missing"
 
 CANONICAL_NAME="$(

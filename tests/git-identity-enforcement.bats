@@ -5,7 +5,10 @@ setup() {
   quartet_setup
 
   OLD_PRE_PUSH="$QUARTET_ROOT/.githooks/pre-push"
+  PRE_COMMIT="$QUARTET_ROOT/.githooks/pre-commit"
+  INSTALLER="$QUARTET_ROOT/install.sh"
   CHECKER="$QUARTET_ROOT/scripts/check-git-identity.sh"
+  WORKFLOW="$QUARTET_ROOT/.github/workflows/checks.yml"
   CANONICAL_NAME="canonical-owner"
   CANONICAL_EMAIL="canonical-owner@example.invalid"
   BAD_AUTHOR_EMAIL="wrong-author@example.invalid"
@@ -14,9 +17,8 @@ setup() {
 
 write_policy() {
   local project="$1"
-  mkdir -p "$project/.agents"
   printf '[git_identity]\nenforce = true\nname = "%s"\n' \
-    "$CANONICAL_NAME" >"$project/.agents/config.toml"
+    "$CANONICAL_NAME" >"$project/.shipyard-git-identity.toml"
 }
 
 commit_with_identity() {
@@ -38,7 +40,7 @@ make_identity_repo() {
   write_policy "$project"
   git -C "$project" config --local shipyard.identityEmail "$CANONICAL_EMAIL"
   printf 'root\n' >"$project/root.txt"
-  git -C "$project" add .agents/config.toml root.txt
+  git -C "$project" add .shipyard-git-identity.toml root.txt
   commit_with_identity "$project" root \
     "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
     "$CANONICAL_NAME" "$CANONICAL_EMAIL"
@@ -58,38 +60,83 @@ add_identity_commit() {
   git -C "$project" rev-parse HEAD
 }
 
+install_identity_hooks() {
+  local project="$1"
+  mkdir -p "$project/.githooks" "$project/scripts"
+  cp "$PRE_COMMIT" "$project/.githooks/pre-commit"
+  cp "$OLD_PRE_PUSH" "$project/.githooks/pre-push"
+  cp "$CHECKER" "$project/scripts/check-git-identity.sh"
+  chmod +x "$project/.githooks/pre-commit" \
+    "$project/.githooks/pre-push" "$project/scripts/check-git-identity.sh"
+}
+
+stub_install_dependencies() {
+  make_stub systemctl 0
+  make_stub crontab 0 ""
+  make_stub gh 0
+  make_stub claude 0
+}
+
+make_install_identity_fixture() {
+  local name="$1" project
+  project="$(make_fixture_project "$name" clean-install.toml)"
+  printf '[git_identity]\nenforce = true\nname = "fixture-owner"\n' \
+    >"$project/.shipyard-git-identity.toml"
+  git -C "$project" config --local user.name "fixture-owner"
+  git -C "$project" config --local user.email "$CANONICAL_EMAIL"
+  stub_install_dependencies
+  QUARTET_DIR="$QUARTET_ROOT" \
+  QUARTET_EVENTS_DIR="$EVENTS_DIR" \
+  QUARTET_NOTIFY_CMD="$NOTIFY_CMD" \
+    bash "$INSTALLER" --project "$project" >/dev/null
+  printf '%s\n' "$project"
+}
+
+configure_identity_fixture() {
+  local project="$1"
+  env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL \
+    -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL \
+    QUARTET_DIR="$QUARTET_ROOT" \
+    bash "$INSTALLER" --configure-git-identity --project "$project"
+}
+
+run_identity_doctor() {
+  local project="$1"
+  env QUARTET_DIR="$QUARTET_ROOT" \
+    bash "$INSTALLER" --doctor --project "$project"
+}
+
 assert_addresses_redacted() {
   [[ "$output" != *"$CANONICAL_EMAIL"* ]]
   [[ "$output" != *"$BAD_AUTHOR_EMAIL"* ]]
   [[ "$output" != *"$BAD_COMMITTER_EMAIL"* ]]
 }
 
-@test "git identity: existing pre-push accepts a wrong author" {
-  local project remote_sha local_sha zero
-  project="$(make_git_topology "$BATS_TEST_TMPDIR/old-hook")"
-  remote_sha="$(git -C "$project" rev-parse refs/remotes/origin/main)"
-
-  printf 'bad author\n' >"$project/bad-author.txt"
-  git -C "$project" add bad-author.txt
-  GIT_AUTHOR_NAME="wrong-author" \
-    GIT_AUTHOR_EMAIL="wrong-author@example.invalid" \
-    git -C "$project" commit -q -m "bad author"
-  local_sha="$(git -C "$project" rev-parse HEAD)"
-
-  mkdir -p "$project/scripts"
-  printf '#!/usr/bin/env bash\nexit 0\n' >"$project/scripts/sync-deck-mirror.sh"
+@test "git identity: pre-push blocks the wrong author captured by the pre-change repro" {
+  local project remote_sha local_sha marker
+  project="$(make_identity_repo captured-prepush-defect)"
+  remote_sha="$(git -C "$project" rev-parse HEAD)"
+  git -C "$project" update-ref refs/remotes/origin/main "$remote_sha"
+  local_sha="$(add_identity_commit "$project" bad-author \
+    wrong-author "$BAD_AUTHOR_EMAIL" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL")"
+  install_identity_hooks "$project"
+  marker="$BATS_TEST_TMPDIR/prechange-deck-marker"
+  printf '#!/usr/bin/env bash\nprintf "mirror\\n" >>"$HOOK_MARKER"\n' \
+    >"$project/scripts/sync-deck-mirror.sh"
   chmod +x "$project/scripts/sync-deck-mirror.sh"
 
-  zero=0000000000000000000000000000000000000000
   run bash -c \
     "printf 'refs/heads/main %s refs/heads/main %s\\n' '$local_sha' '$remote_sha' |
-       env QUARTET_DIR='$project' bash '$OLD_PRE_PUSH' origin '$BATS_TEST_TMPDIR/old-hook/origin.git'"
+       env HOOK_MARKER='$marker' QUARTET_DIR='$project' \
+       bash '$project/.githooks/pre-push' origin local"
 
-  [ "$status" -eq 0 ]
-  [ "$output" = "" ]
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$local_sha: author.name mismatch"* ]]
+  [ ! -e "$marker" ]
   [ "$remote_sha" != "$local_sha" ]
-  [ "$remote_sha" != "$zero" ]
   [ "$(git -C "$project" show -s --format=%an "$local_sha")" = "wrong-author" ]
+  assert_addresses_redacted
 }
 
 @test "git identity: current accepts the exact canonical identity" {
@@ -452,14 +499,14 @@ refs/heads/two $two_sha refs/heads/two $base"
 @test "git identity: missing and malformed policies exit 2" {
   local missing malformed
   missing="$(make_identity_repo policy-missing)"
-  printf '[other]\nenabled = true\n' >"$missing/.agents/config.toml"
+  printf '[other]\nenabled = true\n' >"$missing/.shipyard-git-identity.toml"
 
   run bash "$CHECKER" --all HEAD --project "$missing"
   [ "$status" -eq 2 ]
   [[ "$output" == *"identity policy is missing or malformed"* ]]
 
   malformed="$(make_identity_repo policy-malformed)"
-  printf '[git_identity\nenforce = true\n' >"$malformed/.agents/config.toml"
+  printf '[git_identity\nenforce = true\n' >"$malformed/.shipyard-git-identity.toml"
 
   run bash "$CHECKER" --all HEAD --project "$malformed"
   [ "$status" -eq 2 ]
@@ -511,4 +558,217 @@ refs/heads/two $two_sha refs/heads/two $base"
   run bash "$CHECKER" --range --project "$project"
   [ "$status" -eq 2 ]
   [[ "$output" == usage:* ]]
+}
+
+@test "git identity: pre-commit rejects a wrong pending author before downstream gates" {
+  local project marker
+  project="$(make_identity_repo hook-current-author)"
+  install_identity_hooks "$project"
+  marker="$BATS_TEST_TMPDIR/pre-commit-downstream"
+  printf '#!/usr/bin/env bash\nprintf "leak\\n" >>"$HOOK_MARKER"\n' \
+    >"$project/scripts/leak-check.sh"
+  printf '#!/usr/bin/env bash\nprintf "deck\\n" >>"$HOOK_MARKER"\n' \
+    >"$project/scripts/check-deck-complete.sh"
+  chmod +x "$project/scripts/leak-check.sh" \
+    "$project/scripts/check-deck-complete.sh"
+
+  run bash -c \
+    'cd "$1" && env HOOK_MARKER="$2" GIT_AUTHOR_NAME=wrong-author
+      GIT_AUTHOR_EMAIL="$3" GIT_COMMITTER_NAME="$4"
+      GIT_COMMITTER_EMAIL="$3" bash .githooks/pre-commit' \
+    _ "$project" "$marker" "$CANONICAL_EMAIL" "$CANONICAL_NAME"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"pending: author.name mismatch"* ]]
+  [ ! -e "$marker" ]
+  assert_addresses_redacted
+}
+
+@test "git identity: pre-commit rejects a wrong pending committer before downstream gates" {
+  local project marker
+  project="$(make_identity_repo hook-current-committer)"
+  install_identity_hooks "$project"
+  marker="$BATS_TEST_TMPDIR/pre-commit-downstream"
+  printf '#!/usr/bin/env bash\nprintf "leak\\n" >>"$HOOK_MARKER"\n' \
+    >"$project/scripts/leak-check.sh"
+  chmod +x "$project/scripts/leak-check.sh"
+
+  run bash -c \
+    'cd "$1" && env HOOK_MARKER="$2" GIT_AUTHOR_NAME="$3"
+      GIT_AUTHOR_EMAIL="$4" GIT_COMMITTER_NAME=wrong-committer
+      GIT_COMMITTER_EMAIL="$4" bash .githooks/pre-commit' \
+    _ "$project" "$marker" "$CANONICAL_NAME" "$CANONICAL_EMAIL"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"pending: committer.name mismatch"* ]]
+  [ ! -e "$marker" ]
+  assert_addresses_redacted
+}
+
+@test "git identity: pre-push rejects multi-ref and new-ref metadata before deck cascade" {
+  local project base existing_sha new_sha zero input marker
+  project="$(make_identity_repo hook-prepush-multi)"
+  install_identity_hooks "$project"
+  base="$(git -C "$project" rev-parse HEAD)"
+  git -C "$project" update-ref refs/remotes/origin/main "$base"
+
+  git -C "$project" switch -q -c existing
+  existing_sha="$(add_identity_commit "$project" existing-bad \
+    wrong-author "$CANONICAL_EMAIL" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL")"
+  git -C "$project" switch -q main
+  git -C "$project" switch -q -c new-ref
+  new_sha="$(add_identity_commit "$project" new-bad \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    wrong-committer "$CANONICAL_EMAIL")"
+
+  marker="$BATS_TEST_TMPDIR/deck-cascade"
+  printf '#!/usr/bin/env bash\nprintf "mirror\\n" >>"$HOOK_MARKER"\n' \
+    >"$project/scripts/sync-deck-mirror.sh"
+  chmod +x "$project/scripts/sync-deck-mirror.sh"
+  zero=0000000000000000000000000000000000000000
+  input="refs/heads/existing $existing_sha refs/heads/existing $base
+refs/heads/new-ref $new_sha refs/heads/new-ref $zero"
+
+  run bash -c \
+    'printf "%s\n" "$1" | env HOOK_MARKER="$2" QUARTET_DIR="$3" \
+      bash "$3/.githooks/pre-push" origin local' \
+    _ "$input" "$marker" "$project"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$existing_sha: author.name mismatch"* ]]
+  [[ "$output" == *"$new_sha: committer.name mismatch"* ]]
+  [ ! -e "$marker" ]
+}
+
+@test "git identity: pre-push runs non-blocking deck cascade only after identity success" {
+  local project base tip input marker
+  project="$(make_identity_repo hook-prepush-deck)"
+  install_identity_hooks "$project"
+  base="$(git -C "$project" rev-parse HEAD)"
+  git -C "$project" update-ref refs/remotes/origin/main "$base"
+  tip="$(add_identity_commit "$project" canonical \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL")"
+  marker="$BATS_TEST_TMPDIR/deck-cascade"
+  printf '#!/usr/bin/env bash\nprintf "mirror\\n" >>"$HOOK_MARKER"\nexit 9\n' \
+    >"$project/scripts/sync-deck-mirror.sh"
+  chmod +x "$project/scripts/sync-deck-mirror.sh"
+  input="refs/heads/main $tip refs/heads/main $base"
+
+  run bash -c \
+    'printf "%s\n" "$1" | env HOOK_MARKER="$2" QUARTET_DIR="$3" \
+      bash "$3/.githooks/pre-push" origin local' \
+    _ "$input" "$marker" "$project"
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$marker")" = "mirror" ]
+  [[ "$output" == *"deck mirror cascade did not complete (non-blocking)"* ]]
+}
+
+@test "git identity: configure writes local policy and redacts its log" {
+  local project
+  project="$(make_install_identity_fixture configure-success)"
+
+  run configure_identity_fixture "$project"
+
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$project" config --local user.name)" = "fixture-owner" ]
+  [ "$(git -C "$project" config --local user.email)" = "$CANONICAL_EMAIL" ]
+  [ "$(git -C "$project" config --local shipyard.identityEmail)" = "$CANONICAL_EMAIL" ]
+  [ "$(git -C "$project" config --local core.hooksPath)" = ".githooks" ]
+  [[ "$output" == *"name=fixture-owner"* ]]
+  [[ "$output" == *"email=<redacted>"* ]]
+  assert_addresses_redacted
+}
+
+@test "git identity: configure rejects a name different from project_owner without writes" {
+  local project
+  project="$(make_install_identity_fixture configure-name-mismatch)"
+  git -C "$project" config --local user.name wrong-owner
+
+  run configure_identity_fixture "$project"
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"effective user.name does not match project_owner"* ]]
+  ! git -C "$project" config --local shipyard.identityEmail >/dev/null
+  ! git -C "$project" config --local core.hooksPath >/dev/null
+  assert_addresses_redacted
+}
+
+@test "git identity: doctor reports missing opted-in local policy" {
+  local project
+  project="$(make_install_identity_fixture doctor-identity-missing)"
+
+  run run_identity_doctor "$project"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"DOCTOR identity: local canonical email is missing"* ]]
+  [[ "$output" == *"DOCTOR identity: core.hooksPath must be .githooks"* ]]
+  assert_addresses_redacted
+}
+
+@test "git identity: doctor reports mismatched opted-in local policy without disclosure" {
+  local project
+  project="$(make_install_identity_fixture doctor-identity-mismatch)"
+  configure_identity_fixture "$project" >/dev/null
+  git -C "$project" config --local user.email "$BAD_AUTHOR_EMAIL"
+  git -C "$project" config --local core.hooksPath other-hooks
+
+  run run_identity_doctor "$project"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"DOCTOR identity: local user.email does not match canonical email"* ]]
+  [[ "$output" == *"DOCTOR identity: core.hooksPath must be .githooks"* ]]
+  assert_addresses_redacted
+}
+
+@test "git identity: doctor passes after configuring a fresh opted-in install" {
+  local project
+  project="$(make_install_identity_fixture doctor-identity-success)"
+  configure_identity_fixture "$project" >/dev/null
+
+  run run_identity_doctor "$project"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"crew install clean"* ]]
+  [[ "$output" != *"DOCTOR identity:"* ]]
+  assert_addresses_redacted
+}
+
+@test "git identity: normal install leaves an unset project's local config byte-identical" {
+  local project before after
+  project="$(make_fixture_project identity-unset clean-install.toml)"
+  stub_install_dependencies
+  before="$(sha256sum "$project/.git/config")"
+
+  run env QUARTET_DIR="$QUARTET_ROOT" \
+    QUARTET_EVENTS_DIR="$EVENTS_DIR" \
+    QUARTET_NOTIFY_CMD="$NOTIFY_CMD" \
+    bash "$INSTALLER" --project "$project"
+
+  [ "$status" -eq 0 ]
+  after="$(sha256sum "$project/.git/config")"
+  [ "$before" = "$after" ]
+  ! git -C "$project" config --local shipyard.identityEmail >/dev/null
+  ! git -C "$project" config --local core.hooksPath >/dev/null
+  [[ "$output" != *"git identity"* ]]
+}
+
+@test "git identity: workflow uses full-depth checkout and exact event ranges" {
+  [ "$(grep -Fc 'fetch-depth: 0' "$WORKFLOW")" -eq 1 ]
+  grep -Fq 'BASE_SHA: ${{ github.event.pull_request.base.sha }}' "$WORKFLOW"
+  grep -Fq 'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}' "$WORKFLOW"
+  grep -Fq -- '--range "$BASE_SHA..$PR_HEAD_SHA" --project .' "$WORKFLOW"
+  grep -Fq -- '--all "$HEAD_SHA" --project .' "$WORKFLOW"
+}
+
+@test "git identity: workflow fails closed on missing variable event SHA history or policy" {
+  grep -Fq 'SHIPYARD_IDENTITY_EMAIL: ${{ vars.SHIPYARD_IDENTITY_EMAIL }}' "$WORKFLOW"
+  grep -Fq 'identity email variable is missing' "$WORKFLOW"
+  grep -Fq 'pull request identity range is missing' "$WORKFLOW"
+  grep -Fq 'main identity revision is missing' "$WORKFLOW"
+  grep -Fq 'repository history is shallow' "$WORKFLOW"
+  grep -Fq 'git config --local shipyard.identityEmail "$SHIPYARD_IDENTITY_EMAIL"' "$WORKFLOW"
+  grep -Fq 'bash scripts/check-git-identity.sh' "$WORKFLOW"
 }

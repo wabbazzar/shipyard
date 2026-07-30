@@ -108,6 +108,28 @@ recon  →  interview  →  write L2–L5  →  bake units  →  verify
    are green now, the scheduler reports each job loaded, and the eight skill
    symlinks resolve.
 
+## Opt-in Git identity
+
+A project may track only its non-sensitive identity policy at
+`.shipyard-git-identity.toml`:
+
+```toml
+[git_identity]
+enforce = true
+name = "your-github-user"
+```
+
+Keep the email outside tracked files. After setting the intended effective
+`user.name` and `user.email`, configure and verify the repository-local keys:
+
+```bash
+install.sh --configure-git-identity --project <project_dir>
+```
+
+This enables `.githooks`, stores the canonical email in local Git config, and
+prints only a redacted marker. CI obtains the same value only from the
+`SHIPYARD_IDENTITY_EMAIL` repository variable.
+
 ## Doctor — audit what an install owns
 
 `install.sh` can report drift in a crew install without changing anything:
@@ -131,6 +153,7 @@ inputs install uses) and checks it against reality, one `DOCTOR <class>:
 | g | legacy per-project launcher scripts / crontab lines |
 | h | (hub only) a dispatch decision in `data/news/decisions.jsonl` not mirrored into the target project's `data/decisions.jsonl` |
 | i | (opt-in only — flagged only once a project has enabled shoulder mode) the capture hook not wired into the authoring harness's native config, or `.agents/shoulder.env` missing; fix with `install.sh --wire-shoulder` |
+| identity | (opt-in only) tracked name, repository-local name/email policy, or `core.hooksPath=.githooks` missing or mismatched |
 
 It is strictly read-only (no writes or scheduler mutation) and finishes in
 well under a second, so it runs as a `[[medic.checks]]` entry every scan —

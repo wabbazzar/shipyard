@@ -150,14 +150,18 @@ JSON
   mkdir -p "$ROOT/.githooks" "$ROOT/scripts"
   cp "$BATS_TEST_DIRNAME/../.githooks/pre-commit" "$ROOT/.githooks/pre-commit"
   cp "$BATS_TEST_DIRNAME/../scripts/check-deck-complete.sh" "$ROOT/scripts/"
+  cp "$BATS_TEST_DIRNAME/../scripts/check-git-identity.sh" "$ROOT/scripts/"
   cp "$BATS_TEST_DIRNAME/../scripts/gen-deck-data.py" "$ROOT/scripts/"
   printf '#!/usr/bin/env bash\nexit 0\n' >"$ROOT/scripts/leak-check.sh"
+  printf '[git_identity]\nenforce = true\nname = "Deck Gate Test"\n' \
+    >"$ROOT/.shipyard-git-identity.toml"
   chmod +x "$ROOT/.githooks/pre-commit" "$ROOT/scripts/"*.sh
   cmp "$BATS_TEST_DIRNAME/../.githooks/pre-commit" "$ROOT/.githooks/pre-commit"
 
   git -C "$ROOT" init -q
   git -C "$ROOT" config user.name "Deck Gate Test"
   git -C "$ROOT" config user.email "deck-gate@example.invalid"
+  git -C "$ROOT" config shipyard.identityEmail "deck-gate@example.invalid"
   git -C "$ROOT" config core.hooksPath .githooks
   git -C "$ROOT" add .
 

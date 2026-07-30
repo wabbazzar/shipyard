@@ -8,7 +8,7 @@
 - **Estimated Points:** 8 (P1 3 · P2 3 · P3 2)
 - **Refs:** `.githooks/pre-commit`, `.githooks/pre-push`,
   `.github/workflows/checks.yml`, `install.sh`, `.agents/config.toml`,
-  `.agents/gates.md`
+  `.shipyard-git-identity.toml`, `.agents/gates.md`
 
 ## Goal
 
@@ -78,7 +78,10 @@ Authoritative implementation surfaces:
 - `.github/workflows/checks.yml:1-50` — current shallow CI surface.
 - `install.sh` and its existing `--dry-run`/`--doctor` paths — fresh-checkout
   hook and policy setup/audit.
-- `.agents/config.toml:10-13` — tracked owner name and opt-in project policy.
+- `.agents/config.toml:10-13` — ignored local project-owner metadata;
+  machine-specific `.agents/**` cannot be the tracked CI policy surface.
+- `.shipyard-git-identity.toml` — dedicated tracked, non-sensitive opt-in
+  policy shared by fresh clones, hooks, installer/doctor, and CI.
 - `.agents/gates.md` — exact per-phase repository gates and incident traps.
 - named stash `ar-codex Phase 1 paused for owner-authorized identity rewrite
   2026-07-30` — immutable recovery source for the priority shared-tree work.
@@ -121,8 +124,8 @@ never copied into this ticket or another tracked file.
 
 ### Canonical policy without a tracked personal email
 
-- Add an opt-in `[git_identity]` section to Shipyard's project config containing
-  only non-sensitive behavior (`enforce = true`) and the canonical public name.
+- Add a tracked root `.shipyard-git-identity.toml` containing only the opt-in
+  `[git_identity]` behavior (`enforce = true`) and canonical public name.
 - Store the canonical email in repository-local Git configuration and in a
   GitHub Actions repository variable. The checker must fail closed when either
   surface is absent.
@@ -249,9 +252,9 @@ Run the real command, read the real file, curl the real port, and report exact
 output (exit codes, JSONL lines, HTTP codes), not adjectives.
 
 The checker reads the canonical public name from
-`[git_identity].name` in `.agents/config.toml` and the canonical email from the
-repository-local `shipyard.identityEmail` Git key. `enforce = true` requires
-both. Its modes are:
+`[git_identity].name` in `.shipyard-git-identity.toml` and the canonical email
+from the repository-local `shipyard.identityEmail` Git key. `enforce = true`
+requires both. Its modes are:
 
 - `--current --project <path>`: compare `git var GIT_AUTHOR_IDENT` and
   `GIT_COMMITTER_IDENT`;
@@ -320,20 +323,21 @@ the checker/tests/ticket Ledger as one canonical-identity commit.
 
 **Delegation: subagent — hook/CI/installer owner.** Begin from the committed
 Phase 1 checker. Own `.githooks/pre-commit`, `.githooks/pre-push`,
-`.github/workflows/checks.yml`, `install.sh`, `.agents/config.toml`, focused
-tests, and only the existing setup documentation that must describe the
-external policy. Do not touch GitHub state, history, the named stash, or
-Aurora-phase files. Preserve the pre-push deck cascade as non-blocking after
-identity succeeds. Prove the config-unset installer path is pre-change
-compatible. Return in at most 40 lines: files changed; commands with exit codes;
-focused/full Bats counts; dry-run/doctor observations; workflow assertions;
-blockers. Converge honestly or report the precise blocker with the actual
-evidence — NEVER fake green, weaken a check, or hand-wave "should work". Run
-the real command, read the real file, curl the real port, and report exact
-output (exit codes, JSONL lines, HTTP codes), not adjectives.
+`.github/workflows/checks.yml`, `install.sh`, the new tracked
+`.shipyard-git-identity.toml`, focused tests, and only the existing setup
+documentation that must describe the external policy. Do not touch GitHub
+state, history, the named stash, or Aurora-phase files. Preserve the pre-push
+deck cascade as non-blocking after identity succeeds. Prove a project without
+the tracked policy has pre-change installer behavior. Return in at most 40
+lines: files changed; commands with exit codes; focused/full Bats counts;
+dry-run/doctor observations; workflow assertions; blockers. Converge honestly
+or report the precise blocker with the actual evidence — NEVER fake green,
+weaken a check, or hand-wave "should work". Run the real command, read the real
+file, curl the real port, and report exact output (exit codes, JSONL lines, HTTP
+codes), not adjectives.
 
-Add `[git_identity] enforce = true` and `name = "wabbazzar"` to this project's
-tracked config. Add:
+Add `.shipyard-git-identity.toml` with `[git_identity] enforce = true` and
+`name = "wabbazzar"` for this project. Add:
 
 ```text
 install.sh --configure-git-identity --project <path>
@@ -343,8 +347,9 @@ It reads the effective `user.name`/`user.email`, rejects a name different from
 `project_owner`, writes both `user.*` and `shipyard.identityEmail` to the
 target repository's local config, sets `core.hooksPath=.githooks`, invokes the
 current-identity check, and logs only the name plus a redacted-email marker.
-`--doctor` audits those keys/hook path only when `[git_identity].enforce=true`;
-an absent section is exactly the prior behavior.
+`--doctor` audits those keys/hook path only when the tracked policy exists with
+`[git_identity].enforce=true`; an absent policy file is exactly the prior
+behavior.
 
 Pre-commit calls `--current` before content/deck gates. Pre-push calls
 `--pre-push "$1" "$2"` with its stdin before the best-effort mirror. CI uses
@@ -412,9 +417,12 @@ pre-rewrite `main`, remote pre-rewrite `main`, and the named stash commit.
 Record the six offending old hashes and use a deterministic parent-order walk
 to recreate commits: only those six receive the canonical author and committer
 name/email; every tree, message bytes, author/committer timestamp, parent order,
-and all other raw headers remain unchanged. Move `main` only after the complete
-candidate graph passes comparison. Record the full old→new map in the Ledger,
-without email values.
+and all other raw headers remain unchanged except the `gpgsig` headers on the
+two GitHub-signed merge commits whose committer bytes are being corrected.
+Those signatures cannot remain cryptographically valid after the rewrite and
+must be removed rather than retained as misleading invalid signatures. Move
+`main` only after the complete candidate graph passes comparison. Record the
+full old→new map in the Ledger, without email values.
 
 Restore the named stash with `apply`, do not pop/drop it, reset the two
 new-file index entries and return them to intent-to-add, then compare these
@@ -528,7 +536,7 @@ email value in tracked text.
 - `builder: subagent (1 agent)`
 - `plan:` add the raw checker and hermetic red-first coverage only; the
   orchestrator will re-run every Phase 1 gate and commit the slice.
-- `commit:` pending
+- `commit:` `c41dde89e74e60029999710c3cbd5cf1a4fb2146`
 - `red-first:` unchanged pre-push accepted a wrong author (`1/1`, exit `0`).
 - `focused/full gates:` checker Bats `25/25`; repository Bats `548/548`;
   syntax, leak, deck freshness/completeness/render, lifecycle, delegation,
@@ -543,14 +551,24 @@ email value in tracked text.
 - `plan:` wire the committed checker through config, installer/doctor, hooks,
   CI, and focused documentation/tests; the orchestrator will re-run all gates.
 - `commit:` pending
-- `focused/full gates:` pending
-- `configure/doctor evidence:` pending
-- `notes/blockers:` pending
+- `focused/full gates:` identity Bats `37/37`; repository Bats `560/560`;
+  installer/hook regression subset `47/47`; syntax, leak, YAML parse, deck,
+  lifecycle, delegation, Python bytecode, and diff checks exit `0`.
+- `configure/doctor evidence:` live configure printed
+  `name=wabbazzar email=<redacted>`; doctor, pending hook, and empty pre-push
+  hook exit `0`; full history audit exits `1` with six unique hashes and no
+  address value in diagnostics.
+- `notes/blockers:` the ignored, machine-specific `.agents/config.toml` cannot
+  be a CI policy source; policy moved to tracked, non-sensitive
+  `.shipyard-git-identity.toml`. Projects without that file remain unchanged.
 
 ### Phase 3
 
 - `builder: inline (destructive shared history, GitHub governance, secret
   state, and priority-tree restoration)`
+- `plan:` commit Phase 2; create immutable backup refs; recreate and compare the
+  graph; publish under the recorded lease; verify remote CI/API/governance
+  probes; then restore and release the paused priority tree.
 - `commit/map:` pending
 - `old/new equivalence:` pending
 - `force-with-lease and remote:` pending

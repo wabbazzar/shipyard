@@ -10,6 +10,8 @@ set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 
+"$ROOT/scripts/check-git-identity.sh" --current --project "$ROOT" || exit $?
+
 # Advisory: exit 1 = drift; 3 = no lifecycle layout configured (nothing to say).
 LC_ENGINE="$ROOT/scripts/ticket-lifecycle.sh"
 if [ -f "$LC_ENGINE" ]; then

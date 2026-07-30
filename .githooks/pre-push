@@ -13,13 +13,26 @@ set -uo pipefail
 
 QUARTET_DIR="${QUARTET_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}"
 _zero="0000000000000000000000000000000000000000"
+_updates="$(mktemp "${TMPDIR:-/tmp}/shipyard-pre-push.XXXXXX")" || {
+  echo "pre-push: could not create identity-check input" >&2
+  exit 2
+}
+trap 'rm -f "$_updates"' EXIT
+cat >"$_updates" || {
+  echo "pre-push: could not capture ref updates" >&2
+  exit 2
+}
+
+"$QUARTET_DIR/scripts/check-git-identity.sh" \
+  --pre-push "${1:-}" "${2:-}" --project "$QUARTET_DIR" \
+  <"$_updates" || exit $?
 
 main_sha=""
 while read -r _localref localsha remoteref _remotesha; do
   if [ "$remoteref" = "refs/heads/main" ] && [ "${localsha:-$_zero}" != "$_zero" ]; then
     main_sha="$localsha"
   fi
-done
+done <"$_updates"
 
 if [ -n "$main_sha" ]; then
   if ! "$QUARTET_DIR/scripts/sync-deck-mirror.sh" "$main_sha"; then

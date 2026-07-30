@@ -5,6 +5,49 @@ on:
   pull_request:
 
 jobs:
+  git-identity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: raw author and committer identity
+        env:
+          SHIPYARD_IDENTITY_EMAIL: ${{ vars.SHIPYARD_IDENTITY_EMAIL }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref }}
+        run: |
+          set -eu
+          fail() {
+            printf 'git-identity CI: %s\n' "$1" >&2
+            exit 2
+          }
+          [ -n "$SHIPYARD_IDENTITY_EMAIL" ] ||
+            fail "identity email variable is missing"
+          [ "$(git rev-parse --is-shallow-repository)" = "false" ] ||
+            fail "repository history is shallow"
+          git config --local shipyard.identityEmail "$SHIPYARD_IDENTITY_EMAIL"
+          trap 'git config --local --unset-all shipyard.identityEmail >/dev/null 2>&1 || true' EXIT
+          case "$EVENT_NAME" in
+            pull_request)
+              [ -n "$BASE_SHA" ] && [ -n "$PR_HEAD_SHA" ] ||
+                fail "pull request identity range is missing"
+              bash scripts/check-git-identity.sh \
+                --range "$BASE_SHA..$PR_HEAD_SHA" --project .
+              ;;
+            push)
+              [ "$GITHUB_REF_NAME" = "refs/heads/main" ] && [ -n "$HEAD_SHA" ] ||
+                fail "main identity revision is missing"
+              bash scripts/check-git-identity.sh --all "$HEAD_SHA" --project .
+              ;;
+            *)
+              fail "unsupported workflow event"
+              ;;
+          esac
+
   leak-check:
     runs-on: ubuntu-latest
     steps:

@@ -4,6 +4,7 @@
 # Usage:
 #   install.sh --project <project_dir> [--dry-run] [--agents LIST] [--theme T]
 #   install.sh --doctor    --project <project_dir>
+#   install.sh --configure-git-identity --project <project_dir>
 #   install.sh --relink    --project <project_dir> [--dry-run]
 #   install.sh --uninstall --project <project_dir> [--dry-run]
 #
@@ -16,6 +17,11 @@
 #                clean / 1 on drift. Never writes, never touches the scheduler.
 #                Fast
 #                enough to run as a [[medic.checks]] entry every scan.
+#   --configure-git-identity
+#                For a project with `.shipyard-git-identity.toml` enforcement,
+#                copy the effective Git name/email into repository-local
+#                policy, enable `.githooks`, and verify the pending identity.
+#                Email is never printed.
 #   --relink     Repair mode: recreate the skill symlinks and missing skill
 #                bridge --doctor flags as drift. Deterministic filesystem op —
 #                touches nothing else (no scheduler/config/gate), never clobbers
@@ -136,7 +142,7 @@ DRY_RUN=0
 AGENTS="build,release,medic,scribe"
 THEME="plain"
 THEME_EXPLICIT=0
-MODE="install"   # install | doctor | uninstall
+MODE="install"   # install | doctor | configure-git-identity | relink | uninstall
 WIRE_SHOULDER=0  # opt-in: additively wire the shoulder-mode capture hook into
                  # the authoring harness's native config. Unset ⇒ install NEVER
                  # touches .claude/settings.json / ~/.codex / ~/.hermes.
@@ -147,6 +153,7 @@ while [ $# -gt 0 ]; do
     --agents)    AGENTS="$2"; shift 2 ;;
     --theme)     THEME="$2"; THEME_EXPLICIT=1; shift 2 ;;
     --doctor)    MODE="doctor"; shift ;;
+    --configure-git-identity) MODE="configure-git-identity"; shift ;;
     --relink)    MODE="relink"; shift ;;
     --uninstall) MODE="uninstall"; shift ;;
     --wire-shoulder) WIRE_SHOULDER=1; shift ;;
@@ -156,8 +163,17 @@ while [ $# -gt 0 ]; do
 done
 [ -z "$PROJECT_DIR" ] && { echo "--project required" >&2; usage; }
 case "$MODE" in
-  doctor|uninstall|relink) [ "$THEME_EXPLICIT" = "0" ] || { echo "--theme not valid with --$MODE" >&2; usage; } ;;
+  doctor|configure-git-identity|uninstall|relink)
+    [ "$THEME_EXPLICIT" = "0" ] ||
+      { echo "--theme not valid with --$MODE" >&2; usage; }
+    ;;
 esac
+if [ "$MODE" = "configure-git-identity" ]; then
+  [ "$DRY_RUN" = "0" ] && [ "$WIRE_SHOULDER" = "0" ] || {
+    echo "--dry-run/--wire-shoulder not valid with --configure-git-identity" >&2
+    usage
+  }
+fi
 
 # Dependency preflight — fail fast with a scheduler-specific message.
 for dep in jq python3 git gh claude "$(scheduler_dependency)"; do
@@ -190,6 +206,89 @@ CFG_JSON="$(load_config_json "$CFG")" || { echo "failed to parse $CFG" >&2; exit
 
 PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON")"
 [ -z "$PROJECT_NAME" ] && { echo "config missing project_name" >&2; exit 2; }
+IDENTITY_POLICY_FILE="$PROJECT_DIR/.shipyard-git-identity.toml"
+
+# Configure the opt-in Git identity policy from effective Git configuration.
+# Values are validated before any local key is written, and email is never
+# copied into stdout/stderr.
+run_configure_git_identity() {
+  local owner policy_json policy_enabled policy_name
+  local effective_name effective_email root
+  owner="$(jq -r '.project_owner // empty' <<<"$CFG_JSON")"
+  [ -f "$IDENTITY_POLICY_FILE" ] || {
+    echo "git-identity: tracked policy is missing" >&2
+    return 2
+  }
+  policy_json="$(load_config_json "$IDENTITY_POLICY_FILE" 2>/dev/null)" || {
+    echo "git-identity: tracked policy is malformed" >&2
+    return 2
+  }
+  policy_enabled="$(jq -r '(.git_identity.enforce // false) == true' <<<"$policy_json")"
+  policy_name="$(jq -r '.git_identity.name // empty' <<<"$policy_json")"
+
+  [ "$policy_enabled" = "true" ] || {
+    echo "git-identity: tracked policy is not enabled" >&2
+    return 2
+  }
+  [ -n "$policy_name" ] || {
+    echo "git-identity: tracked name is missing" >&2
+    return 2
+  }
+  if [ -n "$owner" ] && [ "$policy_name" != "$owner" ]; then
+    echo "git-identity: tracked name must match project_owner" >&2
+    return 2
+  fi
+  root="$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null)" || {
+    echo "git-identity: project is not a Git worktree" >&2
+    return 2
+  }
+  [ "$(cd "$root" && pwd -P)" = "$(cd "$PROJECT_DIR" && pwd -P)" ] || {
+    echo "git-identity: project must be the Git worktree root" >&2
+    return 2
+  }
+
+  effective_name="$(git -C "$PROJECT_DIR" config --get user.name 2>/dev/null)" || {
+    echo "git-identity: effective user.name is missing" >&2
+    return 2
+  }
+  effective_email="$(git -C "$PROJECT_DIR" config --get user.email 2>/dev/null)" || {
+    echo "git-identity: effective user.email is missing" >&2
+    return 2
+  }
+  [ "$effective_name" = "$policy_name" ] || {
+    if [ -n "$owner" ]; then
+      echo "git-identity: effective user.name does not match project_owner" >&2
+    else
+      echo "git-identity: effective user.name does not match tracked name" >&2
+    fi
+    return 2
+  }
+  case "$effective_email" in
+    ""|*$'\n'*|*$'\r'*|*" "*|*"<"*|*">"*|*@|@*)
+      echo "git-identity: effective user.email is malformed" >&2
+      return 2
+      ;;
+    *@*) ;;
+    *)
+      echo "git-identity: effective user.email is malformed" >&2
+      return 2
+      ;;
+  esac
+
+  git -C "$PROJECT_DIR" config --local --replace-all user.name "$effective_name" &&
+    git -C "$PROJECT_DIR" config --local --replace-all user.email "$effective_email" &&
+    git -C "$PROJECT_DIR" config --local --replace-all \
+      shipyard.identityEmail "$effective_email" &&
+    git -C "$PROJECT_DIR" config --local --replace-all core.hooksPath .githooks || {
+      echo "git-identity: could not write repository-local policy" >&2
+      return 2
+    }
+
+  "$BASH_BIN" "$QUARTET_DIR/scripts/check-git-identity.sh" \
+    --current --project "$PROJECT_DIR" || return $?
+  printf 'git-identity: configured name=%s email=<redacted>\n' \
+    "$effective_name"
+}
 
 # ===========================================================================
 # doctor / uninstall — a manifest for what an install owns (ticket:
@@ -341,7 +440,62 @@ run_doctor() {
     emit "config: retired key/section — $hit"
   done <<<"$(grep -nE "$dre" "$CFG" 2>/dev/null)"
 
-  # (e) each installer-owned skill link resolves (realpath) into
+  # (e) repository-local Git identity policy — strictly opt-in. An absent root
+  #     policy file performs no local Git reads and emits no findings.
+  local identity_policy_json="" identity_enabled=false
+  local identity_name identity_owner
+  if [ -f "$IDENTITY_POLICY_FILE" ]; then
+    identity_policy_json="$(
+      load_config_json "$IDENTITY_POLICY_FILE" 2>/dev/null
+    )" || emit "identity: tracked policy is malformed"
+    if [ -n "$identity_policy_json" ]; then
+      identity_enabled="$(
+        jq -r '(.git_identity.enforce // false) == true' \
+          <<<"$identity_policy_json"
+      )"
+    fi
+  fi
+  if [ "$identity_enabled" = "true" ]; then
+    identity_name="$(jq -r '.git_identity.name // empty' <<<"$identity_policy_json")"
+    identity_owner="$(jq -r '.project_owner // empty' <<<"$CFG_JSON")"
+    if [ -z "$identity_name" ]; then
+      emit "identity: tracked name is missing"
+    elif [ -n "$identity_owner" ] && [ "$identity_name" != "$identity_owner" ]; then
+      emit "identity: tracked name must match project_owner"
+    fi
+
+    local identity_local_name identity_local_email identity_canonical_email
+    local identity_hooks
+    identity_local_name="$(
+      git -C "$PROJECT_DIR" config --local --get-all user.name 2>/dev/null || true
+    )"
+    identity_local_email="$(
+      git -C "$PROJECT_DIR" config --local --get-all user.email 2>/dev/null || true
+    )"
+    identity_canonical_email="$(
+      git -C "$PROJECT_DIR" config --local --get-all \
+        shipyard.identityEmail 2>/dev/null || true
+    )"
+    identity_hooks="$(
+      git -C "$PROJECT_DIR" config --local --get-all core.hooksPath 2>/dev/null || true
+    )"
+
+    [ "$identity_local_name" = "$identity_name" ] ||
+      emit "identity: local user.name does not match tracked name"
+    case "$identity_canonical_email" in
+      "") emit "identity: local canonical email is missing" ;;
+      *$'\n'*) emit "identity: local canonical email must have one value" ;;
+    esac
+    if [ -n "$identity_canonical_email" ] &&
+       [[ "$identity_canonical_email" != *$'\n'* ]] &&
+       [ "$identity_local_email" != "$identity_canonical_email" ]; then
+      emit "identity: local user.email does not match canonical email"
+    fi
+    [ "$identity_hooks" = ".githooks" ] ||
+      emit "identity: core.hooksPath must be .githooks"
+  fi
+
+  # (f) each installer-owned skill link resolves (realpath) into
   #     $QUARTET_DIR/skills/. Codex natively discovers the .agents/skills
   #     root; .claude/skills remains the Claude/Hermes compatibility root.
   local qskills; qskills="$(cd "$QUARTET_DIR/skills" 2>/dev/null && pwd -P || true)"
@@ -468,7 +622,7 @@ run_doctor() {
   fi
 
   if [ "$findings" -eq 0 ]; then
-    echo "doctor: $PROJECT_NAME crew install clean (checks a-j)" >&2
+    echo "doctor: $PROJECT_NAME crew install clean" >&2
     return 0
   fi
   echo "doctor: $PROJECT_NAME — $findings finding(s)" >&2
@@ -635,9 +789,10 @@ run_relink() {
 }
 
 case "$MODE" in
-  doctor)    run_doctor; exit $? ;;
-  relink)    run_relink; exit $? ;;
-  uninstall) run_uninstall; exit $? ;;
+  doctor)                run_doctor; exit $? ;;
+  configure-git-identity) run_configure_git_identity; exit $? ;;
+  relink)                run_relink; exit $? ;;
+  uninstall)             run_uninstall; exit $? ;;
 esac
 
 # ---------- theme → [names] block -------------------------------------------

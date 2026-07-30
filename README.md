@@ -198,6 +198,7 @@ configuration, and it is YOUR job:
 | off switch | Linux: `systemctl --user disable --now <project>-<display>.timer`; macOS: `launchctl bootout gui/$(id -u)/com.shipyard.<project>-<display>` | — |
 | hands-off repo | `autonomous = true` (top-level) — a private, disposable dogfood repo with no human in the loop: it never appears in the hub's approval wire, and the ticket auto-gate proceeds without stopping even for a user-decision. Pair with `[medic] can_merge = true`. **Only ever set this on a throwaway private repo.** | **unset** (human-in-the-loop) |
 | inspect first | `install.sh --dry-run` prints every unit and crontab change before writing | — |
+| raw Git identity | tracked `.shipyard-git-identity.toml` opt-in checks exact author/committer names and emails in pre-commit, pre-push, doctor, and CI; the email stays in local Git config and the `SHIPYARD_IDENTITY_EMAIL` Actions variable, never tracked source | **absent/off** |
 
 Agents only get projects you explicitly install them on. Start with one
 low-stakes repo.
@@ -270,6 +271,27 @@ The portable `[install.timers]` schedule subset is `*-*-* HH:MM:00` for a
 daily job and `*-*-* *:0/N:00` for every N minutes. The installer rejects a
 schedule that launchd cannot translate instead of silently changing cadence.
 
+To opt in, track `.shipyard-git-identity.toml` at the repository root:
+
+```toml
+[git_identity]
+enforce = true
+name = "your-github-user"
+```
+
+Then set the intended name and email in effective Git configuration and
+configure the repository-local guard:
+
+```bash
+install.sh --configure-git-identity --project <project_dir>
+```
+
+The command requires the effective name to match `project_owner`, writes
+`user.name`, `user.email`, `shipyard.identityEmail`, and
+`core.hooksPath=.githooks` locally, verifies the pending identity, and never
+prints the email. CI reads the same email only from the
+`SHIPYARD_IDENTITY_EMAIL` repository variable and checks full raw history.
+
 **Doctor** — a read-only audit of what a crew install owns, so drift is
 visible instead of surfacing weeks later:
 
@@ -282,8 +304,9 @@ It checks the manifest install writes — expected jobs enabled and pointed at
 `$QUARTET_DIR`, no stale duplicate role jobs, no foreign `.service.d`
 drop-ins on systemd, no retired config keys, skill symlinks resolving into
 `$QUARTET_DIR/skills`, no dead `.claude/settings.json` hooks, no legacy
-launchers/cron — and finishes in well under a second, so a `[[medic.checks]]`
-entry can run it every scan. It never writes or touches the scheduler.
+launchers/cron, and exact local Git identity/hook keys for opted-in projects —
+and finishes in well under a second, so a `[[medic.checks]]` entry can run it
+every scan. It never writes or touches the scheduler.
 
 **Uninstall** — remove exactly the installer-owned surface; the config you
 wrote and your data are left untouched:

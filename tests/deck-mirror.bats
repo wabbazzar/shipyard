@@ -33,8 +33,13 @@ HTML
   printf '{"deck":true}\n' >"$SRC/docs/shipyard-data.json"
   # the real script + hook, so the hook's $QUARTET_DIR/scripts path resolves
   cp "$SCRIPT" "$SRC/scripts/sync-deck-mirror.sh"; chmod +x "$SRC/scripts/sync-deck-mirror.sh"
+  cp "$QUARTET_ROOT/scripts/check-git-identity.sh" "$SRC/scripts/check-git-identity.sh"
+  chmod +x "$SRC/scripts/check-git-identity.sh"
   cp "$HOOK" "$SRC/.githooks/pre-push"; chmod +x "$SRC/.githooks/pre-push"
+  printf '[git_identity]\nenforce = true\nname = "quartet-test"\n' \
+    >"$SRC/.shipyard-git-identity.toml"
   git -C "$SRC" init -q -b main
+  git -C "$SRC" config --local shipyard.identityEmail "quartet-test@example.com"
   git -C "$SRC" add -A
   git -C "$SRC" commit -q -m "src deck"
   SRC_SHA="$(git -C "$SRC" rev-parse HEAD)"
@@ -122,17 +127,17 @@ sync() { env DECK_MIRROR_DIR="$MIRROR" QUARTET_DIR="$SRC" bash "$SCRIPT" "${1:-$
   z=0000000000000000000000000000000000000000
   before="$(origin_count)"
   # a non-main ref → no cascade
-  run bash -c "printf 'refs/heads/wip %s refs/heads/wip %s\n' '$SRC_SHA' '$z' | env DECK_MIRROR_DIR='$MIRROR' QUARTET_DIR='$SRC' bash '$HOOK'"
+  run bash -c "printf 'refs/heads/wip %s refs/heads/wip %s\n' '$SRC_SHA' '$z' | env DECK_MIRROR_DIR='$MIRROR' QUARTET_DIR='$SRC' bash '$HOOK' origin local"
   [ "$status" -eq 0 ]
   [ "$(origin_count)" = "$before" ]
   # a main ref → cascade fires
-  run bash -c "printf 'refs/heads/main %s refs/heads/main %s\n' '$SRC_SHA' '$z' | env DECK_MIRROR_DIR='$MIRROR' QUARTET_DIR='$SRC' bash '$HOOK'"
+  run bash -c "printf 'refs/heads/main %s refs/heads/main %s\n' '$SRC_SHA' '$z' | env DECK_MIRROR_DIR='$MIRROR' QUARTET_DIR='$SRC' bash '$HOOK' origin local"
   [ "$status" -eq 0 ]
   [ "$(origin_count)" -gt "$before" ]
 }
 
 @test "pre-push never blocks even when the cascade fails" {
   # point at a non-git mirror so the cascade errors; hook must still exit 0
-  run bash -c "printf 'refs/heads/main %s refs/heads/main %s\n' '$SRC_SHA' '0000000000000000000000000000000000000000' | env DECK_MIRROR_DIR='$BATS_TEST_TMPDIR/nope' QUARTET_DIR='$SRC' bash '$HOOK'"
+  run bash -c "printf 'refs/heads/main %s refs/heads/main %s\n' '$SRC_SHA' '0000000000000000000000000000000000000000' | env DECK_MIRROR_DIR='$BATS_TEST_TMPDIR/nope' QUARTET_DIR='$SRC' bash '$HOOK' origin local"
   [ "$status" -eq 0 ]
 }
