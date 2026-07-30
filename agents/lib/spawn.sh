@@ -27,20 +27,36 @@
 # failure. Count: ${SPAWN_STALL_RETRIES:-2} (D-4; 0 = pre-fix single-shot,
 # byte-identical). Backoff seconds per attempt: ${SPAWN_STALL_BACKOFF:-5 15}.
 _SPAWN_STALL_RE='Response stalled mid-stream|overloaded_error|Connection error|error 5[0-9][0-9]|(^|[^0-9])(429|529)([^0-9]|$)'
+# Linux rejects any single execve argument above roughly 128 KiB regardless of
+# total ARG_MAX. Stay comfortably below that boundary for harnesses that offer
+# no file/stdin query mode (currently Hermes).
+_SPAWN_SAFE_ARG_PROMPT_BYTES=100000
 
-# _run_harness <stdin_mode> <cmd...>   stdin_mode "null" feeds the cmd </dev/null.
+_prompt_byte_count() {
+  LC_ALL=C printf '%s' "$1" | wc -c | tr -d ' '
+}
+
+# _run_harness <stdin_mode> <cmd...>
+#   stdin_mode "null" feeds the command </dev/null;
+#   stdin_mode "file:<path>" feeds it from that private file;
+#   an empty mode preserves inherited stdin.
 # Sets SPAWN_RAW, SPAWN_RC, and _SPAWN_STDERR (the final attempt's stderr, also
 # appended to $logfile as before). Errexit-safe: callers invoke it as
 # `_run_harness … || true` and then read the globals.
 _run_harness() {
   local stdin_mode="$1"; shift
-  local max="${SPAWN_STALL_RETRIES:-2}" attempt=0 errf b
+  local max="${SPAWN_STALL_RETRIES:-2}" attempt=0 errf b stdin_file=""
+  case "$stdin_mode" in
+    file:*) stdin_file="${stdin_mode#file:}" ;;
+  esac
   # shellcheck disable=SC2206  # intentional word-split into a backoff list
   local -a backoffs=(${SPAWN_STALL_BACKOFF:-5 15})
   while : ; do
     errf="$(mktemp)"; SPAWN_RC=0
     if [ "$stdin_mode" = "null" ]; then
       SPAWN_RAW="$("$@" </dev/null 2>"$errf")" || SPAWN_RC=$?
+    elif [ -n "$stdin_file" ]; then
+      SPAWN_RAW="$("$@" <"$stdin_file" 2>"$errf")" || SPAWN_RC=$?
     else
       SPAWN_RAW="$("$@" 2>"$errf")" || SPAWN_RC=$?
     fi
@@ -115,12 +131,26 @@ _spawn_claude() {
   [ -n "$model" ] && cmd+=(--model "$model")
   [ "$skip_perms" -eq 1 ] && cmd+=(--dangerously-skip-permissions)
   [ "$json" -eq 1 ] && cmd+=(--output-format json)
-  cmd+=("$prompt")
+  local prompt_file="" stdin_mode=""
+  local prompt_bytes
+  prompt_bytes="$(_prompt_byte_count "$prompt")"
+  if [ "$prompt_bytes" -gt "$_SPAWN_SAFE_ARG_PROMPT_BYTES" ]; then
+    prompt_file="$(mktemp)"
+    (umask 077; printf '%s' "$prompt" >"$prompt_file") || {
+      rm -f "$prompt_file"
+      SPAWN_RC=1
+      return 1
+    }
+    stdin_mode="file:$prompt_file"
+  else
+    cmd+=("$prompt")
+  fi
 
   local -a inv=()
   if [ -n "$timeout_val" ]; then inv+=(timeout "$timeout_val"); fi
   inv+=("${cmd[@]}")
-  _run_harness "" "${inv[@]}" || true
+  _run_harness "$stdin_mode" "${inv[@]}" || true
+  [ -z "$prompt_file" ] || rm -f "$prompt_file"
 
   # The --output-format json envelope carries .result and .usage.*; text mode
   # (no --json) leaves these empty, which the jq // fallbacks handle.
@@ -153,19 +183,27 @@ _spawn_codex() {
   else
     cmd+=(-s read-only)
   fi
-  local last_msg; last_msg="$(mktemp)"
-  cmd+=(-o "$last_msg" --json "$prompt")
+  local last_msg prompt_file
+  last_msg="$(mktemp)"
+  prompt_file="$(mktemp)"
+  (umask 077; printf '%s' "$prompt" >"$prompt_file") || {
+    rm -f "$last_msg" "$prompt_file"
+    SPAWN_RC=1
+    return 1
+  }
+  cmd+=(-o "$last_msg" --json -)
 
-  # </dev/null is load-bearing: `codex exec` with a prompt arg ALSO drains any
-  # piped stdin ("Reading additional input from stdin...") and errors in a
-  # headless command-substitution context. Feed it EOF so it uses the arg only.
+  # Feed the prompt through a private file instead of one argv element. Linux
+  # limits each argument to roughly 128 KiB, while release diffs and research
+  # prompts routinely exceed that. The explicit `-` tells Codex to read only
+  # this dispatcher-owned stream, never caller stdin.
   local -a inv=()
   if [ -n "$timeout_val" ]; then inv+=(timeout "$timeout_val"); fi
   inv+=("${cmd[@]}")
-  _run_harness "null" "${inv[@]}" || true
+  _run_harness "file:$prompt_file" "${inv[@]}" || true
 
   SPAWN_TEXT="$(cat "$last_msg" 2>/dev/null || true)"
-  rm -f "$last_msg"
+  rm -f "$last_msg" "$prompt_file"
   SPAWN_TOKENS="$(jq -rs 'map(select(.type=="turn.completed")) | last
     | (.usage.input_tokens // 0) + (.usage.output_tokens // 0)' \
     <<<"$SPAWN_RAW" 2>/dev/null || echo 0)"
@@ -182,6 +220,20 @@ _spawn_codex() {
 # a crash. --pass-session-id is what surfaces the id; --yolo/--accept-hooks are
 # the unattended (skip-perms) equivalents.
 _spawn_hermes() {
+  local prompt_bytes
+  prompt_bytes="$(_prompt_byte_count "$prompt")"
+  if [ "$prompt_bytes" -gt "$_SPAWN_SAFE_ARG_PROMPT_BYTES" ]; then
+    SPAWN_RC=2
+    SPAWN_RAW=""
+    SPAWN_TEXT=""
+    SPAWN_TOKENS=0
+    _SPAWN_STDERR="spawn_model: Hermes prompt exceeds safe argv limit (${prompt_bytes} > ${_SPAWN_SAFE_ARG_PROMPT_BYTES} bytes); scope or chunk the request"
+    if [ "$logfile" != "/dev/null" ]; then
+      printf '%s\n' "$_SPAWN_STDERR" >>"$logfile" 2>/dev/null || true
+    fi
+    SPAWN_TOKEN_SOURCE="hermes-session"
+    return 0
+  fi
   local cmd=(hermes chat -q "$prompt" -Q --pass-session-id)
   [ -n "$model" ]    && cmd+=(-m "$model")
   [ -n "$provider" ] && cmd+=(--provider "$provider")

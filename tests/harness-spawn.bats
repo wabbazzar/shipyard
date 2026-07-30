@@ -73,6 +73,20 @@ json
 THE PROMPT" ]
 }
 
+@test "spawn(claude): a prompt above the per-argument kernel limit reaches stdin intact" {
+  ARGVLOG="$BATS_TEST_TMPDIR/claude-argv"
+  make_stub_script claude "printf '%s\\n' \"\$@\" > '$ARGVLOG'
+bytes=\$(wc -c | tr -d ' ')
+printf '{\"result\":\"%s\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3}}' \"\$bytes\""
+  source "$QUARTET_ROOT/agents/lib/spawn.sh"
+  LARGE_PROMPT="$(head -c 200000 /dev/zero | tr '\000' x)"
+  spawn_model --harness claude --model sonnet --prompt "$LARGE_PROMPT" \
+    --log /dev/null --json
+  [ "$SPAWN_RC" = "0" ]
+  [ "$SPAWN_TEXT" = "200000" ]
+  [ "$(tail -1 "$ARGVLOG")" = "json" ] # no oversized positional prompt
+}
+
 # ---------------------------------------------------------------------------
 # codex (Phase 2): codex exec -m/-c/-s -o --json; tokens from turn.completed
 # ---------------------------------------------------------------------------
@@ -81,8 +95,10 @@ THE PROMPT" ]
 # event stream including a turn.completed.usage event.
 _argv_codex() {
   ARGVLOG="$BATS_TEST_TMPDIR/argv"
+  STDINLOG="$BATS_TEST_TMPDIR/stdin"
   make_stub_script codex "printf '%s\\n' \"\$@\" > '$ARGVLOG'
 out=''; while [ \$# -gt 0 ]; do [ \"\$1\" = '-o' ] && out=\"\$2\"; shift; done
+cat > '$STDINLOG'
 [ -n \"\$out\" ] && printf 'codex final' > \"\$out\"
 printf '%s\\n' '{\"type\":\"thread.started\"}' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":10,\"output_tokens\":25}}'"
 }
@@ -105,7 +121,8 @@ printf '%s\\n' '{\"type\":\"thread.started\"}' '{\"type\":\"turn.completed\",\"u
   grep -Fxq 'approval_policy="never"' "$ARGVLOG"
   grep -Fxq -- '-s' "$ARGVLOG"; grep -Fxq 'workspace-write' "$ARGVLOG"
   grep -Fxq -- '--json' "$ARGVLOG"
-  [ "$(tail -1 "$ARGVLOG")" = "P" ]    # prompt is the final positional
+  [ "$(tail -1 "$ARGVLOG")" = "-" ]    # stdin prompt sentinel is final
+  [ "$(cat "$STDINLOG")" = "P" ]
 }
 
 @test "spawn(codex): a non-skip-perms role runs read-only (still approvals=never)" {
@@ -128,17 +145,28 @@ printf '%s\\n' '{\"type\":\"thread.started\"}'"
   [ "$SPAWN_TEXT" = "x" ]
 }
 
-@test "spawn(codex): harness stdin is /dev/null (piped stdin NOT drained/appended)" {
-  # codex exec with a prompt arg also drains piped stdin and errors headless;
-  # the dispatcher must feed it EOF. Stub appends whatever stdin it sees to the
-  # -o file; with the fix in place, that is nothing.
+@test "spawn(codex): harness stdin is exactly the prompt (caller stdin is not appended)" {
+  # Codex reads the prompt from a private dispatcher-owned stream. Caller stdin
+  # must never be appended to that prompt.
   make_stub_script codex "out=''; while [ \$# -gt 0 ]; do [ \"\$1\" = '-o' ] && out=\"\$2\"; shift; done
 { printf 'REPLY:'; cat; } > \"\$out\"
 printf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}'"
   source "$QUARTET_ROOT/agents/lib/spawn.sh"
   printf 'INJECT' | { spawn_model --harness codex --model m --prompt P --log /dev/null --json
     printf '%s' "$SPAWN_TEXT" >"$BATS_TEST_TMPDIR/got"; }
-  [ "$(cat "$BATS_TEST_TMPDIR/got")" = "REPLY:" ]   # NOT "REPLY:INJECT"
+  [ "$(cat "$BATS_TEST_TMPDIR/got")" = "REPLY:P" ]   # NOT "REPLY:PINJECT"
+}
+
+@test "spawn(codex): a prompt above the per-argument kernel limit reaches stdin intact" {
+  make_stub_script codex "out=''; while [ \$# -gt 0 ]; do [ \"\$1\" = '-o' ] && out=\"\$2\"; shift; done
+wc -c | tr -d ' ' > \"\$out\"
+printf '%s\\n' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}'"
+  source "$QUARTET_ROOT/agents/lib/spawn.sh"
+  LARGE_PROMPT="$(head -c 200000 /dev/zero | tr '\000' x)"
+  spawn_model --harness codex --model m --prompt "$LARGE_PROMPT" \
+    --log /dev/null --json
+  [ "$SPAWN_RC" = "0" ]
+  [ "$SPAWN_TEXT" = "200000" ]
 }
 
 @test "spawn(codex): no provider -> no model_provider override (approval_policy -c still present)" {
@@ -199,6 +227,17 @@ fi"
   spawn_model --harness hermes --model m --prompt P --log /dev/null --json
   run grep -Fxq -- '--provider' "$ARGVLOG"
   [ "$status" -ne 0 ]
+}
+
+@test "spawn(hermes): an oversized unsupported query fails before exec with a bounded diagnostic" {
+  make_stub_script hermes "printf invoked > '$BATS_TEST_TMPDIR/hermes-invoked'"
+  source "$QUARTET_ROOT/agents/lib/spawn.sh"
+  LARGE_PROMPT="$(head -c 200000 /dev/zero | tr '\000' x)"
+  spawn_model --harness hermes --model m --prompt "$LARGE_PROMPT" \
+    --log /dev/null --json
+  [ "$SPAWN_RC" = "2" ]
+  [ ! -e "$BATS_TEST_TMPDIR/hermes-invoked" ]
+  [[ "$_SPAWN_STDERR" == *"prompt exceeds safe argv limit"* ]]
 }
 
 # ---------------------------------------------------------------------------

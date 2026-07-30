@@ -1463,5 +1463,69 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
     [ -s "$P/tmp/critic-queue-session-failure" ]
     jq -e --arg failure "$failure" '.status == $failure' \
       "$(status_file "$P" session-failure)"
+
+    if [ "$failure" = spawn ]; then
+      CALLS_BEFORE="$(grep -c '^-p ' "$SHIM_LOG/claude.argv")"
+      FAILED_EVENTS_BEFORE="$(events_json |
+        jq -c 'select(.event=="release.critique.spawn_failed")' | wc -l)"
+    else
+      CALLS_BEFORE="$(grep -c '^session-failure release critic:' \
+        "$SHIM_LOG/note-fail.argv")"
+      FAILED_EVENTS_BEFORE="$(events_json |
+        jq -c 'select(.event=="release.critique.delivery_failed")' | wc -l)"
+    fi
+
+    # The exhausted state is bounded for this exact queue + Stop turn: a
+    # continuously polling watcher must not start another three-attempt cycle.
+    run env QUARTET_DIR="$QUARTET_ROOT" QUARTET_EVENTS_DIR="$EVENTS_DIR" \
+      CRITIC_IDLE_SEC=999999 CRITIC_BATCH_FILES=999999 \
+      CRITIC_HARNESS=claude CRITIC_NOTE_HARNESS=codex \
+      CLAUDE_NOTE_CMD="$NOTE_CMD" \
+      bash "$WATCH" --project "$P" --session session-failure --once
+    [ "$status" -eq 0 ]
+    if [ "$failure" = spawn ]; then
+      [ "$(grep -c '^-p ' "$SHIM_LOG/claude.argv")" = "$CALLS_BEFORE" ]
+      FAILED_EVENTS_AFTER="$(events_json |
+        jq -c 'select(.event=="release.critique.spawn_failed")' | wc -l)"
+    else
+      BOUNDED_CALLS="$(grep -c '^session-failure release critic:' \
+        "$SHIM_LOG/note-fail.argv")"
+      [ "$BOUNDED_CALLS" = "$CALLS_BEFORE" ] || {
+        printf 'delivery bounded calls: before=%s after=%s state=' \
+          "$CALLS_BEFORE" "$BOUNDED_CALLS" >&2
+        cat "$P/tmp/critic-attempts-session-failure" >&2 || true
+        false
+      }
+      FAILED_EVENTS_AFTER="$(events_json |
+        jq -c 'select(.event=="release.critique.delivery_failed")' | wc -l)"
+    fi
+    [ "$FAILED_EVENTS_AFTER" = "$FAILED_EVENTS_BEFORE" ]
+
+    # A later edit changes the reviewed generation and permits recovery after
+    # an operator repairs the harness or delivery command.
+    printf '// later edit\n' >"$P/src/b.ts"
+    printf 'src/b.ts 2\n' >>"$P/tmp/critic-queue-session-failure"
+    run env QUARTET_DIR="$QUARTET_ROOT" QUARTET_EVENTS_DIR="$EVENTS_DIR" \
+      CRITIC_IDLE_SEC=999999 CRITIC_BATCH_FILES=999999 \
+      CRITIC_HARNESS=claude CRITIC_NOTE_HARNESS=codex \
+      CLAUDE_NOTE_CMD="$NOTE_CMD" \
+      bash "$WATCH" --project "$P" --session session-failure --once
+    [ "$status" -eq 0 ]
+    if [ "$failure" = spawn ]; then
+      CALLS_AFTER="$(grep -c '^-p ' "$SHIM_LOG/claude.argv")"
+      [ "$CALLS_AFTER" -eq "$((CALLS_BEFORE + 1))" ] || {
+        printf 'spawn recovery calls: before=%s after=%s\n' \
+          "$CALLS_BEFORE" "$CALLS_AFTER" >&2
+        false
+      }
+    else
+      CALLS_AFTER="$(grep -c '^session-failure release critic:' \
+        "$SHIM_LOG/note-fail.argv")"
+      [ "$CALLS_AFTER" -eq "$((CALLS_BEFORE + 1))" ] || {
+        printf 'delivery recovery calls: before=%s after=%s\n' \
+          "$CALLS_BEFORE" "$CALLS_AFTER" >&2
+        false
+      }
+    fi
   done
 }

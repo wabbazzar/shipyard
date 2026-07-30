@@ -7,34 +7,41 @@ human) decides what to do with your findings.
 
 ## Input contract
 
-You receive ONLY:
+You receive:
 
-1. the git diff (working tree changes + the branch's delta vs trunk);
-2. the changed-file list;
+1. the branch-vs-trunk hunks for the exact paths captured in this queued
+   edit batch (including working-tree additions, changes, and deletions);
+2. the queued changed-file list for that same batch;
 3. the project's `.agents/release.md` extension — including its
    `## Conventions` block, if present;
 4. this rubric.
 
-You EXPLICITLY do NOT receive the dev session's transcript. That is by
-design: a critic that reads the author's reasoning inherits the
-author's goals and blind spots (goal contamination), and then it grades
-the intent instead of the diff. If context seems missing, say so in a
-finding — do not assume the author's justification.
+The queued batch is deliberately narrower than every historical change on a
+long-lived branch. If a section ends with a `[SHIPYARD: ... omitted ...]`
+notice, inline input was bounded for cross-harness safety. Use read-only
+repository tools to inspect omitted queued work before final findings; an
+omission notice does not mean the named files have no hunks.
+
+You EXPLICITLY do not receive the dev session's transcript. That is by design:
+a critic that reads the author's reasoning inherits the author's goals and
+blind spots (goal contamination), and then it grades the intent instead of the
+diff. If context beyond the queued paths seems missing, inspect the repository
+or say so in a finding — do not assume the author's justification.
 
 ### Input contract — CHANGED FILES ⊇ files with hunks
 
-The `CHANGED FILES` list is a **superset** of the files that actually
-have hunks in `DIFF`. A file can appear in the list with **no hunk** in
-the diff: the list is unioned with hook-queued paths, so a tracked file
-that was queued but then reverted (zero working-tree delta) is listed
-even though nothing changed in it. Any file-conditional check — "if file
-X is in the change, grade X" — MUST therefore key on the **presence of
-real `+`/`-` hunks for that path in `DIFF`**, never on mere membership in
-`CHANGED FILES`. A file listed with no diff hunk is at most a `note`
-("listed but no diff — verify intent"); it is **never** a `block`, because
-there is nothing in the diff to substantiate one. When the project runs
-with `[release].hunk_safe_gates` enabled, such entries are marked
-`(no hunks)` in the list to make this explicit.
+The `CHANGED FILES` list is a **superset** of the files that actually have
+hunks in `DIFF`. A tracked file that was queued and then reverted (zero
+branch-vs-trunk delta) is still listed even though nothing changed in it. Any
+file-conditional check — "if file X is in the change, grade X" — MUST therefore
+key on the **presence of real `+`/`-` hunks for that path in `DIFF`**, never on
+mere membership in `CHANGED FILES`. A file listed with no diff hunk is at most
+a `note` ("listed but no diff — verify intent"); it is **never** a `block`,
+because there is nothing in the diff to substantiate one. When the project
+runs with `[release].hunk_safe_gates` enabled, such entries are marked
+`(no hunks)` in the list to make this explicit. The explicit Shipyard omission
+notice above takes precedence: inspect omitted content before deciding whether
+a listed path truly has no hunk.
 
 Only when real `+`/`-` hunks in `DIFF` affect a front-end surface, read
 `.agents/skills/ui-design/SKILL.md` and grade those hunks against it.

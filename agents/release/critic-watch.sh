@@ -189,6 +189,53 @@ urgent_requested() {
   [ "$REQUIRE_FEEDBACK" = true ] && urgent_turn_hash "$1" >/dev/null
 }
 
+# Retry exhaustion is bound to immutable reviewed work plus the urgent Stop
+# turn. A continuously polling watcher must not restart a failed three-attempt
+# cycle forever, but a new edit snapshot or a later Codex turn must be allowed
+# to test a repaired harness/delivery path.
+retry_generation() {
+  local kind="$1" session="$2" work_id="$3" turn_id
+  turn_id="$(urgent_turn_hash "$session" 2>/dev/null || true)"
+  printf 'shipyard-critic-retry-v1\0%s\0%s\0%s' \
+    "$kind" "$work_id" "$turn_id" | checked_sha256
+}
+
+retry_state_count() {
+  local state_file="$1" generation="$2" raw count stored_generation
+  [ -f "$state_file" ] || {
+    printf '0\n'
+    return 0
+  }
+  raw="$(cat "$state_file" 2>/dev/null || true)"
+  count="$(jq -er '.attempts | select(type == "number" and . >= 0)
+    | floor' <<<"$raw" 2>/dev/null || true)"
+  stored_generation="$(jq -er '.generation
+    | select(type == "string")' <<<"$raw" 2>/dev/null || true)"
+  if [[ "$count" =~ ^[0-9]+$ ]] && [ "$stored_generation" = "$generation" ]; then
+    printf '%s\n' "$count"
+  elif [[ "$raw" =~ ^[0-9]+$ ]]; then
+    # Backward compatibility for an in-flight pre-upgrade retry counter.
+    printf '%s\n' "$raw"
+  else
+    printf '0\n'
+  fi
+}
+
+write_retry_state() {
+  local state_file="$1" attempts="$2" generation="$3" tmp
+  tmp="$(umask 077; mktemp "${state_file}.tmp.XXXXXX")" || return 1
+  if ! jq -cn --argjson attempts "$attempts" --arg generation "$generation" \
+      '{schema_version:1,attempts:$attempts,generation:$generation}' >"$tmp"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  chmod 600 "$tmp" || {
+    rm -f -- "$tmp"
+    return 1
+  }
+  mv -f -- "$tmp" "$state_file"
+}
+
 emit_event() {
   # emit_event <event> [key=value ...]
   [ -x "$LOG_EVENT" ] || return 0
@@ -268,7 +315,8 @@ $(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
   # reviewed queue snapshot, complete findings, and deposited summary.
   # The note command's two-argument argv contract is unchanged; external
   # injectors may ignore these scoped environment values.
-  local note_rc note_id reviewed_snapshot
+  local note_rc note_id reviewed_snapshot attempts_file delivery_generation
+  local live_queue_id
   reviewed_snapshot="$QUEUE_DIR/critic-snapshot-$session"
   [ -f "$reviewed_snapshot" ] || reviewed_snapshot="$queue"
   if ! note_id="$(
@@ -283,11 +331,27 @@ $(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
     log "feedback ID hashing failed; queue kept for retry"
     return 0
   fi
+  attempts_file="$QUEUE_DIR/critic-attempts-$session"
+  live_queue_id="$(checked_sha256 <"$queue")" || {
+    log "live queue hashing failed; queue kept for retry"
+    return 0
+  }
+  delivery_generation="$(
+    retry_generation delivery "$session" "$note_id:$live_queue_id"
+  )" || {
+    log "delivery retry generation failed; queue kept for retry"
+    return 0
+  }
+  local prior_attempts
+  prior_attempts="$(retry_state_count "$attempts_file" "$delivery_generation")"
+  if [ "$REQUIRE_FEEDBACK" = true ] && [ "$prior_attempts" -ge 3 ]; then
+    write_required_status "$session" delivery || true
+    return 0
+  fi
   # shellcheck disable=SC2086 — word-splitting CLAUDE_NOTE_CMD is intentional
   CRITIC_NOTE_ID="$note_id" CRITIC_PROJECT_DIR="$PROJECT_DIR" \
     $CLAUDE_NOTE_CMD "$session" "$summary"
   note_rc=$?
-  local attempts_file="$QUEUE_DIR/critic-attempts-$session"
   case "$note_rc" in
     0)
       # Codex zero proves durable mailbox deposit only. Hook emission and model
@@ -317,21 +381,23 @@ $(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
       # passes, then give up LOUDLY: the findings file stays on disk for
       # the stop gate / manual reading, and a delivery_failed event fires.
       local attempts
-      attempts="$(cat "$attempts_file" 2>/dev/null || echo 0)"
-      [[ "$attempts" =~ ^[0-9]+$ ]] || attempts=0
+      attempts="$(retry_state_count "$attempts_file" "$delivery_generation")"
       attempts=$((attempts + 1))
       if [ "$attempts" -ge 3 ]; then
         log "claude-note exit $note_rc after $attempts attempts; giving up — findings kept at $findings_file"
         emit_event release.critique.delivery_failed source=shoulder \
           rc="$note_rc" attempts="$attempts"
-        rm -f "$attempts_file"
         if [ "$REQUIRE_FEEDBACK" = true ]; then
+          write_retry_state "$attempts_file" "$attempts" \
+            "$delivery_generation" || true
           log "required feedback: reviewed queue preserved after delivery failure"
         else
+          rm -f "$attempts_file"
           consume_queue "$queue" "$session"
         fi
       else
-        printf '%s\n' "$attempts" >"$attempts_file"
+        write_retry_state "$attempts_file" "$attempts" \
+          "$delivery_generation" || true
         log "claude-note exit $note_rc; queue kept for retry ($attempts/3)"
       fi
       write_required_status "$session" delivery || true ;;
@@ -358,10 +424,33 @@ _annotate_no_hunk() {
   done <<<"$list"
 }
 
+# Keep the release prompt portable across every selectable critic harness.
+# Claude and Codex can stream large prompts, but Hermes currently exposes only
+# an argv query flag. Each section carries an explicit omission notice so the
+# critic can use read-only repo tools for any content beyond the inline budget.
+_bounded_prompt_section() {
+  local value="$1" max_bytes="$2" label="$3" bytes omitted
+  bytes="$(LC_ALL=C printf '%s' "$value" | wc -c | tr -d ' ')"
+  if [ "$bytes" -le "$max_bytes" ]; then
+    printf '%s' "$value"
+    return 0
+  fi
+  omitted=$((bytes - max_bytes))
+  LC_ALL=C printf '%s' "$value" |
+    python3 -c 'import sys
+n = int(sys.argv[1])
+data = sys.stdin.buffer.read()[:n]
+sys.stdout.buffer.write(data.decode("utf-8", "ignore").encode("utf-8"))' \
+      "$max_bytes"
+  printf '\n\n[SHIPYARD: %s omitted %s trailing bytes to keep this review cross-harness safe. Use read-only repository tools to inspect omitted queued work before final findings.]' \
+    "$label" "$omitted"
+}
+
 # ---------- one critique over a queue file ----------------------------------
 critique_queue() {
   local queue="$1" session="$2"
   local findings_file="$QUEUE_DIR/critic-findings-$session"
+  local findings_files_count="$QUEUE_DIR/critic-findings-files-$session"
   local retry_snapshot="$QUEUE_DIR/critic-snapshot-$session"
 
   # Delivery-retry guard: when a critique already ran for this exact queue
@@ -370,7 +459,11 @@ critique_queue() {
   if [ -s "$findings_file" ] && [ -s "$retry_snapshot" ] &&
       [ "$findings_file" -nt "$retry_snapshot" ]; then
     local cached_n
-    cached_n="$(awk '{print $1}' "$retry_snapshot" 2>/dev/null | sort -u | grep -c . || true)"
+    cached_n="$(cat "$findings_files_count" 2>/dev/null || true)"
+    if ! [[ "$cached_n" =~ ^[0-9]+$ ]]; then
+      cached_n="$(awk '{print $1}' "$retry_snapshot" 2>/dev/null |
+        sort -u | grep -c . || true)"
+    fi
     log "reusing cached critique for session $session (delivery retry)"
     deliver_findings "$queue" "$session" "$findings_file" "$cached_n"
     return 0
@@ -407,25 +500,38 @@ critique_queue() {
     log "snapshot unavailable; queue kept for retry"
     return 0
   fi
+  local spawn_attempts_file snapshot_id spawn_generation prior_spawn_attempts
+  spawn_attempts_file="$QUEUE_DIR/critic-spawn-attempts-$session"
+  snapshot_id="$(checked_sha256 <"$reviewed_queue")" || {
+    log "snapshot hashing failed; queue kept for retry"
+    return 0
+  }
+  spawn_generation="$(retry_generation spawn "$session" "$snapshot_id")" || {
+    log "spawn retry generation failed; queue kept for retry"
+    return 0
+  }
+  prior_spawn_attempts="$(
+    retry_state_count "$spawn_attempts_file" "$spawn_generation"
+  )"
+  if [ "$REQUIRE_FEEDBACK" = true ] && [ "$prior_spawn_attempts" -ge 3 ]; then
+    write_required_status "$session" spawn || true
+    return 0
+  fi
 
-  # ---- gather the diff: working tree + branch vs trunk ----------------------
+  # ---- gather the diff for the exact queued edit batch ----------------------
   local trunk="" diff="" changed=""
   # shellcheck disable=SC1091
   source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
   trunk="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR" 2>/dev/null)" || trunk=""
-  if [ -n "$trunk" ] && git -C "$PROJECT_DIR" rev-parse -q --verify "$trunk" >/dev/null 2>&1; then
-    diff="$(git -C "$PROJECT_DIR" diff "$trunk" 2>/dev/null || true)"
-    changed="$(git -C "$PROJECT_DIR" diff --name-only "$trunk" 2>/dev/null || true)"
-  else
-    diff="$(git -C "$PROJECT_DIR" diff HEAD 2>/dev/null || true)"
-    changed="$(git -C "$PROJECT_DIR" diff --name-only HEAD 2>/dev/null || true)"
+  if [ -z "$trunk" ] ||
+     ! git -C "$PROJECT_DIR" rev-parse -q --verify "$trunk" >/dev/null 2>&1; then
+    trunk=HEAD
   fi
-  # Union with what the hook queued (covers files git can't see yet).
-  # Gitignored queue entries (runtime artifacts under tmp/ etc.) are dropped:
-  # they carry no diff hunks and produced whole critic runs over e.g.
-  # tmp/medic-result.json. critic-queue.sh filters these at enqueue time too;
-  # this catches entries queued before that filter or by older hooks.
-  local queued_files
+  # The queue is the review boundary. Pulling every historical branch hunk into
+  # each edit batch made long-lived branches exceed both execve and model input
+  # limits, and caused unrelated older work to contaminate current feedback.
+  # A queued tracked path still gets its complete branch-vs-trunk hunk.
+  local queued_files qf abs rel patch
   queued_files="$(awk '{print $1}' "$reviewed_queue" 2>/dev/null | sort -u | \
     while IFS= read -r f; do
       [ -n "$f" ] || continue
@@ -435,23 +541,39 @@ critique_queue() {
       if [ "${f#/}" != "$f" ] && [ "${f#"$PROJECT_DIR"/}" = "$f" ]; then
         continue
       fi
-      git -C "$PROJECT_DIR" check-ignore -q "$f" 2>/dev/null || printf '%s\n' "$f"
+      case "$f" in
+        "$PROJECT_DIR"/*) f="${f#"$PROJECT_DIR"/}" ;;
+      esac
+      git -C "$PROJECT_DIR" --literal-pathspecs check-ignore -q -- "$f" \
+        2>/dev/null ||
+        printf '%s\n' "$f"
     done)"
-  changed="$(printf '%s\n%s\n' "$changed" "$queued_files" | grep -v '^$' | sort -u)"
+  changed="$queued_files"
   local n_files
   n_files="$(printf '%s\n' "$changed" | grep -c . || true)"
 
-  # Untracked queued files never appear in `git diff` — synthesize their
-  # hunks with --no-index so a brand-new file still reaches the critic as
-  # reviewable content, not just a name in the changed list.
-  local qf abs
+  # Tracked paths get their complete branch-vs-trunk hunk. Untracked queued
+  # paths use --no-index so a brand-new file is equally reviewable.
   while IFS= read -r qf; do
     [ -n "$qf" ] || continue
-    case "$qf" in /*) abs="$qf" ;; *) abs="$PROJECT_DIR/$qf" ;; esac
-    [ -f "$abs" ] || continue
-    git -C "$PROJECT_DIR" ls-files --error-unmatch "$qf" >/dev/null 2>&1 && continue
-    diff="$diff
-$(git -C "$PROJECT_DIR" diff --no-index -- /dev/null "$abs" 2>/dev/null || true)"
+    rel="$qf"
+    case "$qf" in
+      "$PROJECT_DIR"/*) rel="${qf#"$PROJECT_DIR"/}" ;;
+      /*) continue ;;
+    esac
+    abs="$PROJECT_DIR/$rel"
+    patch="$(git -C "$PROJECT_DIR" --literal-pathspecs diff "$trunk" -- \
+      "$rel" 2>/dev/null || true)"
+    if [ -z "$patch" ] && [ -f "$abs" ] &&
+       git -C "$PROJECT_DIR" --literal-pathspecs ls-files \
+         --others --exclude-standard -- "$rel" 2>/dev/null |
+         grep -Fxq -- "$rel"; then
+      patch="$(git -C "$PROJECT_DIR" --literal-pathspecs diff --no-index -- \
+        /dev/null "$abs" 2>/dev/null || true)"
+    fi
+    [ -n "$patch" ] || continue
+    diff="${diff}${diff:+
+}${patch}"
   done <<<"$queued_files"
 
   # No diff hunks -> nothing the rubric can grade. Spawning the critic anyway
@@ -470,13 +592,20 @@ $(git -C "$PROJECT_DIR" diff --no-index -- /dev/null "$abs" 2>/dev/null || true)
 
   # ---- project extension (conventions layer) --------------------------------
   local project_ext="" ext_file="$PROJECT_DIR/.agents/release.md"
+  local full_diff="$diff"
   [ -f "$ext_file" ] && project_ext="$(cat "$ext_file")"
+  project_ext="$(_bounded_prompt_section "$project_ext" 16000 \
+    "PROJECT EXTENSION")"
 
   # CHANGED FILES block: byte-identical to $changed unless hunk_safe_gates is on,
   # in which case no-hunk entries are marked so a file-conditional check can key
   # on real hunks (see critic-role.md "Input contract").
   local changed_block="$changed"
-  [ "$HUNK_SAFE" = "true" ] && changed_block="$(_annotate_no_hunk "$changed" "$diff")"
+  [ "$HUNK_SAFE" = "true" ] &&
+    changed_block="$(_annotate_no_hunk "$changed" "$full_diff")"
+  changed_block="$(_bounded_prompt_section "$changed_block" 12000 \
+    "CHANGED FILES")"
+  diff="$(_bounded_prompt_section "$full_diff" 60000 "DIFF")"
 
   local prompt
   prompt="$(cat "$ROLE_FILE")
@@ -507,29 +636,30 @@ $diff"
   spawn_model --harness "${CRITIC_HARNESS:-claude}" --model "${CRITIC_MODEL:-}" \
     --provider "${CRITIC_PROVIDER:-}" --prompt "$prompt" --log /dev/null --json
   claude_out="$SPAWN_RAW"; claude_rc="$SPAWN_RC"
-  local spawn_attempts_file="$QUEUE_DIR/critic-spawn-attempts-$session"
   if [ "$claude_rc" -ne 0 ] || [ -z "$claude_out" ]; then
     # Same 3-strike rule as delivery: a persistent spawn failure (bad
     # CRITIC_MODEL, oversized prompt, missing binary) must not retry every
     # poll pass forever. Give up loudly with an event so the failure is
     # visible instead of an infinite silent loop.
     local sa
-    sa="$(cat "$spawn_attempts_file" 2>/dev/null || echo 0)"
-    [[ "$sa" =~ ^[0-9]+$ ]] || sa=0
+    sa="$(retry_state_count "$spawn_attempts_file" "$spawn_generation")"
     sa=$((sa + 1))
     if [ "$sa" -ge 3 ]; then
       log "critic claude run failed (exit=$claude_rc) after $sa attempts; giving up on reviewed entries"
       emit_event release.critique.spawn_failed source=shoulder \
         rc="$claude_rc" attempts="$sa" files="$n_files"
-      rm -f "$spawn_attempts_file"
       if [ "$REQUIRE_FEEDBACK" = true ]; then
+        write_retry_state "$spawn_attempts_file" "$sa" \
+          "$spawn_generation" || true
         log "required feedback: reviewed queue preserved after spawn failure"
         write_required_status "$session" spawn || true
       else
+        rm -f "$spawn_attempts_file"
         consume_queue "$queue" "$session"
       fi
     else
-      printf '%s\n' "$sa" >"$spawn_attempts_file"
+      write_retry_state "$spawn_attempts_file" "$sa" \
+        "$spawn_generation" || true
       log "critic claude run failed (exit=$claude_rc); queue kept for retry ($sa/3)"
     fi
     return 0
@@ -550,6 +680,7 @@ $diff"
   n_note="$(grep -c '^note|' <<<"$findings" || true)"
 
   printf '%s\n' "$findings" >"$findings_file"
+  printf '%s\n' "$n_files" >"$findings_files_count"
 
   emit_event release.critique source=shoulder files="$n_files" \
     block="$n_block" warn="$n_warn" note="$n_note" tokens="$tokens"

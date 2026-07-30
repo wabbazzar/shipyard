@@ -15,6 +15,13 @@ setup() {
 WATCH="agents/release/critic-watch.sh"
 CANNED_CLAUDE_JSON='{"type":"result","result":"note|-|clean\nTOKENS_HINT|<none>","usage":{"input_tokens":10,"output_tokens":5}}'
 
+@test "critic role documents queued-batch and bounded-omission input semantics" {
+  ROLE="$QUARTET_ROOT/agents/release/critic-role.md"
+  grep -Fq 'exact paths captured in this queued' "$ROLE"
+  grep -Fq '[SHIPYARD: ... omitted ...]' "$ROLE"
+  grep -Fq 'Use read-only' "$ROLE"
+}
+
 run_watch() {
   local project="$1"; shift
   QUARTET_DIR="$QUARTET_ROOT" \
@@ -77,4 +84,28 @@ seed_phantom_and_real() {
   # Assert the filename+marker, not the bare marker — critic-role.md's own
   # input-contract note mentions "(no hunks)" and is part of every prompt.
   ! echo "$argv" | grep -qF "src/tracked.ts (no hunks)"
+}
+
+@test "flag ON annotates against the full scoped diff before prompt truncation" {
+  P="$(make_fixture_project hs-truncated hunk-safe-gates.toml)"
+  make_stub claude 0 "$CANNED_CLAUDE_JSON"
+  mkdir -p "$P/src"
+  {
+    printf 'export const large = "'
+    head -c 70000 /dev/zero | tr '\000' x
+    printf '";\n'
+  } >"$P/src/a-large.ts"
+  printf 'export const gated = true;\n' >"$P/src/z-gated.ts"
+  printf 'src/a-large.ts %s\nsrc/z-gated.ts %s\n' \
+    "$(date +%s)" "$(date +%s)" >"$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  export CRITIC_BATCH_FILES=100 CRITIC_IDLE_SEC=1
+
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+
+  argv="$(stub_argv claude)"
+  echo "$argv" | grep -qF "src/z-gated.ts"
+  ! echo "$argv" | grep -qF "src/z-gated.ts (no hunks)"
+  echo "$argv" | grep -qF "SHIPYARD: DIFF omitted"
 }

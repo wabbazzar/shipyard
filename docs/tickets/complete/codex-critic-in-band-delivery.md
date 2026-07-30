@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-30
 - **Owner:** wabbazzar
-- **Status:** In Progress — implementation committed; live proof pending
+- **Status:** Complete
 - **Type:** bugfix
 - **Estimated Points:** 8
 - **Refs:** `docs/tickets/complete/harness-agnostic-shoulder-mode.md`,
@@ -638,7 +638,7 @@ secret, machine-specific home path, or raw session identifier.
 - **Commit:** `19abfe27ca8008187c61157046637b9295aebb19`,
   canonical identity verified with the Codex co-author trailer.
 
-### Phase 4 — in progress
+### Phase 4 — complete
 
 - **Plan:** preserve the exact prior Aurora config/unit/env/Codex config,
   enable the approved Codex/Codex required-feedback configuration, install the
@@ -647,10 +647,58 @@ secret, machine-specific home path, or raw session identifier.
   sessions. Clean only bounded probe state and leave the watcher active.
 - **builder:** inline (fleet-live authorization, process observation, rollback
   custody, and model-context proof cannot be delegated)
-- **Pre-live gate:** the implementation is committed locally only after the
-  659/659 battery and cold `NO_BLOCK` review. Push, CI, live installation,
-  rollback record, fresh-session evidence, and Signal owner notification
-  remain pending.
+- **Pre-live gate:** the integrated implementation was pushed and its first CI
+  run passed every job. Before the live install, the exact prior Aurora
+  project config, user Codex config, watcher unit/state, authorization state,
+  tracked diff, untracked contents, and service state were recorded in a
+  private rollback bundle.
+- **Normal-process trust proof:** the installed Codex `/hooks` view showed all
+  three exact hooks active after explicit trust. A second fresh normal
+  `codex exec` process exercised a local tool without bypass flags; Shipyard
+  Doctor then reported the hook runtime as executed and the Aurora install as
+  clean.
+- **Deterministic context proof:** a fresh Codex process exposed its real
+  session ID, a random same-session nonce was deposited while its local tool
+  was active, and the next model turn echoed both the stable feedback ID and
+  nonce. The mailbox moved once from pending to emitted.
+- **Real cold-critic proof:** a separate fresh normal Codex author created one
+  disposable unsafe research note. The real Codex release critic emitted one
+  block across one file (21,428 tokens), durably deposited it, and the same
+  authoring session echoed the exact 64-character critique ID and summarized
+  the privileged-credential finding. The mailbox finished at pending `0`,
+  emitted `1`; the edit queue was consumed exactly once.
+- **Live-discovered transport correction:** the first real critic attempt
+  reproduced exit `126`: Aurora's historical branch delta was 1.6 MiB and the
+  dispatcher passed it as one argument, above Linux's per-argument limit. A
+  direct 200,000-byte repro failed before exec. Streaming fixed transport but
+  exposed Codex's separate 1,048,576-character model-input ceiling. The final
+  repair streams oversized Claude and all Codex prompts, fails oversized
+  unsupported Hermes calls with a bounded diagnostic, and scopes shoulder
+  review to exact queued paths with cross-harness-safe bounded sections.
+- **Retry and scope hardening:** required-mode three-strike spawn/delivery
+  exhaustion is persisted per immutable queue/Stop generation, so the watcher
+  cannot restart an infinite three-attempt loop; later queued work reopens the
+  retry path. Cached delivery preserves the original reviewed-file count.
+  Staged deletions remain reviewable, Git pathspec magic is literal, hunk-safe
+  annotation uses the full scoped diff before prompt bounding, and UTF-8
+  truncation cannot split a code point. The critic role now states the queued
+  batch and explicit omission/tool-inspection contract.
+- **Verification:** every live-discovered case was demonstrated red first.
+  The final focused delivery/harness matrix passed 135/135 and `bats tests/`
+  passed 668/668. Shell syntax, Python compile, leak firewall, deck freshness,
+  deck completeness, rendered deck, lifecycle, Shipyard Doctor, delegation
+  report, and diff checks passed. The final independent cold review returned
+  `NO_BLOCK`; Aurora Doctor reports a clean install and its watcher is active
+  and enabled.
+- **Cleanup and preservation:** all disposable files, processes, per-session
+  queue/Stop state, and proof mailbox content were removed. Aurora ticket 043's
+  tracked diff matches the pre-live hash byte-for-byte, and all pre-existing
+  untracked source/data content matches after excluding only the approved new
+  shoulder environment and the live release audit event files. The approved
+  shoulder config/env remain installed; no optimizer code was changed.
+- **Commit:** the live transport/scope correction and this graduation ride in
+  the final Phase-4 commit. The pushed CI run must be green before owner
+  notification and Aurora work resume.
 
 ### Follow-up — dual-model pull-request release gate
 
@@ -669,26 +717,27 @@ follow-up, not a correctness blocker for the present small queue contract.
 
 ## Definition of Done
 
-- [ ] A regression test fails against pre-change `main` on the captured defect
+- [x] A regression test fails against pre-change `main` on the captured defect
       and passes with the fix.
-- [ ] Codex findings are durably keyed to the authorized canonical project and
+- [x] Codex findings are durably keyed to the authorized canonical project and
       originating session through one valid hook emission, with stable IDs and
       no overwrite; ambiguous pre-emission recovery may replay, while
       post-emission model consumption is explicitly unacknowledged.
-- [ ] Stop either delivers required feedback or causes the authoring Codex to
+- [x] Stop either delivers required feedback or causes the authoring Codex to
       report a named hard blocker within the two-continuation ceiling.
-- [ ] A failed model-delivery attempt remains retryable; a human alert or log
+- [x] A failed model-delivery attempt remains retryable; a human alert or log
       does not acknowledge model delivery.
-- [ ] Opt-in install wires the full Codex path and its watcher; unset install is
+- [x] Opt-in install wires the full Codex path and its watcher; unset install is
       unchanged.
-- [ ] Doctor fails on the live defect shape and passes only after capture,
+- [x] Doctor fails on the live defect shape and passes only after capture,
       delivery, stop, env, watcher wiring, and a post-install normal Codex hook
       execution are all real.
-- [ ] The Shipyard automated gate battery is green with red-first coverage for
+- [x] The Shipyard automated gate battery is green with red-first coverage for
       the defect and its former coverage gap.
-- [ ] A fresh Codex live run in Aurora observes a release-critic finding as
+- [x] A fresh Codex live run in Aurora observes a release-critic finding as
       model-visible context in the same session.
-- [ ] Shipyard and Aurora are left clean and their affected user services are
-      active; ticket 043 remains paused until this checklist is complete.
+- [x] Shipyard is clean after its final commit; Aurora's pre-existing ticket 043
+      tree is preserved except for the approved shoulder config/runtime and
+      live audit events; affected user services are active.
 
 Build with `execute-ticket`.

@@ -136,6 +136,102 @@ critique_events() {
   [ "$(critique_events | wc -l)" -eq 1 ]
 }
 
+@test "critic prompt scopes to queued paths so a large unrelated branch diff cannot break Hermes" {
+  P="$(make_fixture_project critc-scoped)"
+  mkdir -p "$P/src"
+  {
+    printf 'UNRELATED_HISTORY_START\n'
+    head -c 200000 /dev/zero | tr '\000' x
+    printf '\nUNRELATED_HISTORY_END\n'
+  } >"$P/README.md"
+  queue_files "$P" s1 1
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  PROMPT_LOG="$BATS_TEST_TMPDIR/hermes-prompt"
+  make_stub_script hermes "if [ \"\$1\" = chat ]; then
+shift
+prompt=''
+while [ \$# -gt 0 ]; do
+  if [ \"\$1\" = '-q' ]; then prompt=\"\$2\"; break; fi
+  shift
+done
+printf '%s' \"\$prompt\" > '$PROMPT_LOG'
+printf '%s\\n' 'warn|src/f01.ts|scoped review'
+printf '%s\\n' 'session_id: scoped-test' >&2
+elif [ \"\$1\" = sessions ]; then
+printf '%s' '{\"input_tokens\":10,\"output_tokens\":5}'
+fi"
+  export CRITIC_IDLE_SEC=1 CRITIC_HARNESS=hermes
+
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ "$(critique_events | wc -l)" -eq 1 ]
+  [ "$(wc -c <"$PROMPT_LOG")" -lt 100000 ]
+  grep -Fq 'src/f01.ts' "$PROMPT_LOG"
+  run grep -Fq 'UNRELATED_HISTORY_START' "$PROMPT_LOG"
+  [ "$status" -ne 0 ]
+}
+
+@test "queued tracked deletion is reviewed even though the path no longer exists" {
+  P="$(make_fixture_project critc-delete)"
+  make_stub claude 0 "$CANNED_CLAUDE_JSON"
+  git -C "$P" rm -q README.md
+  printf 'README.md %s\n' "$(date +%s)" >"$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  export CRITIC_IDLE_SEC=1
+
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ "$(critique_events | wc -l)" -eq 1 ]
+  [ "$(stub_calls claude)" -gt 0 ]
+}
+
+@test "queued git pathspec magic cannot expand review scope beyond the literal path" {
+  P="$(make_fixture_project critc-pathspec)"
+  make_stub claude 0 "$CANNED_CLAUDE_JSON"
+  mkdir -p "$P/src"
+  printf 'export const secret = 1;\n' >"$P/src/secret.ts"
+  git -C "$P" add src/secret.ts
+  git -C "$P" commit -q -m "track scoped file"
+  printf 'export const secret = 2;\n' >"$P/src/secret.ts"
+  printf ':(glob)src/*.ts %s\n' "$(date +%s)" >"$P/tmp/critic-queue-s1"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  export CRITIC_IDLE_SEC=1
+
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ "$(critique_events | wc -l)" -eq 0 ]
+  [ "$(stub_calls claude)" = "0" ]
+}
+
+@test "prompt section truncation preserves valid UTF-8 at a multibyte boundary" {
+  P="$(make_fixture_project critc-utf8)"
+  {
+    head -c 15999 /dev/zero | tr '\000' x
+    printf '😀trailing extension text\n'
+  } >"$P/.agents/release.md"
+  queue_files "$P" s1 1
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  PROMPT_LOG="$BATS_TEST_TMPDIR/hermes-utf8-prompt"
+  make_stub_script hermes "if [ \"\$1\" = chat ]; then
+shift
+while [ \$# -gt 0 ]; do
+  if [ \"\$1\" = '-q' ]; then printf '%s' \"\$2\" > '$PROMPT_LOG'; break; fi
+  shift
+done
+printf '%s\\n' 'note|src/f01.ts|utf8 review'
+printf '%s\\n' 'session_id: utf8-test' >&2
+elif [ \"\$1\" = sessions ]; then
+printf '%s' '{\"input_tokens\":10,\"output_tokens\":5}'
+fi"
+  export CRITIC_IDLE_SEC=1 CRITIC_HARNESS=hermes
+
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  python3 -c 'import pathlib, sys; pathlib.Path(sys.argv[1]).read_text()' \
+    "$PROMPT_LOG"
+  grep -Fq 'SHIPYARD: PROJECT EXTENSION omitted' "$PROMPT_LOG"
+}
+
 @test "fresh queue below both thresholds does NOT trigger" {
   P="$(make_fixture_project critc-fresh)"
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
