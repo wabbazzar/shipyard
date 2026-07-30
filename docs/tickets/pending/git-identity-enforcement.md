@@ -291,7 +291,10 @@ git add -N scripts/check-git-identity.sh \
   tests/git-identity-enforcement.bats
 bash -n scripts/check-git-identity.sh
 bats tests/git-identity-enforcement.bats
+set +e
 bash scripts/check-git-identity.sh --all HEAD --project .
+test "$?" -eq 2
+set -e
 bats tests/
 bash scripts/leak-check.sh
 bash scripts/check-deck-fresh.sh
@@ -307,10 +310,11 @@ git diff --check
 ```
 
 Deck render exit `3` is the documented Playwright skip; every other command
-must exit `0`. The phase DoD is the focused Bats file green, the live repository
-`--all HEAD` returning `1` while naming exactly six offending hashes with email
-values redacted, and every remaining applicable gate green. Commit only the
-checker/tests/ticket Ledger as one canonical-identity commit.
+must exit `0`. The phase DoD is the focused Bats file green, a policy-configured
+fixture naming its intended offending hashes with email values redacted, the
+live repository returning fail-closed exit `2` because Phase 2 has not yet
+enabled tracked policy, and every remaining applicable gate green. Commit only
+the checker/tests/ticket Ledger as one canonical-identity commit.
 
 ### Phase 2 — Local, CI, and install/doctor enforcement (3 pts)
 
@@ -521,15 +525,23 @@ email value in tracked text.
 
 ### Phase 1
 
-- `builder:` pending
+- `builder: subagent (1 agent)`
+- `plan:` add the raw checker and hermetic red-first coverage only; the
+  orchestrator will re-run every Phase 1 gate and commit the slice.
 - `commit:` pending
-- `red-first:` pending
-- `focused/full gates:` pending
-- `notes/blockers:` pending
+- `red-first:` unchanged pre-push accepted a wrong author (`1/1`, exit `0`).
+- `focused/full gates:` checker Bats `25/25`; repository Bats `548/548`;
+  syntax, leak, deck freshness/completeness/render, lifecycle, delegation,
+  Python bytecode, and diff checks exit `0`.
+- `notes/blockers:` the live repository audit correctly exits `2` before the
+  Phase 2 tracked policy exists; policy-configured fixtures cover all raw
+  fields/ranges and redact both allowed and rejected addresses.
 
 ### Phase 2
 
-- `builder:` pending
+- `builder: subagent (1 agent)`
+- `plan:` wire the committed checker through config, installer/doctor, hooks,
+  CI, and focused documentation/tests; the orchestrator will re-run all gates.
 - `commit:` pending
 - `focused/full gates:` pending
 - `configure/doctor evidence:` pending
