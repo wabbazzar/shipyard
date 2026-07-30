@@ -208,6 +208,29 @@ PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON")"
 [ -z "$PROJECT_NAME" ] && { echo "config missing project_name" >&2; exit 2; }
 IDENTITY_POLICY_FILE="$PROJECT_DIR/.shipyard-git-identity.toml"
 
+SHOULDER_AUTO="$(jq -r '.shoulder.auto_wire // false' <<<"$CFG_JSON")"
+SHOULDER_HARNESS="$(
+  jq -r '.shoulder.harness // .harness.default // "claude"' <<<"$CFG_JSON"
+)"
+SHOULDER_CRITIC_HARNESS="$(
+  jq -r \
+    '.shoulder.critic_harness // .shoulder.harness // .harness.default // "claude"' \
+    <<<"$CFG_JSON"
+)"
+for shoulder_key in harness critic_harness; do
+  case "$shoulder_key" in
+    harness) shoulder_value="$SHOULDER_HARNESS" ;;
+    critic_harness) shoulder_value="$SHOULDER_CRITIC_HARNESS" ;;
+  esac
+  case "$shoulder_value" in
+    claude|codex|hermes) : ;;
+    *)
+      echo "invalid [shoulder] $shoulder_key '$shoulder_value' (want claude|codex|hermes)" >&2
+      exit 2
+      ;;
+  esac
+done
+
 # Configure the opt-in Git identity policy from effective Git configuration.
 # Values are validated before any local key is written, and email is never
 # copied into stdout/stderr.
@@ -599,23 +622,91 @@ run_doctor() {
   fi
 
   # (j) shoulder-mode wiring drift — only when this project OPTED IN (config
-  #     auto_wire, or a delivery env was written). A project that never enabled
-  #     shoulder mode is not "drifted" for lacking the hook.
-  local sh_auto sh_env
-  sh_auto="$(jq -r '.shoulder.auto_wire // false' <<<"$CFG_JSON")"
+  #     auto_wire, a delivery env, or an installed watcher). A project that
+  #     never enabled shoulder mode is not drifted for lacking this surface.
+  local sh_auto sh_env sh_release_display sh_watch_unit sh_watch_path
+  sh_auto="$SHOULDER_AUTO"
   sh_env="$PROJECT_DIR/.agents/shoulder.env"
-  if [ "$sh_auto" = "true" ] || [ -f "$sh_env" ]; then
+  sh_release_display="$(role_display release "$CFG_JSON")"
+  sh_watch_unit="${PROJECT_NAME}-${sh_release_display}-watch.service"
+  sh_watch_path="$SYSTEMD_DIR/$sh_watch_unit"
+  if [ "$sh_auto" = "true" ] || [ -f "$sh_env" ] ||
+     [ -f "$sh_watch_path" ]; then
     # shellcheck source=agents/lib/shoulder-wire.sh
     . "$QUARTET_DIR/agents/lib/shoulder-wire.sh"
-    local sh_h sh_cfg sh_q
-    sh_h="$(jq -r '.shoulder.harness // .harness.default // "claude"' <<<"$CFG_JSON")"
+    local sh_h sh_critic sh_cfg sh_q sh_feedback sh_stop
+    local sh_definition expected sh_loaded
+    sh_h="$SHOULDER_HARNESS"
+    sh_critic="$SHOULDER_CRITIC_HARNESS"
     sh_cfg="$(sw_config_path "$sh_h" "$PROJECT_DIR")"
     sh_q="$QUARTET_DIR/agents/release/critic-queue-${sh_h}.sh"
     [ "$sh_h" = "claude" ] && sh_q="$QUARTET_DIR/agents/release/critic-queue.sh"
-    if [ ! -f "$sh_cfg" ] || ! sw_wired "$sh_h" "$sh_cfg" "$sh_q"; then
+    if [ "$sh_h" = "codex" ]; then
+      sh_feedback="$QUARTET_DIR/agents/release/critic-codex-feedback.sh"
+      sh_stop="$QUARTET_DIR/agents/release/critic-stop-gate-codex.sh"
+      if [ ! -f "$sh_cfg" ] ||
+         ! sw_codex_bundle_wired \
+           "$sh_cfg" "$PROJECT_DIR" "$sh_q" "$sh_feedback" "$sh_stop"; then
+        emit "shoulder: codex three-hook definition missing in $sh_cfg (run install.sh --wire-shoulder)"
+      else
+        sh_definition="$(sw_codex_definition_hash \
+          "$PROJECT_DIR" "$sh_q" "$sh_feedback" "$sh_stop")"
+        if ! sw_codex_runtime_verified "$PROJECT_DIR" "$sh_definition"; then
+          emit "shoulder: codex configured but trust/runtime unverified since install"
+        fi
+      fi
+    elif [ ! -f "$sh_cfg" ] || ! sw_wired "$sh_h" "$sh_cfg" "$sh_q"; then
       emit "shoulder: $sh_h capture hook not wired in $sh_cfg (run install.sh --wire-shoulder)"
     fi
-    [ -f "$sh_env" ] || emit "shoulder: delivery env $sh_env missing (run install.sh --wire-shoulder)"
+
+    if [ ! -f "$sh_env" ]; then
+      emit "shoulder: delivery env $sh_env missing (run install.sh --wire-shoulder)"
+    else
+      expected="$(printf 'CRITIC_PROJECT_DIR=%q' "$PROJECT_DIR")"
+      grep -Fxq "$expected" "$sh_env" ||
+        emit "shoulder: delivery env missing canonical CRITIC_PROJECT_DIR"
+      expected="$(printf 'CRITIC_HARNESS=%q' "$sh_critic")"
+      grep -Fxq "$expected" "$sh_env" ||
+        emit "shoulder: delivery env missing configured CRITIC_HARNESS"
+      expected="$(printf 'CRITIC_NOTE_HARNESS=%q' "$sh_h")"
+      grep -Fxq "$expected" "$sh_env" ||
+        emit "shoulder: delivery env missing authoring CRITIC_NOTE_HARNESS"
+    fi
+
+    if [ "$SCHEDULER" = "systemd" ]; then
+      if [ ! -f "$sh_watch_path" ]; then
+        emit "shoulder: watcher unit $sh_watch_unit missing"
+      else
+        grep -Fxq "WorkingDirectory=$PROJECT_DIR" "$sh_watch_path" ||
+          emit "shoulder: watcher WorkingDirectory is not canonical"
+        grep -Fxq "EnvironmentFile=-$sh_env" "$sh_watch_path" ||
+          emit "shoulder: watcher EnvironmentFile is missing or stale"
+        grep -Fxq \
+          "ExecStart=/bin/bash $QUARTET_DIR/agents/release/critic-watch.sh --project $PROJECT_DIR" \
+          "$sh_watch_path" ||
+          emit "shoulder: watcher ExecStart is missing or non-canonical"
+        systemctl --user is-active "$sh_watch_unit" >/dev/null 2>&1 ||
+          emit "shoulder: watcher unit $sh_watch_unit is not active"
+        sh_loaded="$(
+          systemctl --user show "$sh_watch_unit" \
+            --property=FragmentPath \
+            --property=ExecStart \
+            --property=EnvironmentFiles 2>/dev/null
+        )" || sh_loaded=""
+        if [ -z "$sh_loaded" ]; then
+          emit "shoulder: loaded watcher definition could not be inspected"
+        else
+          grep -Fxq "FragmentPath=$sh_watch_path" <<<"$sh_loaded" ||
+            emit "shoulder: loaded watcher FragmentPath is stale"
+          grep -Fq \
+            "$QUARTET_DIR/agents/release/critic-watch.sh --project $PROJECT_DIR" \
+            <<<"$sh_loaded" ||
+            emit "shoulder: loaded watcher ExecStart is stale"
+          grep -Fq "$sh_env" <<<"$sh_loaded" ||
+            emit "shoulder: loaded watcher EnvironmentFile is stale"
+        fi
+      fi
+    fi
   fi
 
   # (j) ticket lifecycle drift — every ticket must sit in the folder its
@@ -944,6 +1035,66 @@ write_or_show() {
     mv "$tmp" "$path"
     echo "  wrote:     $path"
   fi
+}
+
+shoulder_atomic_write() {
+  local path="$1" content="$2" mode="$3" dir tmp
+  dir="$(dirname "$path")"
+  [ -d "$dir" ] && [ ! -L "$dir" ] || return 2
+  [ ! -L "$path" ] || return 2
+  tmp="$(umask 077; mktemp "$dir/.shoulder-write.XXXXXX")" || return 2
+  if ! printf '%s' "$content" >"$tmp" || ! chmod "$mode" "$tmp"; then
+    rm -f "$tmp"
+    return 2
+  fi
+  if [ -f "$path" ] && cmp -s "$path" "$tmp"; then
+    rm -f "$tmp"
+    chmod "$mode" "$path" || return 2
+    echo "  unchanged: $path"
+    return 0
+  fi
+  mv "$tmp" "$path" || {
+    rm -f "$tmp"
+    return 2
+  }
+  echo "  wrote:     $path"
+}
+
+shoulder_backup_file() {
+  local path="$1" dir tmp
+  [ ! -L "$path" ] || return 2
+  [ -f "$path" ] || return 0
+  dir="$(dirname "$path")"
+  tmp="$(umask 077; mktemp "$dir/.shoulder-backup.XXXXXX")" || return 2
+  cp -p "$path" "$tmp" || {
+    rm -f "$tmp"
+    return 2
+  }
+  printf '%s\n' "$tmp"
+}
+
+shoulder_restore_file() {
+  local path="$1" backup="$2"
+  if [ -n "$backup" ]; then
+    mv "$backup" "$path"
+  else
+    rm -f -- "$path"
+  fi
+}
+
+shoulder_rollback_watcher() {
+  local unit="$1" unit_path="$2" unit_backup="$3"
+  local env_path="$4" env_backup="$5" unit_existed="$6"
+  if [ "$unit_existed" = "0" ]; then
+    systemctl --user disable --now "$unit" >/dev/null 2>&1 || true
+  fi
+  shoulder_restore_file "$env_path" "$env_backup" || true
+  shoulder_restore_file "$unit_path" "$unit_backup" || true
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  if [ "$unit_existed" = "1" ]; then
+    systemctl --user restart "$unit" >/dev/null 2>&1 || true
+  fi
+  rm -f -- "$unit_backup" "$env_backup"
 }
 
 # Convert Shipyard's documented systemd-style schedule subset to launchd.
@@ -1350,40 +1501,170 @@ write_skill_bridge || true
 
 # ---------- step 4.7: shoulder-mode wiring (opt-in) -------------------------
 # OFF unless `--wire-shoulder` or `[shoulder] auto_wire = true`. When off this
-# whole block is skipped, so no harness config file is touched — byte-identical
-# to every prior install. When on, it ADDITIVELY registers the capture hook in
-# the authoring harness's native config and writes the delivery env the watch
-# service sources (so nobody has to hand-wire $CLAUDE_NOTE_CMD).
-sh_auto="$(jq -r '.shoulder.auto_wire // false' <<<"$CFG_JSON")"
+# whole block is skipped, so no harness config, feedback authorization, env, or
+# watcher is touched. When on, authoring hooks and reviewer harness remain
+# independently configured.
+sh_auto="$SHOULDER_AUTO"
 if [ "$WIRE_SHOULDER" = "1" ] || [ "$sh_auto" = "true" ]; then
   # shellcheck source=agents/lib/shoulder-wire.sh
   . "$QUARTET_DIR/agents/lib/shoulder-wire.sh"
-  sh_harness="$(jq -r '.shoulder.harness // .harness.default // "claude"' <<<"$CFG_JSON")"
+  sh_harness="$SHOULDER_HARNESS"
+  sh_critic_harness="$SHOULDER_CRITIC_HARNESS"
   sh_queue="$QUARTET_DIR/agents/release/critic-queue-${sh_harness}.sh"
   [ "$sh_harness" = "claude" ] && sh_queue="$QUARTET_DIR/agents/release/critic-queue.sh"
   sh_cfg="$(sw_config_path "$sh_harness" "$PROJECT_DIR")"
   echo ""
-  echo "==> shoulder-mode wiring (harness=$sh_harness)"
+  echo "==> shoulder-mode wiring (author=$sh_harness critic=$sh_critic_harness)"
+  sh_feedback="$QUARTET_DIR/agents/release/critic-codex-feedback.sh"
+  sh_stop="$QUARTET_DIR/agents/release/critic-stop-gate-codex.sh"
   if [ "$DRY_RUN" = "1" ]; then
-    if sw_wired "$sh_harness" "$sh_cfg" "$sh_queue"; then
+    if [ "$sh_harness" = "codex" ] &&
+       sw_codex_bundle_wired \
+         "$sh_cfg" "$PROJECT_DIR" "$sh_queue" "$sh_feedback" "$sh_stop"; then
+      echo "  would keep: $sh_cfg already has codex capture, feedback, and Stop"
+    elif [ "$sh_harness" = "codex" ]; then
+      echo "  would wire: codex apply_patch capture into $sh_cfg"
+      echo "  would wire: codex all-local PostToolUse feedback into $sh_cfg"
+      echo "  would wire: codex Stop backstop into $sh_cfg"
+    elif sw_wired "$sh_harness" "$sh_cfg" "$sh_queue"; then
       echo "  would keep: $sh_cfg already wired -> $sh_queue"
     else
       echo "  would wire: capture hook into $sh_cfg -> $sh_queue"
     fi
   else
-    sw_wire "$sh_harness" "$sh_cfg" "$sh_queue" | sed 's/^/  /'
-    # Delivery env the operator's `critic-watch.sh` sources — from [notify].
-    sh_target="$(jq -r '.notify.target // empty' <<<"$CFG_JSON")"
-    sh_deliver="$(jq -r '.notify.cmd // empty' <<<"$CFG_JSON")"
-    sh_env="$PROJECT_DIR/.agents/shoulder.env"
-    {
-      printf '# generated by install.sh --wire-shoulder — source before critic-watch.sh\n'
-      printf 'export CRITIC_NOTE_HARNESS=%q\n' "$sh_harness"
-      printf 'export CLAUDE_NOTE_CMD=%q\n' "$QUARTET_DIR/agents/release/critic-note.sh --harness $sh_harness"
-      [ -n "$sh_target" ]  && printf 'export CRITIC_NOTE_TARGET=%q\n' "$sh_target"
-      [ -n "$sh_deliver" ] && printf 'export CRITIC_NOTE_DELIVER_CMD=%q\n' "$sh_deliver"
-    } >"$sh_env"
-    echo "  wrote delivery env: $sh_env"
+    if [ "$sh_harness" = "codex" ]; then
+      CRITIC_FEEDBACK_ADMIN=1 \
+        "$sh_feedback" --admin-allow-project "$PROJECT_DIR" || {
+          echo "shoulder: failed to authorize $PROJECT_DIR for Codex feedback" >&2
+          exit 2
+        }
+      sw_wire_codex_bundle \
+        "$sh_cfg" "$PROJECT_DIR" "$sh_queue" "$sh_feedback" "$sh_stop" |
+        sed 's/^/  /' || exit 2
+    else
+      sw_wire "$sh_harness" "$sh_cfg" "$sh_queue" | sed 's/^/  /' || exit 2
+    fi
+  fi
+
+  # Delivery/reviewer env sourced by the persistent watcher. Write the complete
+  # fragment atomically before installing or restarting the watcher.
+  sh_target="$(jq -r '.notify.target // empty' <<<"$CFG_JSON")"
+  sh_deliver="$(jq -r '.notify.cmd // empty' <<<"$CFG_JSON")"
+  sh_env="$PROJECT_DIR/.agents/shoulder.env"
+  sh_env_content="$(
+    printf '# generated by install.sh --wire-shoulder — source before critic-watch.sh\n'
+    printf 'CRITIC_PROJECT_DIR=%q\n' "$PROJECT_DIR"
+    printf 'CRITIC_HARNESS=%q\n' "$sh_critic_harness"
+    printf 'CRITIC_NOTE_HARNESS=%q\n' "$sh_harness"
+    printf 'CLAUDE_NOTE_CMD=%q\n' \
+      "$QUARTET_DIR/agents/release/critic-note.sh --harness $sh_harness"
+    [ -n "$sh_target" ] &&
+      printf 'CRITIC_NOTE_TARGET=%q\n' "$sh_target"
+    [ -n "$sh_deliver" ] &&
+      printf 'CRITIC_NOTE_DELIVER_CMD=%q\n' "$sh_deliver"
+  )"$'\n'
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "  would write: $sh_env"
+  elif [ "$SCHEDULER" != "systemd" ]; then
+    shoulder_atomic_write "$sh_env" "$sh_env_content" 600 || {
+      echo "shoulder: failed to atomically write $sh_env" >&2
+      exit 2
+    }
+  fi
+
+  if [ "$SCHEDULER" = "systemd" ]; then
+    sh_release_display="$(role_display release "$CFG_JSON")"
+    sh_watch_unit="${PROJECT_NAME}-${sh_release_display}-watch.service"
+    sh_watch_path="$SYSTEMD_DIR/$sh_watch_unit"
+    sh_watch_existed=0
+    [ -f "$sh_watch_path" ] && sh_watch_existed=1
+    sh_watch_content="[Unit]
+Description=$PROJECT_NAME shoulder release critic watcher
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=$PROJECT_DIR
+EnvironmentFile=-$sh_env
+ExecStart=/bin/bash $QUARTET_DIR/agents/release/critic-watch.sh --project $PROJECT_DIR
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+"
+    if [ "$DRY_RUN" = "1" ]; then
+      echo "  would write watcher: $sh_watch_path"
+      printf '%s' "$sh_watch_content" | sed 's/^/    /'
+      echo "  would: systemctl --user daemon-reload"
+      if [ "$sh_watch_existed" = "1" ]; then
+        echo "  would: systemctl --user enable + try-restart $sh_watch_unit"
+      else
+        echo "  would: systemctl --user enable --now $sh_watch_unit"
+      fi
+    else
+      sh_env_backup="$(shoulder_backup_file "$sh_env")" || {
+        echo "shoulder: cannot save prior env for rollback" >&2
+        exit 2
+      }
+      sh_watch_backup="$(shoulder_backup_file "$sh_watch_path")" || {
+        rm -f -- "$sh_env_backup"
+        echo "shoulder: cannot save prior watcher for rollback" >&2
+        exit 2
+      }
+      if ! shoulder_atomic_write "$sh_env" "$sh_env_content" 600 ||
+         ! shoulder_atomic_write "$sh_watch_path" "$sh_watch_content" 644; then
+        shoulder_rollback_watcher \
+          "$sh_watch_unit" "$sh_watch_path" "$sh_watch_backup" \
+          "$sh_env" "$sh_env_backup" "$sh_watch_existed"
+        echo "shoulder: atomic env/unit install failed; prior state restored" >&2
+        exit 2
+      fi
+      # A reinstall invalidates prior runtime proof until one of the exact
+      # definitions executes in a fresh normal Codex process. The marker sits
+      # beside the installer-owned private authorization state, never in the
+      # project workspace.
+      if [ "$sh_harness" = "codex" ]; then
+        sw_prepare_codex_runtime_marker "$PROJECT_DIR" || {
+          shoulder_rollback_watcher \
+            "$sh_watch_unit" "$sh_watch_path" "$sh_watch_backup" \
+            "$sh_env" "$sh_env_backup" "$sh_watch_existed"
+          echo "shoulder: private Codex runtime marker state is unsafe" >&2
+          exit 2
+        }
+      fi
+      if ! systemctl --user daemon-reload; then
+        shoulder_rollback_watcher \
+          "$sh_watch_unit" "$sh_watch_path" "$sh_watch_backup" \
+          "$sh_env" "$sh_env_backup" "$sh_watch_existed"
+        echo "shoulder: daemon-reload failed; prior state restored" >&2
+        exit 2
+      fi
+      sh_watch_ok=1
+      if [ "$sh_watch_existed" = "1" ]; then
+        systemctl --user enable "$sh_watch_unit" >/dev/null 2>&1 ||
+          sh_watch_ok=0
+        [ "$sh_watch_ok" = "0" ] ||
+          systemctl --user try-restart "$sh_watch_unit" || sh_watch_ok=0
+        if ! systemctl --user is-active "$sh_watch_unit" >/dev/null 2>&1; then
+          systemctl --user start "$sh_watch_unit" || sh_watch_ok=0
+        fi
+      else
+        systemctl --user enable --now "$sh_watch_unit" || sh_watch_ok=0
+      fi
+      if [ "$sh_watch_ok" = "0" ]; then
+        shoulder_rollback_watcher \
+          "$sh_watch_unit" "$sh_watch_path" "$sh_watch_backup" \
+          "$sh_env" "$sh_env_backup" "$sh_watch_existed"
+        echo "shoulder: watcher activation failed; prior state restored" >&2
+        exit 2
+      fi
+      rm -f -- "$sh_watch_backup" "$sh_env_backup"
+      echo "  watcher active: $sh_watch_unit"
+    fi
   fi
 fi
 

@@ -83,27 +83,27 @@ feed() { run bash -c 'printf "%s" "$1" | bash "$2"' _ "$1" "$QUARTET_ROOT/$2"; }
 
 @test "critic-note passes a configured injector's exit code through (3 = keep queue)" {
   inj="$BATS_TEST_TMPDIR/inj.sh"; printf '#!/bin/bash\nexit 3\n' >"$inj"; chmod +x "$inj"
-  CRITIC_NOTE_DELIVER_CMD="$inj" run bash "$QUARTET_ROOT/$NOTE" --harness codex s1 "finding"
+  CRITIC_NOTE_DELIVER_CMD="$inj" run bash "$QUARTET_ROOT/$NOTE" --harness claude s1 "finding"
   [ "$status" -eq 3 ]
 }
 
 @test "critic-note injector exit 0 = delivered" {
   inj="$BATS_TEST_TMPDIR/inj0.sh"; printf '#!/bin/bash\nexit 0\n' >"$inj"; chmod +x "$inj"
-  CRITIC_NOTE_DELIVER_CMD="$inj" run bash "$QUARTET_ROOT/$NOTE" --harness codex s1 "finding"
+  CRITIC_NOTE_DELIVER_CMD="$inj" run bash "$QUARTET_ROOT/$NOTE" --harness hermes s1 "finding"
   [ "$status" -eq 0 ]
 }
 
-@test "critic-note falls back to QUARTET_NOTIFY_CMD (owner alert) and exits 0" {
+@test "critic-note Claude falls back to QUARTET_NOTIFY_CMD (owner alert) and exits 0" {
   log="$BATS_TEST_TMPDIR/notify.log"
   nc="$BATS_TEST_TMPDIR/nc.sh"; printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"%s"\n' "$log" >"$nc"; chmod +x "$nc"
-  QUARTET_NOTIFY_CMD="$nc" run bash "$QUARTET_ROOT/$NOTE" --harness codex s1 "the finding"
+  QUARTET_NOTIFY_CMD="$nc" run bash "$QUARTET_ROOT/$NOTE" --harness claude s1 "the finding"
   [ "$status" -eq 0 ]
   grep -q "the finding" "$log"
 }
 
-@test "critic-note with no channel logs-and-skips (exit 0)" {
+@test "critic-note Claude with no channel logs-and-skips (exit 0)" {
   run env -u QUARTET_NOTIFY_CMD -u CRITIC_NOTE_DELIVER_CMD \
-    bash "$QUARTET_ROOT/$NOTE" --harness codex s1 "x"
+    bash "$QUARTET_ROOT/$NOTE" --harness claude s1 "x"
   [ "$status" -eq 0 ]
   [[ "$output" == *"no delivery channel"* ]]
 }

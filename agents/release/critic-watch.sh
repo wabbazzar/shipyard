@@ -65,6 +65,8 @@ done
 source "$QUARTET_DIR/agents/lib/load-config.sh"
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/spawn.sh"
+# shellcheck source=agents/release/critic-queue-lib.sh
+source "$SCRIPT_DIR/critic-queue-lib.sh"
 CFG_JSON="{}"
 if [ -f "$PROJECT_DIR/.agents/config.toml" ]; then
   CFG_JSON="$(load_config_json "$PROJECT_DIR/.agents/config.toml")" || CFG_JSON="{}"
@@ -79,6 +81,19 @@ BUDGET_TOKENS="$(jq -r '.release.budget_tokens_daily // 1000000' <<<"$CFG_JSON")
 # reverted tracked file lands in the list with no delta). Default false ⇒ the
 # CHANGED FILES block is byte-identical to before.
 HUNK_SAFE="$(jq -r '.release.hunk_safe_gates // false' <<<"$CFG_JSON")"
+REQUIRE_FEEDBACK="$(jq -cr '
+  if (.shoulder | type) == "object" and
+     (.shoulder | has("require_feedback"))
+  then .shoulder.require_feedback
+  else false
+  end
+' <<<"$CFG_JSON" 2>/dev/null || echo invalid)"
+case "$REQUIRE_FEEDBACK" in
+  true|false) ;;
+  *)
+    echo "critic-watch: shoulder.require_feedback must be boolean" >&2
+    exit 2 ;;
+esac
 
 # The shoulder-mode critic IS the release role's out-of-band voice: svc is
 # "<project>-<display>" (role id when no [names]) and the critique event
@@ -92,6 +107,87 @@ SVC="$PROJECT_NAME-$(role_display "$ROLE" "$CFG_JSON")"
 EVENTS_DIR="${QUARTET_EVENTS_DIR:-$PROJECT_DIR/data/events}"
 
 log() { echo "[$SVC-critic] $*"; }
+
+checked_sha256() {
+  local result hash rest
+  if command -v sha256sum >/dev/null 2>&1; then
+    result="$(sha256sum)" || return 1
+  elif command -v shasum >/dev/null 2>&1; then
+    result="$(shasum -a 256)" || return 1
+  else
+    return 1
+  fi
+  hash="${result%%[[:space:]]*}"
+  rest="${result#"$hash"}"
+  [[ "$hash" =~ ^[0-9a-f]{64}$ ]] &&
+    [[ "$rest" =~ ^[[:space:]]+(-|/dev/stdin)?[[:space:]]*$ ]] || return 1
+  printf '%s\n' "$hash"
+}
+
+session_hash() {
+  printf 'shipyard-session-v1:%s' "$1" | checked_sha256
+}
+
+safe_private_file() {
+  local path="$1" mode owner links
+  [ -f "$path" ] && [ ! -L "$path" ] || return 1
+  mode="$(stat -c '%a' "$path" 2>/dev/null ||
+    stat -f '%Lp' "$path" 2>/dev/null || true)"
+  owner="$(stat -c '%u' "$path" 2>/dev/null ||
+    stat -f '%u' "$path" 2>/dev/null || true)"
+  links="$(stat -c '%h' "$path" 2>/dev/null ||
+    stat -f '%l' "$path" 2>/dev/null || true)"
+  [ "$mode" = "600" ] && [ "$owner" = "$(id -u)" ] && [ "$links" = "1" ]
+}
+
+urgent_marker() {
+  printf '%s/critic-flush-%s\n' "$QUEUE_DIR" "$(session_hash "$1")"
+}
+
+urgent_turn_hash() {
+  local session="$1" marker hash
+  marker="$(urgent_marker "$session")" || return 1
+  hash="$(session_hash "$session")" || return 1
+  safe_private_file "$marker" || return 1
+  jq -er --arg hash "$hash" '
+    select(type == "object" and .schema_version == 1
+      and .session_hash == $hash
+      and (.turn_hash | type == "string"
+        and test("^[0-9a-f]{64}$")))
+    | .turn_hash
+  ' "$marker" 2>/dev/null
+}
+
+write_required_status() {
+  local session="$1" status="$2" session_key turn_key target tmp json
+  [ "$REQUIRE_FEEDBACK" = true ] || return 0
+  turn_key="$(urgent_turn_hash "$session")" || return 0
+  session_key="$(session_hash "$session")" || return 0
+  target="$QUEUE_DIR/critic-status-$session_key"
+  tmp="$(umask 077; mktemp \
+    "$QUEUE_DIR/.critic-status-$session_key.XXXXXX")" || return 1
+  json="$(jq -cn --arg sh "$session_key" --arg th "$turn_key" \
+    --arg status "$status" --argjson updated_at "$(date +%s)" '
+    {schema_version:1,session_hash:$sh,turn_hash:$th,status:$status,
+      updated_at:$updated_at}
+  ')" || return 1
+  (umask 077; printf '%s\n' "$json" >"$tmp") || {
+    rm -f -- "$tmp"
+    return 1
+  }
+  chmod 600 "$tmp" || {
+    rm -f -- "$tmp"
+    return 1
+  }
+  mv -f -- "$tmp" "$target" || {
+    rm -f -- "$tmp"
+    return 1
+  }
+}
+
+urgent_requested() {
+  [ "$REQUIRE_FEEDBACK" = true ] && urgent_turn_hash "$1" >/dev/null
+}
 
 emit_event() {
   # emit_event <event> [key=value ...]
@@ -117,39 +213,45 @@ tokens_used_today() {
 }
 
 # ---------- queue consumption -----------------------------------------------
-# Remove only the entries captured in the pre-critique snapshot. Hook entries
-# appended while the (minutes-long) claude run was in flight survive in the
-# queue for the next pass instead of being rm'd unreviewed. No snapshot
-# (legacy path, tests driving deliver_findings directly) falls back to
-# dropping the whole queue.
+# Remove only the exact byte prefix captured in the pre-critique snapshot.
+# Capture writers and acknowledgement share the queue lock, so even a late line
+# byte-identical to a reviewed line remains distinguishable by its position.
 consume_queue() {
   local queue="$1" session="$2"
   local snap="$QUEUE_DIR/critic-snapshot-$session"
   if [ -f "$snap" ]; then
-    local rest
-    rest="$(grep -Fxv -f "$snap" "$queue" 2>/dev/null || true)"
-    if [ -n "$rest" ]; then
-      printf '%s\n' "$rest" >"$queue"
-      log "queue kept: $(grep -c . <<<"$rest") entr(ies) arrived during critique"
+    if cq_consume_snapshot_prefix "$queue" "$snap"; then
+      rm -f "$snap"
+      if [ -s "$queue" ]; then
+        log "queue kept: $(awk 'END {print NR}' "$queue") entr(ies) arrived during critique"
+      fi
     else
-      rm -f "$queue"
+      log "queue acknowledgement deferred: reviewed prefix changed; queue and snapshot kept"
+      return 1
     fi
-    rm -f "$snap"
   else
-    rm -f "$queue"
+    log "queue acknowledgement deferred: reviewed snapshot missing; queue kept"
+    return 1
   fi
+  return 0
 }
 
 # ---------- delivery (separate so retries can reuse a cached critique) ------
 deliver_findings() {
   local queue="$1" session="$2" findings_file="$3" n_files="$4"
   local findings n_block n_warn n_note
+  DELIVERY_STATUS=delivery
   findings="$(cat "$findings_file" 2>/dev/null || true)"
   n_block="$(grep -c '^block|' <<<"$findings" || true)"
   n_warn="$(grep -c '^warn|' <<<"$findings" || true)"
   n_note="$(grep -c '^note|' <<<"$findings" || true)"
 
   if [ -z "${CLAUDE_NOTE_CMD:-}" ]; then
+    if [ "${CRITIC_NOTE_HARNESS:-claude}" = "codex" ]; then
+      log "CLAUDE_NOTE_CMD unset for Codex; queue kept for retry"
+      write_required_status "$session" delivery || true
+      return 0
+    fi
     log "CLAUDE_NOTE_CMD unset; skipping delivery"
     consume_queue "$queue" "$session"
     return 0
@@ -162,20 +264,52 @@ deliver_findings() {
 $(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
   fi
 
-  local note_rc
+  # Stable across retries: bind the immutable feedback item to the exact
+  # reviewed queue snapshot, complete findings, and deposited summary.
+  # The note command's two-argument argv contract is unchanged; external
+  # injectors may ignore these scoped environment values.
+  local note_rc note_id reviewed_snapshot
+  reviewed_snapshot="$QUEUE_DIR/critic-snapshot-$session"
+  [ -f "$reviewed_snapshot" ] || reviewed_snapshot="$queue"
+  if ! note_id="$(
+    {
+      printf 'shipyard-codex-feedback-v1\0'
+      cat "$reviewed_snapshot" 2>/dev/null || true
+      printf '\0'
+      cat "$findings_file" 2>/dev/null || true
+      printf '\0%s' "$summary"
+    } | checked_sha256
+  )"; then
+    log "feedback ID hashing failed; queue kept for retry"
+    return 0
+  fi
   # shellcheck disable=SC2086 — word-splitting CLAUDE_NOTE_CMD is intentional
-  $CLAUDE_NOTE_CMD "$session" "$summary"
+  CRITIC_NOTE_ID="$note_id" CRITIC_PROJECT_DIR="$PROJECT_DIR" \
+    $CLAUDE_NOTE_CMD "$session" "$summary"
   note_rc=$?
   local attempts_file="$QUEUE_DIR/critic-attempts-$session"
   case "$note_rc" in
     0)
+      # Codex zero proves durable mailbox deposit only. Hook emission and model
+      # consumption are later states; edit-queue acknowledgement is safe now.
       rm -f "$attempts_file"
-      consume_queue "$queue" "$session" ;;
+      if consume_queue "$queue" "$session"; then
+        DELIVERY_STATUS=deposited
+        write_required_status "$session" deposited || true
+      else
+        write_required_status "$session" delivery || true
+      fi ;;
     2|3)
       # 2 = ambiguous target, 3 = session at an interactive prompt — the
       # note was NOT delivered but the condition is session-state that a
       # later pass can find cleared. Keep the queue; no attempt cap.
-      log "claude-note exit $note_rc; queue kept for retry" ;;
+      log "claude-note exit $note_rc; queue kept for retry"
+      write_required_status "$session" delivery || true ;;
+    75)
+      # Built-in Codex mailbox deposit failed before its atomic rename.
+      # Never acknowledge the reviewed queue until durable persistence exists.
+      log "critic-note deposit unavailable; queue kept for retry"
+      write_required_status "$session" delivery || true ;;
     *)
       # Any other nonzero (1 crash, 127 command-not-found, ...) means the
       # note command itself is broken — the finding was NOT delivered, so
@@ -191,11 +325,16 @@ $(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
         emit_event release.critique.delivery_failed source=shoulder \
           rc="$note_rc" attempts="$attempts"
         rm -f "$attempts_file"
-        consume_queue "$queue" "$session"
+        if [ "$REQUIRE_FEEDBACK" = true ]; then
+          log "required feedback: reviewed queue preserved after delivery failure"
+        else
+          consume_queue "$queue" "$session"
+        fi
       else
         printf '%s\n' "$attempts" >"$attempts_file"
         log "claude-note exit $note_rc; queue kept for retry ($attempts/3)"
-      fi ;;
+      fi
+      write_required_status "$session" delivery || true ;;
   esac
   return 0
 }
@@ -223,14 +362,15 @@ _annotate_no_hunk() {
 critique_queue() {
   local queue="$1" session="$2"
   local findings_file="$QUEUE_DIR/critic-findings-$session"
+  local retry_snapshot="$QUEUE_DIR/critic-snapshot-$session"
 
   # Delivery-retry guard: when a critique already ran for this exact queue
-  # state (findings newer than the last queue write), reuse it instead of
-  # re-spending the model — claude-note exit 2/3 keeps the queue, and
-  # without this every poll pass would re-run the whole critique.
-  if [ -s "$findings_file" ] && [ "$findings_file" -nt "$queue" ]; then
+  # snapshot, reuse it instead of re-spending the model. Late live-queue
+  # appends do not change the already-reviewed snapshot or its delivery ID.
+  if [ -s "$findings_file" ] && [ -s "$retry_snapshot" ] &&
+      [ "$findings_file" -nt "$retry_snapshot" ]; then
     local cached_n
-    cached_n="$(awk '{print $1}' "$queue" 2>/dev/null | sort -u | grep -c . || true)"
+    cached_n="$(awk '{print $1}' "$retry_snapshot" 2>/dev/null | sort -u | grep -c . || true)"
     log "reusing cached critique for session $session (delivery retry)"
     deliver_findings "$queue" "$session" "$findings_file" "$cached_n"
     return 0
@@ -255,13 +395,18 @@ critique_queue() {
         tokens_used="$used" budget="$BUDGET_TOKENS"
       : >"$marker" 2>/dev/null || true
     fi
+    write_required_status "$session" budget || true
     return 0
   fi
   rm -f "$QUEUE_DIR/critic-budget-skip-$session-"* 2>/dev/null || true
 
-  # Snapshot the queue state being critiqued. Delivery consumes exactly these
-  # entries; anything the hook appends while claude is running stays queued.
-  cp "$queue" "$QUEUE_DIR/critic-snapshot-$session" 2>/dev/null || true
+  # Snapshot the queue state under the same lock capture hooks use. Delivery
+  # consumes exactly this byte prefix; later appends remain queued.
+  local reviewed_queue="$QUEUE_DIR/critic-snapshot-$session"
+  if ! cq_snapshot_queue "$queue" "$reviewed_queue"; then
+    log "snapshot unavailable; queue kept for retry"
+    return 0
+  fi
 
   # ---- gather the diff: working tree + branch vs trunk ----------------------
   local trunk="" diff="" changed=""
@@ -281,7 +426,7 @@ critique_queue() {
   # tmp/medic-result.json. critic-queue.sh filters these at enqueue time too;
   # this catches entries queued before that filter or by older hooks.
   local queued_files
-  queued_files="$(awk '{print $1}' "$queue" 2>/dev/null | sort -u | \
+  queued_files="$(awk '{print $1}' "$reviewed_queue" 2>/dev/null | sort -u | \
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       # Absolute paths outside this project were queued by older hooks or a
@@ -316,10 +461,10 @@ $(git -C "$PROJECT_DIR" diff --no-index -- /dev/null "$abs" 2>/dev/null || true)
   # before the idle window fired — those are post-release, and the shoulder
   # critic's contract is pre-release review of pending work.
   if [ -z "$(printf '%s' "$diff" | tr -d '[:space:]')" ]; then
-    log "skip: empty diff (changed files: ${n_files:-0}); queue dropped"
+    log "skip: empty diff (changed files: ${n_files:-0}); reviewed entries dropped"
     emit_event release.critique.skipped source=shoulder reason=empty_diff \
       files="${n_files:-0}"
-    rm -f "$queue" "$QUEUE_DIR/critic-snapshot-$session"
+    consume_queue "$queue" "$session"
     return 0
   fi
 
@@ -373,10 +518,16 @@ $diff"
     [[ "$sa" =~ ^[0-9]+$ ]] || sa=0
     sa=$((sa + 1))
     if [ "$sa" -ge 3 ]; then
-      log "critic claude run failed (exit=$claude_rc) after $sa attempts; giving up, queue dropped"
+      log "critic claude run failed (exit=$claude_rc) after $sa attempts; giving up on reviewed entries"
       emit_event release.critique.spawn_failed source=shoulder \
         rc="$claude_rc" attempts="$sa" files="$n_files"
-      rm -f "$spawn_attempts_file" "$queue" "$QUEUE_DIR/critic-snapshot-$session"
+      rm -f "$spawn_attempts_file"
+      if [ "$REQUIRE_FEEDBACK" = true ]; then
+        log "required feedback: reviewed queue preserved after spawn failure"
+        write_required_status "$session" spawn || true
+      else
+        consume_queue "$queue" "$session"
+      fi
     else
       printf '%s\n' "$sa" >"$spawn_attempts_file"
       log "critic claude run failed (exit=$claude_rc); queue kept for retry ($sa/3)"
@@ -420,7 +571,7 @@ eval_pass() {
       [ -e "$q" ] && queues+=("$q")
     done
   fi
-  local queue session now mtime idle distinct
+  local queue session now mtime idle distinct urgent
   for queue in "${queues[@]}"; do
     [ -s "$queue" ] || continue
     session="${queue##*/critic-queue-}"
@@ -428,7 +579,13 @@ eval_pass() {
     mtime="$(stat -c %Y "$queue" 2>/dev/null || stat -f %m "$queue" 2>/dev/null || echo "$now")"
     idle=$(( now - mtime ))
     distinct="$(awk '{print $1}' "$queue" | sort -u | wc -l)"
-    if [ "$idle" -ge "$IDLE_SEC" ] || [ "$distinct" -ge "$BATCH_FILES" ]; then
+    urgent=0
+    if urgent_requested "$session"; then
+      urgent=1
+      write_required_status "$session" running || true
+    fi
+    if [ "$urgent" -eq 1 ] || [ "$idle" -ge "$IDLE_SEC" ] ||
+       [ "$distinct" -ge "$BATCH_FILES" ]; then
       critique_queue "$queue" "$session"
     fi
   done

@@ -13,18 +13,20 @@
 #   harness also via $CRITIC_NOTE_HARNESS (default: claude).
 #
 # Delivery precedence, per harness:
-#   1. $CRITIC_NOTE_DELIVER_CMD (a session-injector) — authoritative. We exec it
-#      and PASS ITS EXIT CODE THROUGH, so the watcher's load-bearing contract
-#      still holds: 0=delivered, 2=ambiguous target, 3=session at a prompt
-#      (both keep the queue), other=broken (retry ×3 then give up).
-#   2. harness-native channel (hermes: `hermes send`) when available.
-#   3. $QUARTET_NOTIFY_CMD owner alert (the human still sees the finding).
-#   4. log-and-skip to stderr, exit 0.
-# Fallbacks 2–4 return 0 (delivered somewhere the human reads) so the queue
-# clears; only a configured injector (1) can signal keep-the-queue via 2/3.
+#   1. Codex always deposits to its native durable mailbox. A configured
+#      session injector runs only afterward as a best-effort duplicate.
+#   2. For Claude/Hermes, $CRITIC_NOTE_DELIVER_CMD remains authoritative and
+#      its exit code passes through unchanged.
+#   3. Otherwise use the harness-native channel (Hermes: `hermes send`) when
+#      available.
+#   4. $QUARTET_NOTIFY_CMD owner alert (the human still sees the finding).
+#   5. log-and-skip to stderr, exit 0.
+# For Codex, zero acknowledges durable deposit, not hook emission or model
+# consumption. Claude/Hermes compatibility semantics remain unchanged.
 
 set -u
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HARNESS="${CRITIC_NOTE_HARNESS:-claude}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -39,14 +41,30 @@ SESSION="${1:-}"
 MESSAGE="${2:-}"
 [ -n "$SESSION" ] || { printf 'critic-note: missing <session>\n' >&2; exit 2; }
 
-# 1. Configured session-injector — authoritative, exit-code passthrough.
+# 1. Codex-native durable deposit is authoritative.
+if [ "$HARNESS" = "codex" ]; then
+  if ! "$SCRIPT_DIR/critic-codex-feedback.sh" --deposit "$SESSION" "$MESSAGE"; then
+    printf 'critic-note: Codex feedback deposit failed; retry required\n' >&2
+    exit 75
+  fi
+  # A legacy injector is an optional duplicate after persistence. Its result
+  # cannot turn a successful native deposit into a false queue retry.
+  if [ -n "${CRITIC_NOTE_DELIVER_CMD:-}" ]; then
+    # shellcheck disable=SC2086
+    $CRITIC_NOTE_DELIVER_CMD "$SESSION" "$MESSAGE" || \
+      printf 'critic-note: optional Codex duplicate injector failed\n' >&2
+  fi
+  exit 0
+fi
+
+# 2. Configured Claude/Hermes session-injector — authoritative.
 if [ -n "${CRITIC_NOTE_DELIVER_CMD:-}" ]; then
   # shellcheck disable=SC2086 — word-splitting the configured command is intentional
   $CRITIC_NOTE_DELIVER_CMD "$SESSION" "$MESSAGE"
   exit $?
 fi
 
-# 2. harness-native channel.
+# 3. harness-native channel.
 case "$HARNESS" in
   hermes)
     if command -v hermes >/dev/null 2>&1 && [ -n "${CRITIC_NOTE_TARGET:-}" ]; then
@@ -55,7 +73,7 @@ case "$HARNESS" in
       fi
     fi
     ;;
-  codex|claude)
+  claude)
     : # no generic in-session inject channel — fall through to owner alert
     ;;
 esac
