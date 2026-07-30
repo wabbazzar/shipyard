@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-30
 - **Owner:** wabbazzar
-- **Status:** pending — reproduced; draft ready for polish
+- **Status:** pending — polished; no open decisions
 - **Priority:** high
 - **Type:** bugfix
 - **Estimated Points:** 8 (three phases: 3 · 3 · 2)
@@ -100,6 +100,25 @@ The coverage gap is specific: `tests/helpers.bash:242-246` always creates all
 five project prompts, Doctor has no enabled-role/missing-prompt case, and the
 inspect fixture has no intentional partial install with latent disabled units.
 
+### Polishing baseline and live invariants
+
+Measured on 2026-07-30 before any implementation edit:
+
+- `bats tests/` passed `668/668` in the canonical checkout.
+- The configured syntax sweep, leak firewall, deck freshness, deck
+  completeness, and `./install.sh --doctor --project .` all exited `0`.
+- `systemctl --user is-enabled` reported Ice Helldiver, Proctor, and Suk
+  `disabled`, and Chronicler `enabled`; `is-active` reported the first three
+  `inactive` and Chronicler `active`.
+- `bash skills/shipyard/shipyard.sh inspect --json --days 7` retained all four
+  Ice units but put six systemd evidence IDs from the three disabled roles in
+  `state_reason_ids`.
+
+The execute run must repeat the repository baseline before source edits. It
+must snapshot the four Ice timer enabled/active states before each live proof
+and show the byte-for-byte same state afterward. The live proof is read-only:
+no `daemon-reload`, enable, disable, start, stop, plist load, or plist unload.
+
 ## Decisions
 
 | # | Decision | Locked behavior | Why |
@@ -136,54 +155,179 @@ There are no open user decisions.
 7. Update the existing installer/Doctor/inspect documentation; do not add a
    parallel explainer.
 
-## Implementation Plan
+## Implementation Plan and Verification
 
 ### Phase 1 — Installer and Doctor share a safe role contract (3 pts)
 
-Add red-first coverage for an intentional Scribe-only reinstall, an explicit
-missing-prompt request, and Doctor's enabled-role/missing-prompt finding.
-Implement the shared eligibility/preflight path before any mutation and keep
-systemd/launchd behavior aligned.
+Add a single role resolver in `install.sh` that runs after config load but
+before every write or scheduler operation. Track whether `--agents` was
+explicit. Without it, resolve `[install.timers]` keys union enabled canonical
+roles, preserving canonical order and using the four-role default only for an
+empty union. Use the same resolver in Doctor. Preflight the matching prompt for
+Build, Release, Medic, and Scribe and aggregate missing paths before exit `2`;
+Design is the only exception.
 
 Files: `install.sh`, `tests/helpers.bash` or a focused fixture helper,
-`tests/doctor.bats`, and the relevant installer/launchd test file.
+`tests/doctor.bats`, `tests/gap-fixes.bats`, and
+`tests/launchd-install.bats`.
 
-Proof class: Bats, shell syntax, dry-run output, Doctor, scheduler-shim
-non-mutation, and public-repo hygiene.
+Regression names and RED obligation:
 
-Delegation: subagent — implement the installer/Doctor slice and return the
-red/green test evidence plus exact files changed.
+- `install: implicit Scribe-only reinstall selects no latent roles`
+- `install: explicit required roles with missing prompts fail before mutation`
+- `doctor: expected role missing its required prompt is a finding`
+- `launchd: implicit partial install uses the same eligible role set`
+
+Before implementation, add the tests and run their exact Bats filters against
+the pre-change `install.sh`; record at least one failing TAP assertion showing
+the captured defect. Do not weaken an existing full-install or explicit-subset
+test. The zero-mutation case snapshots config, manifests/plists, project-owned
+files, crontab shim log, and scheduler shim log; the only tolerated output is
+the bounded diagnostic naming every missing prompt.
+
+Gate classes: shell scripts, Bats, config-gated additivity, systemd unit
+generation, delegation contract, and public-repo hygiene apply. No model,
+deck, served-app, event, or notification gate applies. This is a fail-closed
+bug correction rather than a new configurable capability, so D-6 forbids a
+new opt-out; unchanged fresh/full-install tests are the additive guard.
+
+Run and read:
+
+```bash
+bats tests/doctor.bats tests/gap-fixes.bats tests/launchd-install.bats
+bash -n install.sh
+bash install.sh --dry-run --project "$PARTIAL_FIXTURE"
+bash install.sh --doctor --project "$PARTIAL_FIXTURE"
+bash scripts/leak-check.sh
+```
+
+Observable DoD: focused Bats are green; the implicit Scribe-only dry run names
+only Scribe scheduler work; the explicit missing-prompt test exits `2` with no
+write/scheduler calls; Doctor exits `1` only when a role in its expected set is
+missing a required prompt; all prior full/default/subset cases remain green.
+
+Delegation: subagent — own only `install.sh`, `tests/helpers.bash` if needed,
+`tests/doctor.bats`, `tests/gap-fixes.bats`, and
+`tests/launchd-install.bats`. Implement D-1 through D-4 and D-7. First capture
+the requested RED TAP against pre-change code, then converge to GREEN. Do not
+touch live scheduler state, docs, inspect code, or the ticket. Return in at
+most 40 lines: files changed; commands plus exit codes; exact RED assertion;
+GREEN test counts; zero-mutation evidence; blockers. Converge honestly or
+report the precise blocker with the actual evidence — NEVER fake green, weaken
+a check, or hand-wave "should work". Run the real command, read the real file,
+curl the real port, and report exact output (exit codes, JSONL lines, HTTP
+codes), not adjectives.
 
 ### Phase 2 — Fleet inspection respects partial installs (3 pts)
 
-Add red-first JSON coverage for a project with Scribe enabled and latent
-Build/Release/Medic manifests disabled. Preserve all unit inventory fields
-while excluding only non-applicable disabled-role fault evidence and attention.
+Pass raw project config into `_systemd_adapter` in
+`skills/shipyard/inspect.py`. Hydrate every discovered unit exactly as today,
+derive `[install.timers]` keys union enabled canonical roles with the same
+empty-union fallback as Doctor, and gate only fault-ID collection. Never gate
+manifest discovery or unit/status serialization.
 
 Files: `skills/shipyard/inspect.py`, `tests/shipyard-inspect.bats`.
 
-Proof class: focused inspect Bats, schema-v1 JSON invariants, human-render
-bounds, Python compile, and public-repo hygiene.
+Add RED-first case
+`inspect: intentional partial install ignores disabled latent role faults`.
+Its fixture config declares only Scribe; Scribe is enabled, Build/Release/Medic
+manifests remain visible and disabled/inactive, and one latent service may
+retain a failed result. Assert all latent unit JSON fields remain present, but
+their systemd fault evidence IDs are absent from `state_reason_ids` and from
+direct current-fault attention. The existing
+`inspect: disabled timer and failed service are direct faults` test must still
+prove the empty-union/default eligible role fails.
 
-Delegation: subagent — implement the inspect slice against the locked
-eligibility rule and return exact JSON assertions and test counts.
+Gate classes: Python/shell execution, Bats, delegation contract, schema-v1
+compatibility, human-render bounds, and public-repo hygiene apply. No live
+scheduler mutation, model, deck, served-app, event, or notification gate
+applies.
+
+Run and read:
+
+```bash
+bats tests/shipyard-inspect.bats
+python3 -m py_compile skills/shipyard/inspect.py
+bash skills/shipyard/shipyard.sh inspect --json --days 7 | jq -e '.schema_version == 1'
+bash skills/shipyard/shipyard.sh inspect --days 7
+bash scripts/leak-check.sh
+```
+
+Observable DoD: the new case is shown RED before implementation and GREEN
+after; all inspect tests pass; schema remains exactly `1`; human output remains
+bounded; latent partial-install units remain serialized while only
+non-applicable direct systemd fault IDs disappear.
+
+Delegation: subagent — own only `skills/shipyard/inspect.py` and
+`tests/shipyard-inspect.bats`. Implement D-5 without changing the schema or
+filtering inventory. First capture RED TAP for the named regression, then
+converge to GREEN while keeping the existing eligible-disabled fault test.
+Return in at most 40 lines: files changed; commands plus exit codes; exact RED
+assertion; exact JSON assertions; GREEN test counts; blockers. Converge
+honestly or report the precise blocker with the actual evidence — NEVER fake
+green, weaken a check, or hand-wave "should work". Run the real command, read
+the real file, curl the real port, and report exact output (exit codes, JSONL
+lines, HTTP codes), not adjectives.
 
 ### Phase 3 — Documentation, live proof, and roll-up (2 pts)
 
-Update the canonical installer and operator documentation. Re-run the complete
-gate battery, then prove with dry runs and Doctor/inspect on the two intentional
-partial installs that no absent role would be enabled and no intentional
-disabled role appears as a current fault. Do not enable, remove, or start those
-roles during proof.
+Update the default/partial-install contract in `install.sh` usage comments and
+the existing installer/operator sections of `README.md`. Do not add a parallel
+document. Re-run every repository gate, then perform read-only live proof on
+Ice and 2pizzaclub. Graduate this ticket only after all proof is green.
 
-Files: `README.md`, the existing install reference if its claims require the
-same correction, and this ticket's final Ledger/graduation.
+Files: `install.sh`, `README.md`, and this ticket's Ledger/graduation.
 
-Proof class: full Bats, shell/Python syntax, leak firewall, deck freshness and
-completeness, lifecycle, read-only live dry runs, Doctor, and JSON inspection.
+Gate classes: shell/Python syntax, full Bats, systemd dry-run/Doctor,
+delegation contract, public-repo hygiene, deck freshness/completeness, ticket
+lifecycle, and pushed CI apply. Config additivity remains pinned by the full
+suite. No model, served-app, event, or notification gate applies.
 
-Delegation: inline (the orchestrator must personally run and read the final
-live-system and repository gates).
+Run and read:
+
+```bash
+bats tests/
+bash -n install.sh agents/lib/*.sh agents/*/runner.sh agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit
+python3 -m py_compile scripts/gen-deck-data.py skills/shipyard/inspect.py
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bash scripts/check-deck-complete.sh
+./install.sh --doctor --project .
+bash scripts/ticket-lifecycle.sh --project . --check
+```
+
+With `ICE_PROJECT` and `PIZZA_PROJECT` pointing to the two canonical checkouts,
+snapshot scheduler state, run only dry-run/read-only surfaces, and compare:
+
+```bash
+systemctl --user is-enabled ice-helldiver.timer ice-proctor.timer ice-suk.timer ice-chronicler.timer
+systemctl --user is-active ice-helldiver.timer ice-proctor.timer ice-suk.timer ice-chronicler.timer
+bash install.sh --dry-run --project "$ICE_PROJECT" --wire-shoulder
+bash install.sh --doctor --project "$ICE_PROJECT"
+bash install.sh --dry-run --project "$PIZZA_PROJECT"
+bash install.sh --doctor --project "$PIZZA_PROJECT"
+bash skills/shipyard/shipyard.sh inspect --json --days 7 >"$TMPDIR/shipyard-inspect.json"
+jq -e '.fleet[] | select(.project_name=="ice") | ([.units[].role] | sort) == ["build","medic","release","scribe"]' "$TMPDIR/shipyard-inspect.json"
+systemctl --user is-enabled ice-helldiver.timer ice-proctor.timer ice-suk.timer ice-chronicler.timer
+systemctl --user is-active ice-helldiver.timer ice-proctor.timer ice-suk.timer ice-chronicler.timer
+```
+
+Read the JSON evidence linkage, not just the project headline: the disabled
+latent Ice role systemd evidence IDs must not occur in that project's
+`state_reason_ids`; historical job failures may honestly remain in
+`attention`. For 2pizzaclub, absent latent manifests are acceptable and Scribe
+must remain the only eligible role. Do not claim the whole project healthy
+when unrelated/historical evidence says otherwise.
+
+Observable DoD: `668` baseline tests plus all new cases pass; exact syntax,
+leak, deck, Doctor, and lifecycle commands exit `0`; both live dry runs plan no
+absent role; Ice scheduler snapshots are identical; inspect inventory is
+complete and linkage obeys D-5; ticket graduation, commit, push, remote CI, and
+GitHub Pages deployment are green. After the commit touching `install.sh`,
+`ls -l ~/code/*/.claude/skills/ | grep -c worktrees` must print `0`.
+
+Delegation: inline (a gate command and live-system proof the orchestrator must
+personally run and read; this is an allowed delegation exception).
 
 ## Testing Strategy
 
@@ -202,6 +346,22 @@ live-system and repository gates).
 - Run the configured repository gates: `bats tests/`,
   `bash scripts/leak-check.sh`, and `bash scripts/check-deck-fresh.sh`.
 
+## Orchestration Protocol
+
+The builder is the orchestrator: keep its context lean, delegate Phases 1 and
+2 using the briefs above, and personally re-read every changed hunk and rerun
+each phase's exact gates before committing. Each phase is one clean commit.
+Before delegation, append the plan and `builder:` line to the Ledger; after
+verification, append the commit and measured evidence. Never trust a
+subagent's summary as proof.
+
+Shipyard runs directly on `main`; do not create a worktree or branch. Check
+`git status --short --branch` before every commit, explicitly stage only the
+phase-owned files, and preserve unrelated user work. `install.sh` is
+fleet-live at the next project install, so no phase may leave default
+selection unsafe or tests red. Do not push until all phases and final gates
+are complete.
+
 ## Acceptance Criteria / Definition of Done
 
 - [ ] The captured partial-install repro no longer plans or performs activation
@@ -219,6 +379,22 @@ live-system and repository gates).
       roles remain disabled/absent, and no test starts them.
 - [ ] Full repository gates pass, the ticket is graduated only after completion,
       the Shipyard worktree is clean, and pushed CI is green.
+
+## Ledger
+
+Append before and after each phase. Required shape:
+
+```text
+### Phase N — <title>
+builder: subagent (1 agent) | inline (<allowed reason>)
+plan: <owned files and proof>
+commit: <hash, after verification>
+evidence: <commands, exact exits/counts, live invariant>
+deferred: none | <honest remainder>
+```
+
+Run with `execute-ticket` after polish. The ticket has no open decision, so the
+pipeline auto-gate proceeds without another approval.
 
 ## Dependencies
 
