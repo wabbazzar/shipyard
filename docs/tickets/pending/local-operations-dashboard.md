@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-29
 - **Owner:** wabbazzar
-- **Status:** pending — polished; awaiting event-path decision and prerequisite integration
+- **Status:** pending — ratified; awaiting prerequisite integration
 - **Priority:** medium
 - **Type:** feature
 - **Estimated Points:** 13 (five phases: 3 · 3 · 3 · 2 · 2)
@@ -69,7 +69,7 @@ private runtime surface.
 |---|---|---|---|
 | D-1 | Ownership | Shipyard owns the dashboard, but it is a deterministic service—not a new LLM role | Existing roles already emit the facts; another model would add cost and interpretation where a reader is sufficient. |
 | D-2 | Source of truth | The append-only JSONL event stream is canonical | One event path preserves dashboard, CLI, and notification consistency. |
-| D-3 | Machine-local storage | **Owner decision pending. Recommended:** preserve each installed crew's currently baked `QUARTET_EVENTS_DIR` for the MVP; resolve `~/Library/Application Support/Shipyard/events/` only for a clean install with no explicit path | Silently changing the default would split this Mac's history. A migration must rebake six live LaunchAgents and deliberately preserve or relocate prior data. |
+| D-3 | Machine-local storage | **Owner-selected 2026-07-30:** preserve each installed crew's currently baked `QUARTET_EVENTS_DIR` for the MVP; resolve `~/Library/Application Support/Shipyard/events/` only for a clean install with no explicit path | This keeps existing history continuous and avoids rebaking six live LaunchAgents. No migration is authorized by this ticket. |
 | D-4 | Reach | Bind to `127.0.0.1` only, default port `8765` | This is an owner console, not a public service; remote/tailnet access requires a later explicit security decision. |
 | D-5 | Runtime weight | Python standard library server plus plain HTML/CSS/JS; no database, framework, Node build, Docker, Grafana, or Loki in the MVP | Daily JSONL is directly streamable, but the measured 400 MB store requires compact indexes, bounded results, and lazy raw-line reads. |
 | D-6 | Interaction authority | Read-only: inspect status, events, incidents, and known log locations; never trigger, restart, merge, or deploy | Observation should not create a second operational control plane. |
@@ -78,21 +78,12 @@ private runtime surface.
 | D-9 | History | Do not delete or rewrite event files. The UI defaults to seven days and allows bounded 24-hour/7-day/30-day views | Retention is a separate owner policy; a viewer must not silently destroy history. |
 | D-10 | Platform shape | Dashboard reader and UI stay platform-neutral; native service installation supports launchd first and systemd user services through the same scheduler conventions | `install.sh:78-113,850-862` already defines Shipyard's cross-platform scheduler and baked-environment contract. |
 
-### Owner decision required before build
+### Owner decision recorded
 
-Choose the event-store behavior for this Mac:
-
-1. **Preserve the current baked path (recommended).** The dashboard reads the
-   exact `QUARTET_EVENTS_DIR` already used by the six LaunchAgents. No service
-   reload, data copy, or split history is introduced. Application Support is
-   only the fallback for clean installs with no explicit event path.
-2. **Migrate to Application Support now.** The build must copy or move existing
-   history, rebake every Shipyard LaunchAgent to the new directory, reload
-   them, and prove old plus new events form one continuous stream. This expands
-   the real-machine mutation and rollback surface.
-
-No implementation phase starts until the owner selects one. All other
-decisions are build defaults and may be vetoed during review.
+Preserve the current baked path. The dashboard reads the exact
+`QUARTET_EVENTS_DIR` already used by the six LaunchAgents. It must not move or
+copy history, rebake those jobs, or reload them. Application Support is only the
+fallback for a clean install with no explicit event path.
 
 ## UI direction
 
@@ -533,8 +524,8 @@ and cleanup evidence in the Ledger.
 
 - [ ] A native user service serves the dashboard at
       `http://127.0.0.1:8765` and survives terminal/session closure.
-- [ ] D-3 is explicitly selected and recorded; install/upgrade behavior uses
-      exactly that path policy without silently splitting event history.
+- [x] D-3 is explicitly selected and recorded; install/upgrade behavior must
+      use exactly that path policy without silently splitting event history.
 - [ ] The service reads the configured append-only event directory without
       modifying, relocating, or deleting event files.
 - [ ] A deterministic 300,000-row fixture indexes within 10 seconds and below
@@ -579,7 +570,6 @@ and cleanup evidence in the Ledger.
 
 ## Dependencies
 
-- Blocked by owner decision: D-3 event-store behavior.
 - Blocked by integration: `macos-native-gate-parity` must be canonicalized,
   Linux-gated, pushed by the receiving server, and CI/Pages-green before Phase
   1 starts.
@@ -620,6 +610,9 @@ line, commit hash, RED/GREEN commands and exit codes/counts, objective evidence,
 cleanup, and honest deferrals. Never record a personal path, private email,
 secret, or raw session identifier.
 
+Owner decision: preserve existing installations' baked event directories;
+Application Support is a clean-install fallback only. Recorded 2026-07-30.
+
 | Phase | Plan | Builder | Commit | Evidence / notes |
 |---|---|---|---|---|
 | 1 — bounded reader/model | Stream/index offsets, deterministic state/filter model, lazy detail, 300k benchmark. | builder: subagent (1 agent) | pending | pending |
@@ -628,5 +621,5 @@ secret, or raw session identifier.
 | 4 — native installer | Hermetic launchd/systemd install/doctor/uninstall using owner-selected D-3 behavior. | builder: subagent (1 agent) | pending | pending |
 | 5 — console/docs/live final | CLI/docs integration, complete gate, explicit real-service smoke, cleanup, graduation. | builder: inline (real service mutation and cross-surface final integration retained by orchestrator) | pending | pending |
 
-Run this ticket with the `execute-ticket` skill after both blockers are
-resolved.
+Run this ticket with the `execute-ticket` skill after the prerequisite
+integration is resolved.
