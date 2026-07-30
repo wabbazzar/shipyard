@@ -1,11 +1,16 @@
 # Enforce Shipyard's public Git identity
 
-- **Status:** pending — draft ready for polish
+- **Created:** 2026-07-30
+- **Owner:** wabbazzar
+- **Status:** pending — polished, auto-gate ready
 - **Priority:** urgent
 - **Type:** feature
 - **Estimated Points:** 8 (P1 3 · P2 3 · P3 2)
+- **Refs:** `.githooks/pre-commit`, `.githooks/pre-push`,
+  `.github/workflows/checks.yml`, `install.sh`, `.agents/config.toml`,
+  `.agents/gates.md`
 
-## Summary
+## Goal
 
 Remove non-canonical author and committer identities from Shipyard's published
 `main` history, then enforce one owner-approved identity across local commits,
@@ -13,7 +18,13 @@ pushes, CI, and GitHub branch governance. The canonical email remains in
 repository-local/GitHub configuration rather than tracked files so the public
 source does not create a second identity disclosure surface.
 
-## Problem / Background
+Completion means the raw `%an`, `%ae`, `%cn`, and `%ce` values of every commit
+reachable from GitHub `main` exactly match the owner-confirmed identity; local
+creation and publication paths reject every other value; GitHub `main` is
+PR-only with the identity check required and no bypass actor; and the paused
+Aurora-blocking `ar-codex` tree is restored byte-for-byte.
+
+## Context and pointers
 
 The Workmac bootstrap bundle was valid and its changes passed the repository
 gates, but four cherry-picked commits retained their original work-machine
@@ -57,7 +68,29 @@ the final commit locally with the canonical identity. If the repository plan
 cannot enforce that server-side contract, completion is blocked rather than
 silently widening the allowlist.
 
-## Confirmed decisions
+Authoritative implementation surfaces:
+
+- `scripts/leak-check.sh:36-59` — tracked-content firewall; it does not inspect
+  Git objects and cannot enforce this contract.
+- `.githooks/pre-commit:1-29` — pending-commit gate entry point.
+- `.githooks/pre-push:7-30` — receives every pushed ref update; identity must
+  block before its best-effort deck cascade.
+- `.github/workflows/checks.yml:1-50` — current shallow CI surface.
+- `install.sh` and its existing `--dry-run`/`--doctor` paths — fresh-checkout
+  hook and policy setup/audit.
+- `.agents/config.toml:10-13` — tracked owner name and opt-in project policy.
+- `.agents/gates.md` — exact per-phase repository gates and incident traps.
+- named stash `ar-codex Phase 1 paused for owner-authorized identity rewrite
+  2026-07-30` — immutable recovery source for the priority shared-tree work.
+
+No sibling repository source, service, event stream, model call, served port,
+skill frontmatter, or generated deck input is in scope. `install.sh` is
+fleet-live, so its unset-policy behavior must remain byte-identical and all
+work/commits occur in this canonical checkout on `main`.
+
+## Decisions
+
+### Locked decisions
 
 | # | Decision | Locked value | Why |
 |---|---|---|---|
@@ -69,6 +102,20 @@ silently widening the allowlist.
 | D-6 | Server enforcement | PR-associated changes only, required identity status check, no bypass actor | A local hook alone cannot prevent `--no-verify` or another clone from publishing bad metadata. |
 | D-7 | Failure posture | Missing policy, missing range endpoint, shallow history, malformed metadata, or unsupported GitHub enforcement fails closed | Identity protection must never degrade to a warning or a vacuous green. |
 | D-8 | Active work | Preserve the paused `ar-codex` Phase 1 tree byte-for-byte across the rewrite | The release-feedback repair is the priority workload and must resume immediately on rewritten history. |
+
+### Open decisions
+
+None.
+
+### User-decision class
+
+None. The owner explicitly authorized the one history rewrite,
+`--force-with-lease` publication, GitHub governance change, and exact canonical
+identity. The canonical address must be read from effective Git configuration
+and written only to repository-local Git configuration/GitHub Actions state,
+never copied into this ticket or another tracked file.
+
+**Auto-gate: PROCEED.**
 
 ## Technical Requirements
 
@@ -142,87 +189,302 @@ silently widening the allowlist.
 - Publish once with `--force-with-lease` against the recorded remote hash, then
   verify GitHub's raw commit API and CI before releasing `ar-codex`.
 
+## Polishing Baseline
+
+Measured 2026-07-30 from the canonical checkout:
+
+```text
+$ bats --version
+Bats 1.10.0
+$ gh --version | head -1
+gh version 2.83.2 (2025-12-10)
+$ git --version
+git version 2.43.0
+$ python3 --version
+Python 3.12.3
+$ jq --version
+jq-1.7
+$ command -v actionlint
+exit 1 (absent)
+$ gh auth status -h github.com
+exit 0
+$ git rev-list --count main
+243
+$ <raw four-field audit using effective Git identity>
+6 non-canonical commits
+$ gh api repos/wabbazzar/shipyard/rulesets --jq 'length'
+0
+$ gh api repos/wabbazzar/shipyard/branches/main/protection
+exit 1 (no branch protection)
+```
+
+The full pre-polish suite was `523/523` green; leak, lifecycle, syntax,
+Python-bytecode, deck freshness/completeness/render, and diff checks were also
+green. The new ticket was staged before the content-only leak gate so it was
+actually inspected. `actionlint` is not installed, so workflow syntax/shape
+must have hermetic tests and the pushed workflow must be proven by the real
+GitHub Actions run; no local substitute may be described as CI evidence.
+
 ## Implementation Plan
+
+The builder is the orchestrator: delegate the bounded code slices below, keep
+shared-state/destructive operations inline, and personally re-run every named
+gate before each commit. Work only on `main` in this canonical checkout.
 
 ### Phase 1 — Deterministic raw identity checker (3 pts)
 
-Build the policy reader and raw commit checker, including current-identity,
-revision-range, multi-ref, new-ref, delete, and full-history behavior. Add
-hermetic Git fixtures that demonstrate the current pre-push path accepts a
-wrong author before the change.
+**Delegation: subagent — checker and regression owner.** Assume the locked
+policy and exit-code contract in this ticket. Work only in the new
+`scripts/check-git-identity.sh`, new `tests/git-identity-enforcement.bats`, and
+small fixture helpers in `tests/helpers.bash` when strictly required. First
+create the test `git identity: existing pre-push accepts a wrong author` and
+record its expected success against pre-change code as the captured defect;
+then add tests that must fail until the checker exists. Implement current,
+explicit-range, complete-history, and pre-push-stdin modes without mailmap
+normalization. Return in at most 40 lines: files changed; commands and exit
+codes; captured-defect line; final focused test count; representative redacted
+diagnostic; blockers. Converge honestly or report the precise blocker with the
+actual evidence — NEVER fake green, weaken a check, or hand-wave "should work".
+Run the real command, read the real file, curl the real port, and report exact
+output (exit codes, JSONL lines, HTTP codes), not adjectives.
 
-Files: new `scripts/check-git-identity.sh`, new
-`tests/git-identity-enforcement.bats`, focused helper additions if required.
+The checker reads the canonical public name from
+`[git_identity].name` in `.agents/config.toml` and the canonical email from the
+repository-local `shipyard.identityEmail` Git key. `enforce = true` requires
+both. Its modes are:
 
-High-level proof: Bats red-first, shell execution, and public-hygiene gate
-classes. Cover author name/email and committer name/email independently,
-mixed-good/bad ranges, merge commits, zero-SHA ref cases, malformed policy, and
-redacted diagnostics.
+- `--current --project <path>`: compare `git var GIT_AUTHOR_IDENT` and
+  `GIT_COMMITTER_IDENT`;
+- `--range <rev-range> --project <path>`: validate every commit produced by
+  `git rev-list <rev-range>`; the flag may repeat and commits are de-duplicated;
+- `--all <rev> --project <path>`: validate every commit reachable from `<rev>`;
+- `--pre-push <remote-name> <remote-url> --project <path>`: consume standard
+  four-field pre-push lines on stdin, ignore deletes, union every update, and
+  fail closed on malformed/missing objects. Existing refs inspect
+  `remote-sha..local-sha`; a new ref inspects the local tip excluding commits
+  reachable from locally advertised tracking refs for that remote, and audits
+  all reachable commits when no such refs exist.
 
-Delegation: subagent — implement the checker and hermetic regression surface;
-return files, red/green case names, exact exits, and blockers.
+All four raw fields are compared exactly. Exit `0` means every inspected value
+matches, `1` means mismatch, and `2` means invocation/config/range failure.
+Diagnostics name the hash and field but redact email values; tests assert that
+neither fixture address appears in stdout/stderr.
+
+#### Verification surface
+
+Before implementation, use the hermetic fixture to run the real old hook and
+record the defect:
+
+```bash
+bats --filter 'git identity: existing pre-push accepts a wrong author' \
+  tests/git-identity-enforcement.bats
+```
+
+After implementation, the same file must cover author name/email and committer
+name/email separately, combinations, mixed ranges, merge commits, repeated
+ranges, multiple ref lines, new refs with/without tracking refs, deletes,
+missing/shallow endpoints, missing/malformed policy, empty input, exact exit
+codes, and redaction. Run:
+
+```bash
+git add -N scripts/check-git-identity.sh \
+  tests/git-identity-enforcement.bats
+bash -n scripts/check-git-identity.sh
+bats tests/git-identity-enforcement.bats
+bash scripts/check-git-identity.sh --all HEAD --project .
+bats tests/
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bash scripts/check-deck-complete.sh
+node scripts/check-deck-render.mjs
+bash -n install.sh agents/lib/*.sh agents/*/runner.sh \
+  agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit \
+  .githooks/pre-push
+python3 -m py_compile scripts/gen-deck-data.py
+bash scripts/ticket-lifecycle.sh --project . --check
+python3 scripts/delegation-report.py
+git diff --check
+```
+
+Deck render exit `3` is the documented Playwright skip; every other command
+must exit `0`. The phase DoD is the focused Bats file green, the live repository
+`--all HEAD` returning `1` while naming exactly six offending hashes with email
+values redacted, and every remaining applicable gate green. Commit only the
+checker/tests/ticket Ledger as one canonical-identity commit.
 
 ### Phase 2 — Local, CI, and install/doctor enforcement (3 pts)
 
-Wire the checker into pre-commit, blocking pre-push, full-depth Actions, and the
-opt-in Shipyard install/doctor path. Add the external repository variable
-contract and document the canonical setup/PR-associated merge workflow without
-printing the personal email.
+**Delegation: subagent — hook/CI/installer owner.** Begin from the committed
+Phase 1 checker. Own `.githooks/pre-commit`, `.githooks/pre-push`,
+`.github/workflows/checks.yml`, `install.sh`, `.agents/config.toml`, focused
+tests, and only the existing setup documentation that must describe the
+external policy. Do not touch GitHub state, history, the named stash, or
+Aurora-phase files. Preserve the pre-push deck cascade as non-blocking after
+identity succeeds. Prove the config-unset installer path is pre-change
+compatible. Return in at most 40 lines: files changed; commands with exit codes;
+focused/full Bats counts; dry-run/doctor observations; workflow assertions;
+blockers. Converge honestly or report the precise blocker with the actual
+evidence — NEVER fake green, weaken a check, or hand-wave "should work". Run
+the real command, read the real file, curl the real port, and report exact
+output (exit codes, JSONL lines, HTTP codes), not adjectives.
 
-Files: `.githooks/pre-commit`, `.githooks/pre-push`,
-`.github/workflows/checks.yml`, `install.sh`, `.agents/config.toml`, existing
-README/install documentation, and focused hook/installer tests.
+Add `[git_identity] enforce = true` and `name = "wabbazzar"` to this project's
+tracked config. Add:
 
-High-level proof: Bats, shell, config-gated additivity, installer dry-run/doctor,
-workflow-shape, leak, and full repository gate classes. Prove unset projects
-are unchanged and a fresh opted-in Shipyard checkout cannot pass doctor until
-its external policy and hooks are configured.
+```text
+install.sh --configure-git-identity --project <path>
+```
 
-Delegation: subagent — implement hook/CI/installer wiring and focused tests
-without modifying live GitHub governance; return files, generated outputs,
-exact exits, and blockers.
+It reads the effective `user.name`/`user.email`, rejects a name different from
+`project_owner`, writes both `user.*` and `shipyard.identityEmail` to the
+target repository's local config, sets `core.hooksPath=.githooks`, invokes the
+current-identity check, and logs only the name plus a redacted-email marker.
+`--doctor` audits those keys/hook path only when `[git_identity].enforce=true`;
+an absent section is exactly the prior behavior.
+
+Pre-commit calls `--current` before content/deck gates. Pre-push calls
+`--pre-push "$1" "$2"` with its stdin before the best-effort mirror. CI uses
+`actions/checkout` with `fetch-depth: 0`; a dedicated job checks
+`base-sha..head-sha` on pull requests and `--all HEAD` on `main`, sourcing only
+the GitHub Actions variable `SHIPYARD_IDENTITY_EMAIL` into a temporary local Git
+key. Missing event SHAs, full history, variable, or policy must fail.
+
+#### Verification surface
+
+Add focused hermetic cases named for pending author/committer rejection,
+pre-push multi-ref/new-ref rejection, deck-cascade ordering, configure success
+and redaction, doctor missing/mismatch/success, unset-project invariance, and
+full-depth/workflow event ranges. New-file leak checks are staged/add-intent
+before execution; prose assertions fit on one source line; every guard case is
+shown passing against the pre-change file before edits.
+
+```bash
+bash -n install.sh scripts/check-git-identity.sh \
+  .githooks/pre-commit .githooks/pre-push
+bats tests/git-identity-enforcement.bats
+bats tests/install.bats
+bash install.sh --dry-run --project .
+bash install.sh --configure-git-identity --project .
+bash install.sh --doctor --project .
+bash .githooks/pre-commit
+printf '' | bash .githooks/pre-push origin \
+  "$(git remote get-url origin)"
+bats tests/
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bash scripts/check-deck-complete.sh
+node scripts/check-deck-render.mjs
+bash -n install.sh agents/lib/*.sh agents/*/runner.sh \
+  agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit \
+  .githooks/pre-push
+python3 -m py_compile scripts/gen-deck-data.py
+bash scripts/ticket-lifecycle.sh --project . --check
+python3 scripts/delegation-report.py
+git diff --check
+```
+
+Deck render exit `3` alone is an allowed skip. The phase DoD is that a fresh
+opted-in fixture fails doctor before configuration and passes after; wrong
+pending and pushed metadata are blocked before downstream hook behavior; the
+unset fixture is byte-identical; workflow tests prove full checkout and exact
+event ranges; real local configure/doctor pass without exposing the address;
+and all repository gates are green. Commit the wiring/tests/docs/ticket Ledger
+as one canonical-identity commit.
 
 ### Phase 3 — Rewrite, server enforcement, and handback (2 pts)
 
-Create backup refs, rewrite all six non-canonical commits, verify metadata-only
-equivalence, restore the paused Phase 1 tree, force-with-lease the single
-rewritten history, configure active no-bypass GitHub governance, and prove a
-real canonical PR path plus required CI. Release `ar-codex` only after its
-checksums and index state match the recorded snapshot.
+**Delegation: inline (the orchestrator alone must perform destructive shared
+history, live GitHub governance, secret configuration, and cross-session tree
+restoration).** Before every mutation, inspect `git status`, the current
+`ar-codex` tmux acknowledgement, the named stash object, and remote `main`.
+Never ask a subagent to operate the shared index/ref namespace. Converge
+honestly or report the precise blocker with the actual evidence — NEVER fake
+green, weaken a check, or hand-wave "should work". Run the real command, read
+the real file, curl the real port, and report exact output (exit codes, JSONL
+lines, HTTP codes), not adjectives.
 
-Files/state: Git commit graph and local backup refs; GitHub Actions variable,
-ruleset/branch governance, repository merge settings; no Phase 1 source edits.
+Create immutable refs under `refs/backup/identity-rewrite-20260730/` for local
+pre-rewrite `main`, remote pre-rewrite `main`, and the named stash commit.
+Record the six offending old hashes and use a deterministic parent-order walk
+to recreate commits: only those six receive the canonical author and committer
+name/email; every tree, message bytes, author/committer timestamp, parent order,
+and all other raw headers remain unchanged. Move `main` only after the complete
+candidate graph passes comparison. Record the full old→new map in the Ledger,
+without email values.
 
-High-level proof: history-equivalence, raw-identity, stash-integrity, full local
-gate, force-with-lease, GitHub raw-API, required-check, ruleset, rejected bad
-identity, accepted canonical PR, and post-push CI evidence.
+Restore the named stash with `apply`, do not pop/drop it, reset the two
+new-file index entries and return them to intent-to-add, then compare these
+pre-recorded SHA-256 values:
 
-Delegation: inline (published-history rewrite, owner GitHub governance, and
-cross-session worktree restoration are destructive shared-state operations the
-orchestrator must personally verify).
+```text
+805f95c6b01faa608c7a84324d7a66a67517d2095b315fa4802164b785b6515f  agents/release/critic-codex-feedback.sh
+96292d73d356f2976979fc88a7fca020a095b671c1b194f30f21e2b811fe5517  agents/release/critic-note.sh
+8f48c8f5adec2c186a4cf8492f4aa9fd814ca75545be4138c25063eeb7e2de66  agents/release/critic-queue-lib.sh
+8e2b313f770f178753ff66dd1a3747d67d40db737a22021a2ddc380e92d31269  agents/release/critic-watch.sh
+e0abba89a9f0fd69c52f985768c2e96472cc18db0fb83afc28d7bd037a00410b  docs/tickets/pending/codex-critic-in-band-delivery.md
+3e3e354e049171ed3edd193a157ec075d3a1fe4c995796fe5156ab391685ebac  tests/codex-feedback-delivery.bats
+fb4c54cd31b0cf616fece649765167834e80e2f0c2c014376ea00f5928d0d0b0  tests/shoulder-mode-harness.bats
+6118485eb291e14b0dd8daac693d7f2016dad823c476f087735ccbac90915fe5  tests/shoulder-mode.bats
+```
 
-## Testing Strategy
+#### Verification and publication surface
 
-- Demonstrate the new Bats regression fails against pre-change `main` because
-  the real pre-push hook accepts a commit with one wrong metadata field.
-- Test all four identity fields independently, plus combinations, merge
-  commits, multiple pushed refs, new refs, deletions, historical commits outside
-  the pushed range, shallow/missing ranges, missing policy, and diagnostic
-  redaction.
-- Run the real pre-commit and pre-push hooks in hermetic local bare repositories;
-  tests must never contact GitHub or a model.
-- Prove opt-in install/reinstall byte stability, doctor failure on missing
-  identity configuration, doctor success after configuration, and exact
-  unset-project invariance.
-- Run `bats tests/`, the complete shell/Python syntax sweep, leak check, deck
-  freshness/completeness/render, ticket lifecycle, installer dry-run/doctor,
-  delegation report, and `git diff --check`.
-- After the rewrite, compare every old/new commit's tree hash, message, author
-  and committer dates, and parent count while permitting only the six intended
-  identity changes and descendant hashes.
-- Verify GitHub's raw commit API, required Actions job, active ruleset with an
-  empty bypass list, rejection of a disposable bad-identity update, and
-  acceptance of the canonical PR-associated merge path.
+With the priority tree still safely stashed, prove the old/new lists have equal
+length and, pairwise, equal tree ID, exact message bytes, author/committer
+timestamps, and ordered parent-map topology. Prove the identity fields differ
+only on the six recorded objects and every new commit passes:
+
+```bash
+bash scripts/check-git-identity.sh --all main --project .
+git fsck --full
+bats tests/
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bash scripts/check-deck-complete.sh
+node scripts/check-deck-render.mjs
+bash -n install.sh agents/lib/*.sh agents/*/runner.sh \
+  agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit \
+  .githooks/pre-push
+python3 -m py_compile scripts/gen-deck-data.py
+bash install.sh --doctor --project .
+bash scripts/ticket-lifecycle.sh --project . --check
+python3 scripts/delegation-report.py
+git diff --check
+```
+
+Record `git ls-remote origin refs/heads/main` immediately before publication
+and require it to equal the saved lease. Push once:
+
+```bash
+git push --force-with-lease=refs/heads/main:<saved-remote-hash> origin \
+  main:refs/heads/main
+```
+
+Then verify `git ls-remote`, GitHub's commit API raw author/committer fields,
+and terminal success for the exact `checks` and Pages workflow run IDs.
+Configure `SHIPYARD_IDENTITY_EMAIL` without printing its value. Use the GitHub
+API to create active `main` governance requiring PRs and the exact identity
+status context, with empty bypass actors and exact author/committer email
+metadata restrictions; re-read and archive the returned JSON shape in the
+Ledger with sensitive values redacted.
+
+Create a disposable bad-identity branch/PR and a disposable canonical
+branch/PR using only temporary refs. The bad web/no-reply final metadata must be
+rejected server-side, while the locally constructed canonical PR-associated
+merge path must be accepted without a bypass. Delete temporary remote refs
+only after recording results. If the plan/API cannot express both behaviors,
+restore the prior non-deadlocking governance shape, retain the local/CI guard
+and rewritten history, and stop with the exact HTTP status/message. Never
+enable bypass or widen the allowlist.
+
+Only after remote identity, CI, governance, and both disposable probes pass:
+apply the named stash, restore its original index shape, verify all eight
+checksums and `git status`, send the exact `AUTHOR_REWRITE_RELEASED` handback to
+`ar-codex`, and keep the stash/backup refs until owner acceptance. Phase DoD is
+the rewritten remote and API audit green, both governance probes behaving as
+specified, all checks green, and the priority tree restored byte-for-byte. A
+server-capability failure is an honest blocked terminal condition, not a
+partial-green completion.
 
 ## Acceptance Criteria / Definition of Done
 
@@ -248,6 +510,41 @@ orchestrator must personally verify).
 - [ ] The paused `ar-codex` Phase 1 work is restored with all eight file
       checksums and intent-to-add states unchanged.
 - [ ] Full local gates and post-rewrite GitHub CI/Pages are green.
+- [ ] Each phase is one verified canonical-identity commit; the ticket is
+      graduated deterministically; the final shared worktree is either the
+      exactly restored `ar-codex` tree or clean after that work is committed.
+
+## Ledger
+
+Append exact evidence during execution. Never record the canonical or rejected
+email value in tracked text.
+
+### Phase 1
+
+- `builder:` pending
+- `commit:` pending
+- `red-first:` pending
+- `focused/full gates:` pending
+- `notes/blockers:` pending
+
+### Phase 2
+
+- `builder:` pending
+- `commit:` pending
+- `focused/full gates:` pending
+- `configure/doctor evidence:` pending
+- `notes/blockers:` pending
+
+### Phase 3
+
+- `builder: inline (destructive shared history, GitHub governance, secret
+  state, and priority-tree restoration)`
+- `commit/map:` pending
+- `old/new equivalence:` pending
+- `force-with-lease and remote:` pending
+- `GitHub rules/probes/workflows:` pending
+- `stash/index/checksums/handback:` pending
+- `notes/blockers:` pending
 
 ## Boundaries
 
@@ -308,3 +605,11 @@ orchestrator must personally verify).
 - Signed-commit or DCO policy beyond exact author/committer metadata.
 - General-purpose secret scanning or content-leak rules unrelated to Git
   identity.
+
+## Handoff
+
+Run this ticket end-to-end with `execute-ticket`. With no open decision, the
+polish auto-gate proceeds immediately; execution stops only on a proven
+user-decision/server-capability blocker and otherwise graduates this ticket
+with `bash scripts/ticket-lifecycle.sh --project . --graduate
+docs/tickets/pending/git-identity-enforcement.md`.
