@@ -303,7 +303,12 @@ run_doctor() {
       [ -n "$es" ] && [ "$es_dir" != "$qd_real" ] && \
         emit "unit: $u runner not under \$QUARTET_DIR (-> $es_dir, want $qd_real)"
     done <<<"$units"
-    [ "$any_enabled" = "1" ] || emit "unit: '$role' present but its scheduler job is not enabled"
+    if [ "$any_enabled" != "1" ]; then
+      case "$SCHEDULER" in
+        systemd) emit "unit: '$role' present but its timer is not enabled" ;;
+        launchd) emit "unit: '$role' present but its scheduler job is not enabled" ;;
+      esac
+    fi
   done
 
   # (b) more than one crew unit per role for this project = stale duplicate
@@ -692,8 +697,11 @@ echo "==> theme '$THEME' → [names] block in $CFG"
 names_json="$(for role in $QUARTET_ROLES; do
     printf '%s\t%s\n' "$role" "$(theme_name "$role")"
   done | jq -R 'split("\t") | {(.[0]): .[1]}' | jq -s 'add')"
+names_unchanged="$(jq --argjson n "$names_json" '.names == $n' <<<"$CFG_JSON")"
 CFG_JSON="$(jq --argjson n "$names_json" '.names = $n' <<<"$CFG_JSON")"
-if [ "$DRY_RUN" = "1" ]; then
+if [ "$names_unchanged" = "true" ]; then
+  echo "  [names] unchanged"
+elif [ "$DRY_RUN" = "1" ]; then
   echo "  would write:"; printf '%s' "$names_block" | sed 's/^/    /'
 else
   # Idempotent: strip any existing [names] block, then append the new one.
