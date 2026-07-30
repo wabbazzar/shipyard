@@ -1,9 +1,14 @@
 # Local operations dashboard — a quiet, machine-local view of Shipyard activity
 
-- **Status:** pending — draft ready for polish
+- **Created:** 2026-07-29
+- **Owner:** wabbazzar
+- **Status:** pending — polished; awaiting event-path decision and prerequisite integration
 - **Priority:** medium
 - **Type:** feature
-- **Estimated Points:** 13 (P1 5 · P2 5 · P3 3)
+- **Estimated Points:** 13 (five phases: 3 · 3 · 3 · 2 · 2)
+- **Refs:** `agents/lib/log_event.sh`, `agents/lib/load-config.sh`,
+  `agents/medic/runner.sh`, `skills/shipyard/shipyard.sh`, `install.sh`,
+  `docs/INSTALL.md`, `.agents/gates.md`
 
 ## Summary
 
@@ -39,20 +44,55 @@ The public deck at `docs/index.html` is a narrative/product surface, not this
 machine's operational console. The new dashboard must remain a separate,
 private runtime surface.
 
-## Decisions (default-and-record — veto at review)
+## Verified pre-build baseline (2026-07-30)
+
+- The server event store is already substantial: approximately 400 MB, with
+  280,737 JSONL rows across the latest seven daily files. The implementation
+  must stream/index compact metadata and must not deserialize the full history
+  into Python objects.
+- This Mac's current event store is 8 KB (14 rows across two files), but all six
+  loaded `com.shipyard.*` LaunchAgents bake the canonical checkout's
+  `data/events` directory into `QUARTET_EVENTS_DIR`. Moving the default alone
+  would split old and future history; migration requires an explicit service
+  rebake.
+- Python 3.12, Bats 1.10+, Node, Playwright, Chrome, and Firefox are available
+  on the receiving server. The repository gate currently covers Bats, both
+  shell syntax surfaces, Python compilation, leak checks, deck
+  freshness/completeness/render, lifecycle checks, installer/doctor behavior,
+  and GitHub CI.
+- The prerequisite `macos-native-gate-parity` work is locally verified at
+  528/528 native Mac tests and is queued for canonical server-side integration.
+
+## Decisions
 
 | # | Decision | Locked default | Why |
 |---|---|---|---|
 | D-1 | Ownership | Shipyard owns the dashboard, but it is a deterministic service—not a new LLM role | Existing roles already emit the facts; another model would add cost and interpretation where a reader is sufficient. |
 | D-2 | Source of truth | The append-only JSONL event stream is canonical | One event path preserves dashboard, CLI, and notification consistency. |
-| D-3 | Machine-local storage | On macOS, configure events under `~/Library/Application Support/Shipyard/events/`; retain explicit `QUARTET_EVENTS_DIR` override and avoid baking a personal absolute path into tracked code | Operational state should survive checkout cleanup without entering Git. |
+| D-3 | Machine-local storage | **Owner decision pending. Recommended:** preserve each installed crew's currently baked `QUARTET_EVENTS_DIR` for the MVP; resolve `~/Library/Application Support/Shipyard/events/` only for a clean install with no explicit path | Silently changing the default would split this Mac's history. A migration must rebake six live LaunchAgents and deliberately preserve or relocate prior data. |
 | D-4 | Reach | Bind to `127.0.0.1` only, default port `8765` | This is an owner console, not a public service; remote/tailnet access requires a later explicit security decision. |
-| D-5 | Runtime weight | Python standard library server plus plain HTML/CSS/JS; no database, framework, Node build, Docker, Grafana, or Loki in the MVP | Current volume is tiny and daily JSONL is already queryable. |
+| D-5 | Runtime weight | Python standard library server plus plain HTML/CSS/JS; no database, framework, Node build, Docker, Grafana, or Loki in the MVP | Daily JSONL is directly streamable, but the measured 400 MB store requires compact indexes, bounded results, and lazy raw-line reads. |
 | D-6 | Interaction authority | Read-only: inspect status, events, incidents, and known log locations; never trigger, restart, merge, or deploy | Observation should not create a second operational control plane. |
 | D-7 | Operator entrypoint | Add a deterministic `shipyard dashboard` command and show dashboard health/URL in `shipyard status` | `skills/shipyard/shipyard.sh:1-14,67-119` is already the in-project operator console. |
 | D-8 | Alerts | Keep Notification Center as the current actionable/urgent transport. Design a narrow adapter seam for Slack/BopBop, but do not implement remote delivery in the MVP | Chat is useful for attention, not durable history. |
 | D-9 | History | Do not delete or rewrite event files. The UI defaults to seven days and allows bounded 24-hour/7-day/30-day views | Retention is a separate owner policy; a viewer must not silently destroy history. |
 | D-10 | Platform shape | Dashboard reader and UI stay platform-neutral; native service installation supports launchd first and systemd user services through the same scheduler conventions | `install.sh:78-113,850-862` already defines Shipyard's cross-platform scheduler and baked-environment contract. |
+
+### Owner decision required before build
+
+Choose the event-store behavior for this Mac:
+
+1. **Preserve the current baked path (recommended).** The dashboard reads the
+   exact `QUARTET_EVENTS_DIR` already used by the six LaunchAgents. No service
+   reload, data copy, or split history is introduced. Application Support is
+   only the fallback for clean installs with no explicit event path.
+2. **Migrate to Application Support now.** The build must copy or move existing
+   history, rebake every Shipyard LaunchAgent to the new directory, reload
+   them, and prove old plus new events form one continuous stream. This expands
+   the real-machine mutation and rollback surface.
+
+No implementation phase starts until the owner selects one. All other
+decisions are build defaults and may be vetoed during review.
 
 ## UI direction
 
@@ -146,22 +186,48 @@ Six named colors, each with one explicit job:
 5. Event bodies are untrusted display data. Render with `textContent` or
    equivalent escaping, disallow inline script injection, and never interpret
    event content as HTML.
+6. A newline-terminated invalid JSON row is a parse error. An unterminated final
+   row is an in-progress append: retain earlier rows, omit the tail, and retry
+   it on the next poll.
+7. State derivation is deterministic:
+   - `running`: a service's latest `job.start` has no later `job.end`;
+   - `stale`: that unmatched start is older than
+     `SHIPYARD_DASHBOARD_STALE_SEC` (default 7200);
+   - `failed`: the latest terminal event has `status=fail`;
+   - `healthy`: the latest terminal event has `status=ok`;
+   - `actionable`: a failed terminal event, unresolved incident lifecycle, or
+     delivered actionable/urgent notification decision remains in the selected
+     window. Later matching resolution/dedup evidence suppresses the item.
 
 ### New runtime surface
 
 - **New `dashboard/server.py`:**
-  - Resolve events from explicit `QUARTET_EVENTS_DIR`, then the documented
-    platform-local default.
+  - Resolve events from CLI/configured `QUARTET_EVENTS_DIR`, then the
+    owner-selected clean-install fallback. Print the resolved directory at
+    startup and expose it in health output.
   - Bind to `127.0.0.1:${SHIPYARD_DASHBOARD_PORT:-8765}` by default.
   - Serve static assets and these read-only endpoints:
     - `GET /api/health`
     - `GET /api/summary`
     - `GET /api/events?window=&project=&role=&status=&limit=`
     - `GET /api/stream` using server-sent events for newly appended lines.
-  - Enforce bounded windows/limits, deterministic ordering, and explicit JSON
-    error envelopes.
-  - Build an in-memory index at startup; do not introduce persistent database
-    state.
+  - Accept only `24h`, `7d`, or `30d` windows. Default `limit=500`, cap at
+    2,000, reject repeated/unknown query keys, and return deterministic
+    newest-first results with a stable `(ts, file, byte_offset)` tie-break.
+  - Stream daily files once to build aggregates plus compact byte-offset
+    references. Lazily reread raw rows for event detail; never retain all
+    decoded event objects. A deterministic 300,000-row fixture must start
+    within 10 seconds and remain below 256 MiB RSS on the receiving server.
+  - Tail only the current UTC file for SSE, polling at 500 ms, sending a
+    heartbeat every 15 seconds, and allowing at most eight clients. Reopen on
+    rotation/truncation and release clients promptly.
+  - Return explicit JSON error envelopes; health includes schema/build version,
+    readiness, index row/error counts, event directory, latest timestamp, host,
+    and port.
+  - Validate `Host` as loopback/localhost, emit no CORS allowance, set
+    `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, and a
+    restrictive CSP. Do not follow caller-selected paths or event-directory
+    symlinks outside the resolved root.
 
 - **New `dashboard/static/{index.html,styles.css,app.js}`:**
   - Implement the hierarchy and states above without a build step.
@@ -170,15 +236,19 @@ Six named colors, each with one explicit job:
     arbitrary filesystem paths from requests.
 
 - **New `scripts/install-dashboard.sh`:**
-  - Install, audit, and uninstall the one machine-level dashboard service.
+  - Support `--install`, `--doctor`, `--uninstall`, and `--dry-run` for the one
+    machine-level dashboard service.
   - Use native launchd on macOS and a user service on Linux.
   - Bake the event directory, loopback host, port, and log paths using the same
     explicit-environment model documented at `docs/INSTALL.md:21-34`.
-  - Be idempotent and never disturb per-project build/release/medic jobs.
+  - Use label/unit `com.shipyard.dashboard` / `shipyard-dashboard.service`;
+    write logs under the platform-local Shipyard log directory; make install
+    and reinstall byte-stable; never match or mutate per-project jobs.
 
 - **Extend `skills/shipyard/shipyard.sh`:**
-  - `shipyard dashboard` prints the URL and opens it only when explicitly
-    requested by a flag; headless calls remain non-interactive.
+  - `shipyard dashboard` prints the URL and health state. `--open` is the only
+    path that calls `open`/`xdg-open`; headless/default calls are
+    non-interactive.
   - `shipyard status` reports service loaded/running state, URL, event path,
     latest event timestamp, and a precise install command when absent.
 
@@ -190,53 +260,201 @@ Six named colors, each with one explicit job:
 
 ## Implementation Plan
 
-### Phase 1 — Event reader and read-only API (5 pts)
+### Phase 1 — Bounded event reader and state model (3 pts)
 
-Build the platform-neutral event reader, bounded query model, summary
-aggregation, health endpoint, and SSE tailing behavior. Cover malformed,
-partially written, unknown-field, empty, multi-day, and concurrent-append
-fixtures.
+Build a pure Python reader/model with compact byte-offset references,
+deterministic aggregation, filtering, state derivation, rotation handling, and
+lazy raw-row lookup. No socket or UI work enters this phase.
 
-Files: new `dashboard/server.py`, new dashboard API fixtures/tests.
+Files: new `dashboard/reader.py`, `dashboard/tests/test_reader.py`, synthetic
+fixtures/generators, and this ticket's Ledger.
 
-High-level proof: Python/shell gate classes plus hermetic API behavior; no
-network access outside loopback and no source-file mutation.
+**Delegation: subagent (one bounded builder).** The orchestrator delegates this
+isolated reader slice, then personally inspects the diff and reruns its gates.
+The builder owns only the Phase 1 files and may assume the event schema and
+state rules recorded above. Return ≤40 lines: files changed; reader/index
+schema; commands plus exit codes and counts; 300,000-row elapsed time and peak
+RSS; fixture checksums; evidence lines; blockers. Converge honestly or report
+the precise blocker with the actual evidence — NEVER fake green, weaken a
+check, or hand-wave "should work". Run the real command, read the real file,
+curl the real port, and report exact output (exit codes, JSONL lines, HTTP
+codes), not adjectives.
 
-Delegation: subagent — implement and characterize the event reader/API against
-synthetic JSONL; return schema decisions, edge cases, and focused test results.
+RED/GREEN proof:
 
-### Phase 2 — Operational UI (5 pts)
+```bash
+python3 -m unittest -v dashboard.tests.test_reader
+python3 dashboard/tests/benchmark_reader.py \
+  --rows 300000 --max-seconds 10 --max-rss-mib 256
+git diff --check
+```
 
-Build the fleet summary, project-role matrix, actionable queue, keel rail,
-filters, event evidence view, responsive recomposition, and all named states.
+Observable DoD: empty, multi-day, unknown-field, invalid newline row,
+unterminated tail, rotation, truncation, and concurrent append fixtures pass;
+24h/7d/30d windows and 500/2,000 limits are exact; fixture source checksums are
+unchanged.
 
-Files: new `dashboard/static/index.html`, `dashboard/static/styles.css`,
-`dashboard/static/app.js`, UI/render tests.
+### Phase 2 — Loopback HTTP API and bounded SSE (3 pts)
 
-High-level proof: served-app and visual gate classes at `1440×900` and
-`390×844`, including keyboard, focus, overflow, reduced motion, empty, stale,
-parse-error, and disconnected-stream states.
+Add `dashboard/server.py` and endpoint behavior over the Phase 1 model. Pin
+query rejection, headers, host validation, client cap, heartbeat, append,
+rotation, disconnect cleanup, and JSON error envelopes.
 
-Delegation: subagent — implement the UI from the recorded design system and
-return screenshots plus interaction/accessibility findings at both viewports.
+Files: new `dashboard/server.py`, `dashboard/tests/test_server.py`, and Ledger.
 
-### Phase 3 — Native service, Shipyard console, and docs (3 pts)
+**Delegation: subagent (one bounded builder).** The orchestrator delegates the
+HTTP/SSE slice after Phase 1 is committed, then personally reviews it and
+reruns its gates. The builder owns only the Phase 2 files and must use the
+Phase 1 reader without weakening its bounds. Return ≤40 lines: files changed;
+endpoint contract; commands plus exit codes/counts; listener, Host, header, and
+SSE evidence lines; blockers. Converge honestly or report the precise blocker
+with the actual evidence — NEVER fake green, weaken a check, or hand-wave
+"should work". Run the real command, read the real file, curl the real port,
+and report exact output (exit codes, JSONL lines, HTTP codes), not adjectives.
 
-Add idempotent launchd/systemd user-service installation, wire the deterministic
-`shipyard dashboard` and `shipyard status` surfaces, document storage and
-service behavior, and configure this Mac to use Application Support for future
-events without committing a personal path.
+Focused and real-port proof:
 
-Files: new `scripts/install-dashboard.sh`; updates to
-`skills/shipyard/{SKILL.md,shipyard.sh}`, `README.md`, `docs/INSTALL.md`, and
-scheduler/status tests.
+```bash
+python3 -m unittest -v dashboard.tests.test_reader dashboard.tests.test_server
+tmp="$(mktemp -d)"
+python3 dashboard/server.py --events-dir dashboard/tests/fixtures/live \
+  --host 127.0.0.1 --port 0 --port-file "$tmp/port" >"$tmp/server.log" 2>&1 &
+server_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  test -s "$tmp/port" && break
+  sleep 0.2
+done
+port="$(cat "$tmp/port")"
+curl --fail --silent --show-error \
+  "http://127.0.0.1:$port/api/health" | jq -e \
+  '.ready==true and .host=="127.0.0.1" and (.port|type)=="number"'
+lsof -nP -a -p "$server_pid" -iTCP -sTCP:LISTEN |
+  grep -F "127.0.0.1:$port"
+kill "$server_pid"
+wait "$server_pid" || test "$?" -eq 143
+```
 
-High-level proof: shell, launchd/systemd fixture, leak, skill/deck coupling, and
-real local served-app gate classes. Reinstallation must be byte-stable.
+The builder records the resolved port, HTTP status, health JSON, listener row,
+and process exit. Any wildcard/LAN listener, non-loopback Host acceptance,
+source mutation, or ninth SSE client is RED.
 
-Delegation: inline (small integration slice whose value is preserving the
-installer/status contracts across files already in the orchestrator's
-context).
+### Phase 3 — Operational UI and rendered proof (3 pts)
+
+Implement the recorded hierarchy, matrix, actionable queue, keel rail,
+filters, exact states/copy, safe raw evidence disclosure, and stable SSE
+refresh behavior in build-free static assets.
+
+Files: new `dashboard/static/index.html`, `styles.css`, `app.js`,
+`dashboard/tests/browser.mjs`, browser fixtures, and Ledger.
+
+**Delegation: subagent (one UI builder using the `ui-design` contract).** The
+orchestrator delegates the static UI after the served API is committed, then
+personally opens both screenshots and reruns the browser assertions. The
+builder owns only the Phase 3 files and uses the recorded thesis, hierarchy,
+tokens, states, and viewports. Return ≤40 lines plus screenshot paths: files
+changed; commands plus exit codes; interaction/accessibility findings; network
+request origins; viewport/overflow results; exact evidence lines; blockers.
+Converge honestly or report the precise blocker with the actual evidence —
+NEVER fake green, weaken a check, or hand-wave "should work". Run the real
+command, read the real file, curl the real port, and report exact output (exit
+codes, JSONL lines, HTTP codes), not adjectives.
+
+Rendered proof:
+
+```bash
+python3 -m unittest -v dashboard.tests.test_reader dashboard.tests.test_server
+node dashboard/tests/browser.mjs --browser chromium \
+  --viewport 1440x900 --screenshot-dir "$TMPDIR/shipyard-dashboard-wide"
+node dashboard/tests/browser.mjs --browser chromium \
+  --viewport 390x844 --screenshot-dir "$TMPDIR/shipyard-dashboard-narrow"
+```
+
+Inspect both screenshots, not only test output. Browser assertions cover exact
+empty/loading/stale/parse/disconnected copy, semantic/keyboard path, visible
+focus, contrast, no horizontal overflow, reduced motion, hostile HTML rendered
+inertly, preserved selection/scroll after append, and zero request origins
+outside the loopback server.
+
+### Phase 4 — Native service installer (2 pts)
+
+Add the idempotent dashboard installer/doctor/uninstaller for launchd and
+systemd without touching project crew jobs. Implement only the owner-selected
+D-3 path behavior.
+
+Files: new `scripts/install-dashboard.sh`, `tests/dashboard-install.bats`,
+platform manifest fixtures, and Ledger.
+
+**Delegation: subagent (one installer builder).** The orchestrator delegates
+the hermetic installer slice after D-3 is selected, then personally inspects
+the rendered manifests and reruns both Bash parsers and Bats. The builder owns
+only the Phase 4 files and must not load, unload, or rewrite real services.
+Return ≤40 lines: files changed; commands plus exit codes/counts; manifest
+labels/paths; first-install/reinstall checksums; doctor/uninstall evidence;
+untouched crew-job checksums; blockers. Converge honestly or report the
+precise blocker with the actual evidence — NEVER fake green, weaken a check,
+or hand-wave "should work". Run the real command, read the real file, curl the
+real port, and report exact output (exit codes, JSONL lines, HTTP codes), not
+adjectives.
+
+Proof:
+
+```bash
+bats tests/dashboard-install.bats
+/bin/bash -n scripts/install-dashboard.sh
+bash -n scripts/install-dashboard.sh
+git diff --check
+```
+
+Observable DoD: dry-run writes nothing; install/reinstall are byte-stable;
+doctor detects stopped, wrong-host, wrong-port, wrong-event-dir, and stale
+asset/version drift; uninstall removes only the dashboard service and leaves
+events/logs plus every project job intact.
+
+### Phase 5 — Operator console, docs, real smoke, and graduation (2 pts)
+
+Wire `shipyard dashboard`/`status`, update operator/install docs, run the full
+gate, perform one explicit real Mac service smoke, and graduate the ticket in
+the phase commit.
+
+Files: `skills/shipyard/{SKILL.md,shipyard.sh}`, `README.md`,
+`docs/INSTALL.md`, `tests/dashboard.bats`, generated deck data when required,
+and this ticket.
+
+**Delegation: inline (lead integration).** This final cross-surface slice owns
+the only permitted real-service mutation, CLI/docs integration, graduation,
+and the whole-tree gate, so the orchestrator must retain rollback and
+verify-before-commit context. It personally records every command, exit code,
+HTTP response, event line, service PID/listener, and cleanup result. Converge
+honestly or report the precise blocker with the actual evidence — NEVER fake
+green, weaken a check, or hand-wave "should work". Run the real command, read
+the real file, curl the real port, and report exact output (exit codes, JSONL
+lines, HTTP codes), not adjectives.
+
+Focused proof:
+
+```bash
+bats tests/dashboard.bats tests/dashboard-install.bats
+skills/shipyard/shipyard.sh dashboard
+skills/shipyard/shipyard.sh status
+```
+
+Real smoke (owner-selected event path, explicit mutation):
+
+```bash
+scripts/install-dashboard.sh --install
+scripts/install-dashboard.sh --doctor
+url="$(skills/shipyard/shipyard.sh dashboard | sed -n 's/^url=//p')"
+curl --fail --silent --show-error "$url/api/health" | jq -e '.ready==true'
+QUARTET_EVENTS_DIR="<resolved configured event dir>" \
+  agents/lib/log_event.sh dashboard-smoke dashboard.smoke \
+  project=shipyard role=dashboard status=ok tokens=0
+curl --fail --silent --show-error \
+  "$url/api/events?window=24h&project=shipyard&role=dashboard&limit=10" |
+  jq -e 'any(.events[]; .event=="dashboard.smoke" and .status=="ok")'
+```
+
+Record the service label, PID, loopback listener, HTTP codes, exact event row,
+and UI update. Do not claim the smoke from fixture-only evidence.
 
 ## Testing Strategy
 
@@ -244,8 +462,9 @@ context).
   filters, bounded limits, malformed/partial final lines, unknown fields, and
   concurrent append while SSE is connected.
 - Add `tests/dashboard.bats` for loopback binding, health/summary/event
-  endpoints, service installer idempotence, launchd/systemd manifests,
-  `shipyard status`, absent-service guidance, and uninstall leave-behinds.
+  endpoints, `shipyard status`, absent-service guidance, and process cleanup.
+  Add `tests/dashboard-install.bats` for installer byte stability,
+  launchd/systemd manifests, doctor failures, and uninstall leave-behinds.
 - Add browser coverage for the real served UI at `1440×900` and `390×844`;
   inspect the named states, keyboard path, focus, contrast, overflow, reduced
   motion, raw-field escaping, and auto-refresh selection stability.
@@ -255,20 +474,84 @@ context).
   through `agents/lib/log_event.sh`, the UI visibly updated, and no external
   network request observed.
 
+## Final Gate — run before each phase commit as applicable, then end-to-end
+
+New files must be intent-to-add or staged before `leak-check.sh`; otherwise its
+tracked-file scan is vacuous. Phase commits run their focused commands plus the
+public-repo, delegation, lifecycle, and diff gates. Phase 5 runs this complete
+battery from a clean process baseline:
+
+```bash
+python3 -m unittest -v dashboard.tests.test_reader dashboard.tests.test_server
+python3 dashboard/tests/benchmark_reader.py \
+  --rows 300000 --max-seconds 10 --max-rss-mib 256
+bats tests/dashboard.bats tests/dashboard-install.bats
+bats tests/
+
+/bin/bash -n install.sh agents/lib/*.sh agents/*/runner.sh \
+  agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit
+bash -n install.sh agents/lib/*.sh agents/*/runner.sh \
+  agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit
+python3 -m py_compile scripts/gen-deck-data.py dashboard/*.py dashboard/tests/*.py
+
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bash scripts/check-deck-complete.sh
+node scripts/check-deck-render.mjs
+bash scripts/ticket-lifecycle.sh --check
+python3 scripts/delegation-report.py
+git diff --check
+```
+
+On Apple Silicon, also prove the complete suite through the exact interpreter
+used by launchd:
+
+```bash
+native_shim="$(mktemp -d)"
+ln -s /bin/bash "$native_shim/bash"
+arch -arm64 env PATH="$native_shim:$PATH" \
+  /opt/homebrew/bin/bats tests/
+unlink "$native_shim/bash"
+rmdir "$native_shim"
+```
+
+The browser gate starts the real loopback server and runs both declared
+viewports. Capture the pre-run headless browser PIDs, require the harness to
+close its own browser in `finally`, then prove the post-run PID set is
+identical; do not kill unrelated pre-existing processes. Inspect both rendered
+screenshots. The Phase 2 listener proof and the Phase 5 installed-service smoke
+are mandatory because `.agents/gates.md` predates this service and currently
+labels the served-app class “APPLIES: no.”
+
+`check-deck-render.mjs` exit 3 is the gate's documented Playwright-unavailable
+skip only when the runtime is genuinely absent; the dedicated dashboard browser
+gate may not skip. Record test counts, benchmark time/RSS, resolved port,
+listener row, HTTP codes/headers, screenshots, service PID, emitted JSONL line,
+and cleanup evidence in the Ledger.
+
 ## Acceptance Criteria / Definition of Done
 
 - [ ] A native user service serves the dashboard at
       `http://127.0.0.1:8765` and survives terminal/session closure.
+- [ ] D-3 is explicitly selected and recorded; install/upgrade behavior uses
+      exactly that path policy without silently splitting event history.
 - [ ] The service reads the configured append-only event directory without
       modifying, relocating, or deleting event files.
+- [ ] A deterministic 300,000-row fixture indexes within 10 seconds and below
+      256 MiB peak RSS on the receiving server; queries retain at most 2,000
+      decoded result rows and raw detail is loaded lazily.
 - [ ] Fleet summary reports healthy/running/stale/failed/actionable counts and
-      the latest event timestamp from synthetic and real local streams.
+      the latest event timestamp from synthetic and real local streams, using
+      the exact deterministic state rules in Technical Requirements.
 - [ ] Project × role state uses canonical `project`/`role` identity and shows
       last terminal status, duration, and activity.
 - [ ] Timeline filters work for time window, project, role, event family, and
-      status, with deterministic order and bounded results.
+      status, with exact 24h/7d/30d windows, default/max limits of 500/2,000,
+      rejection of unknown/repeated query keys, and deterministic ordering.
 - [ ] SSE updates the page after a new JSONL append without a full reload,
-      losing selection, or moving the operator's scroll position.
+      losing selection, or moving the operator's scroll position; rotation,
+      truncation, disconnect cleanup, 15-second heartbeats, and the eight-client
+      cap are verified.
 - [ ] Empty, loading, stale, malformed-line, and disconnected-stream states use
       the exact actionable copy recorded in this ticket.
 - [ ] Malformed or partially written final lines never hide earlier valid
@@ -282,8 +565,11 @@ context).
       systemd user services, and leaves per-project scheduler jobs untouched.
 - [ ] `shipyard status` reports dashboard health/URL/event path/latest event,
       while `shipyard dashboard` provides the deterministic operator entrypoint.
-- [ ] Default reach is loopback-only; no dashboard or event content leaves the
-      machine.
+- [ ] `lsof` proves the listener is `127.0.0.1` only; non-loopback `Host`
+      values are rejected, no CORS allowance is emitted, and no-store, nosniff,
+      and restrictive CSP headers are present.
+- [ ] No dashboard or event content leaves the machine, including during both
+      browser proofs.
 - [ ] Notification Center remains the actionable/urgent alert transport; no
       routine event flood is introduced.
 - [ ] README and install docs distinguish the public deck, private dashboard,
@@ -293,7 +579,10 @@ context).
 
 ## Dependencies
 
-- Blocked by: none.
+- Blocked by owner decision: D-3 event-store behavior.
+- Blocked by integration: `macos-native-gate-parity` must be canonicalized,
+  Linux-gated, pushed by the receiving server, and CI/Pages-green before Phase
+  1 starts.
 - External services: none for the MVP.
 - Enables: an optional follow-up for BopBop/Slack actionable-alert fan-out and
   later multi-machine aggregation.
@@ -323,3 +612,21 @@ context).
 - Grafana, Loki, Prometheus, OpenTelemetry, Docker, or a persistent database.
 - Replacing the public Shipyard deck or embedding private runtime data in it.
 - Automatic retention/deletion policy.
+
+## Ledger
+
+Before each phase, append the exact slice plan. After it, record the builder
+line, commit hash, RED/GREEN commands and exit codes/counts, objective evidence,
+cleanup, and honest deferrals. Never record a personal path, private email,
+secret, or raw session identifier.
+
+| Phase | Plan | Builder | Commit | Evidence / notes |
+|---|---|---|---|---|
+| 1 — bounded reader/model | Stream/index offsets, deterministic state/filter model, lazy detail, 300k benchmark. | builder: subagent (1 agent) | pending | pending |
+| 2 — loopback API/SSE | Read-only endpoints, validation/headers, bounded clients, rotation-safe tail, real listener proof. | builder: subagent (1 agent) | pending | pending |
+| 3 — operational UI | Recorded visual system, interaction states, two rendered viewports, safe live refresh. | builder: subagent (1 agent) | pending | pending |
+| 4 — native installer | Hermetic launchd/systemd install/doctor/uninstall using owner-selected D-3 behavior. | builder: subagent (1 agent) | pending | pending |
+| 5 — console/docs/live final | CLI/docs integration, complete gate, explicit real-service smoke, cleanup, graduation. | builder: inline (real service mutation and cross-surface final integration retained by orchestrator) | pending | pending |
+
+Run this ticket with the `execute-ticket` skill after both blockers are
+resolved.
