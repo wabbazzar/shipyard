@@ -128,7 +128,7 @@ install.sh --configure-git-identity --project <project_dir>
 
 This enables `.githooks`, stores the canonical email in local Git config, and
 prints only a redacted marker. CI obtains the same value only from the
-`SHIPYARD_IDENTITY_EMAIL` repository variable.
+`SHIPYARD_IDENTITY_EMAIL` repository secret.
 
 ## Doctor — audit what an install owns
 

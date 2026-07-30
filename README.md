@@ -198,7 +198,7 @@ configuration, and it is YOUR job:
 | off switch | Linux: `systemctl --user disable --now <project>-<display>.timer`; macOS: `launchctl bootout gui/$(id -u)/com.shipyard.<project>-<display>` | — |
 | hands-off repo | `autonomous = true` (top-level) — a private, disposable dogfood repo with no human in the loop: it never appears in the hub's approval wire, and the ticket auto-gate proceeds without stopping even for a user-decision. Pair with `[medic] can_merge = true`. **Only ever set this on a throwaway private repo.** | **unset** (human-in-the-loop) |
 | inspect first | `install.sh --dry-run` prints every unit and crontab change before writing | — |
-| raw Git identity | tracked `.shipyard-git-identity.toml` opt-in checks exact author/committer names and emails in pre-commit, pre-push, doctor, and CI; the email stays in local Git config and the `SHIPYARD_IDENTITY_EMAIL` Actions variable, never tracked source | **absent/off** |
+| raw Git identity | tracked `.shipyard-git-identity.toml` opt-in checks exact author/committer names and emails in pre-commit, pre-push, doctor, and CI; the email stays in local Git config and the `SHIPYARD_IDENTITY_EMAIL` Actions secret, never tracked source | **absent/off** |
 
 Agents only get projects you explicitly install them on. Start with one
 low-stakes repo.
@@ -290,7 +290,7 @@ The command requires the effective name to match `project_owner`, writes
 `user.name`, `user.email`, `shipyard.identityEmail`, and
 `core.hooksPath=.githooks` locally, verifies the pending identity, and never
 prints the email. CI reads the same email only from the
-`SHIPYARD_IDENTITY_EMAIL` repository variable and checks full raw history.
+`SHIPYARD_IDENTITY_EMAIL` repository secret and checks full raw history.
 
 **Doctor** — a read-only audit of what a crew install owns, so drift is
 visible instead of surfacing weeks later:

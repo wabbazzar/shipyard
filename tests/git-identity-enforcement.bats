@@ -759,12 +759,15 @@ refs/heads/new-ref $new_sha refs/heads/new-ref $zero"
   [ "$(grep -Fc 'fetch-depth: 0' "$WORKFLOW")" -eq 1 ]
   grep -Fq 'BASE_SHA: ${{ github.event.pull_request.base.sha }}' "$WORKFLOW"
   grep -Fq 'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}' "$WORKFLOW"
+  grep -Fq 'TARGET_REF: ${{ github.ref }}' "$WORKFLOW"
+  ! grep -Fq 'GITHUB_REF_NAME:' "$WORKFLOW"
   grep -Fq -- '--range "$BASE_SHA..$PR_HEAD_SHA" --project .' "$WORKFLOW"
   grep -Fq -- '--all "$HEAD_SHA" --project .' "$WORKFLOW"
 }
 
 @test "git identity: workflow fails closed on missing variable event SHA history or policy" {
-  grep -Fq 'SHIPYARD_IDENTITY_EMAIL: ${{ vars.SHIPYARD_IDENTITY_EMAIL }}' "$WORKFLOW"
+  grep -Fq 'SHIPYARD_IDENTITY_EMAIL: ${{ secrets.SHIPYARD_IDENTITY_EMAIL }}' "$WORKFLOW"
+  ! grep -Fq 'vars.SHIPYARD_IDENTITY_EMAIL' "$WORKFLOW"
   grep -Fq 'identity email variable is missing' "$WORKFLOW"
   grep -Fq 'pull request identity range is missing' "$WORKFLOW"
   grep -Fq 'main identity revision is missing' "$WORKFLOW"

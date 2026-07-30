@@ -127,7 +127,7 @@ never copied into this ticket or another tracked file.
 - Add a tracked root `.shipyard-git-identity.toml` containing only the opt-in
   `[git_identity]` behavior (`enforce = true`) and canonical public name.
 - Store the canonical email in repository-local Git configuration and in a
-  GitHub Actions repository variable. The checker must fail closed when either
+  GitHub Actions repository secret. The checker must fail closed when either
   surface is absent.
 - Add a deterministic configuration command that sets the local policy from an
   explicitly supplied/effective identity, verifies the name against
@@ -164,7 +164,7 @@ never copied into this ticket or another tracked file.
 - Add a dedicated required GitHub Actions job with `fetch-depth: 0`. On pull
   requests it checks every introduced head commit; on `main` it audits complete
   reachable history so a bypass cannot create a false green.
-- Configure the GitHub repository variable for the canonical email without
+- Configure the GitHub repository secret for the canonical email without
   printing it.
 - Create active, no-bypass governance for `refs/heads/main` requiring a pull
   request and the identity status check. Add exact server-side author and
@@ -355,7 +355,7 @@ Pre-commit calls `--current` before content/deck gates. Pre-push calls
 `--pre-push "$1" "$2"` with its stdin before the best-effort mirror. CI uses
 `actions/checkout` with `fetch-depth: 0`; a dedicated job checks
 `base-sha..head-sha` on pull requests and `--all HEAD` on `main`, sourcing only
-the GitHub Actions variable `SHIPYARD_IDENTITY_EMAIL` into a temporary local Git
+the GitHub Actions secret `SHIPYARD_IDENTITY_EMAIL` into a temporary local Git
 key. Missing event SHAs, full history, variable, or policy must fail.
 
 #### Verification surface
@@ -536,7 +536,8 @@ email value in tracked text.
 - `builder: subagent (1 agent)`
 - `plan:` add the raw checker and hermetic red-first coverage only; the
   orchestrator will re-run every Phase 1 gate and commit the slice.
-- `commit:` `c41dde89e74e60029999710c3cbd5cf1a4fb2146`
+- `commit:` `91270a7fbc182f169f46164ad18ac843e120a14c`
+  (rewritten from `c41dde89e74e60029999710c3cbd5cf1a4fb2146`)
 - `red-first:` unchanged pre-push accepted a wrong author (`1/1`, exit `0`).
 - `focused/full gates:` checker Bats `25/25`; repository Bats `548/548`;
   syntax, leak, deck freshness/completeness/render, lifecycle, delegation,
@@ -550,7 +551,8 @@ email value in tracked text.
 - `builder: subagent (1 agent)`
 - `plan:` wire the committed checker through config, installer/doctor, hooks,
   CI, and focused documentation/tests; the orchestrator will re-run all gates.
-- `commit:` pending
+- `commit:` `69313b0affec5f145744b819a40eb74b3c1ebbc1`
+  (rewritten from `0d34304385ddc82e9c1751ea921167540d8115a0`)
 - `focused/full gates:` identity Bats `37/37`; repository Bats `560/560`;
   installer/hook regression subset `47/47`; syntax, leak, YAML parse, deck,
   lifecycle, delegation, Python bytecode, and diff checks exit `0`.
@@ -569,12 +571,22 @@ email value in tracked text.
 - `plan:` commit Phase 2; create immutable backup refs; recreate and compare the
   graph; publish under the recorded lease; verify remote CI/API/governance
   probes; then restore and release the paused priority tree.
-- `commit/map:` pending
-- `old/new equivalence:` pending
-- `force-with-lease and remote:` pending
+- `commit/map:` rewrite candidate/published tip
+  `69313b0affec5f145744b819a40eb74b3c1ebbc1`; final Phase 3 repair/evidence
+  commit pending.
+- `old/new equivalence:` 246/246 trees, exact message bytes, timestamps, and
+  ordered parent topology match; six intended identities changed; two
+  invalidated GitHub `gpgsig` headers removed.
+- `force-with-lease and remote:` remote
+  `a065ae171d599d5507276f606a317e35d6cddd9a` updated once under exact lease to
+  `69313b0affec5f145744b819a40eb74b3c1ebbc1`; GitHub API reports 246 commits
+  and zero non-canonical raw identities.
 - `GitHub rules/probes/workflows:` pending
 - `stash/index/checksums/handback:` pending
-- `notes/blockers:` pending
+- `notes/blockers:` initial checks run `30567533754` caught reserved
+  `GITHUB_REF_NAME` behavior (exit `2`); repair uses non-reserved `TARGET_REF`.
+  Ordinary Actions variables also print before shell redaction, so the email
+  moved to an Actions secret and the ordinary variable was deleted.
 
 ## Boundaries
 
@@ -610,7 +622,7 @@ email value in tracked text.
 - Blocked by: availability of enforceable GitHub branch governance that can
   reject non-canonical final commit metadata while accepting a PR-associated
   locally created canonical merge.
-- External state: GitHub Actions repository variable, ruleset/branch
+- External state: GitHub Actions repository secret, ruleset/branch
   protection, and merge-method settings for `wabbazzar/shipyard`.
 - Blocks: resumption and publication of the Codex release-feedback repair.
 

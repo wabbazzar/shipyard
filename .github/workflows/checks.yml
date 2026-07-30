@@ -13,12 +13,12 @@ jobs:
           fetch-depth: 0
       - name: raw author and committer identity
         env:
-          SHIPYARD_IDENTITY_EMAIL: ${{ vars.SHIPYARD_IDENTITY_EMAIL }}
+          SHIPYARD_IDENTITY_EMAIL: ${{ secrets.SHIPYARD_IDENTITY_EMAIL }}
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_SHA: ${{ github.sha }}
-          GITHUB_REF_NAME: ${{ github.ref }}
+          TARGET_REF: ${{ github.ref }}
         run: |
           set -eu
           fail() {
@@ -39,7 +39,7 @@ jobs:
                 --range "$BASE_SHA..$PR_HEAD_SHA" --project .
               ;;
             push)
-              [ "$GITHUB_REF_NAME" = "refs/heads/main" ] && [ -n "$HEAD_SHA" ] ||
+              [ "$TARGET_REF" = "refs/heads/main" ] && [ -n "$HEAD_SHA" ] ||
                 fail "main identity revision is missing"
               bash scripts/check-git-identity.sh --all "$HEAD_SHA" --project .
               ;;
