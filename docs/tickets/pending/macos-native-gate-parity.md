@@ -402,8 +402,8 @@ GREEN evidence, and honest deferrals before moving to the next phase.
 
 | Phase | Plan | Builder | Commit | Evidence / notes |
 |---|---|---|---|---|
-| 1 — Bash 3.2 contract | Add a RED launchd-interpreter regression, make the embedded Python comment parser-safe, then run native + modern syntax gates. | builder: subagent (1 agent) | this phase commit; exact hash recorded in Phase 2 update | RED: `/bin/bash -n agents/design/runner.sh` rc=2 with unmatched backtick. GREEN: portability Bats 1/1, native + modern full syntax PASS, compile/leak/deck PASS; render rc=3 (Playwright unavailable). |
-| 2 — portable UTC/mtime | pending | pending | pending | RED captured during polish: current-day event count 0; BSD touch rejection. |
+| 1 — Bash 3.2 contract | Add a RED launchd-interpreter regression, make the embedded Python comment parser-safe, then run native + modern syntax gates. | builder: subagent (1 agent) | `4bbc319` | RED: `/bin/bash -n agents/design/runner.sh` rc=2 with unmatched backtick. GREEN: portability Bats 1/1, native + modern full syntax PASS, compile/leak/deck PASS; render rc=3 (Playwright unavailable). |
+| 2 — portable UTC/mtime | Add RED native cases for current-day collection and stale self-test data, replace GNU-relative time operations with bounded Python, and prove source checksums stay unchanged. | builder: subagent (1 agent) | this phase commit; exact hash recorded in Phase 3 update | RED: native design Bats 0/2, current-day `job_fail=0`, BSD touch rejected relative time. GREEN: design + portability Bats 13/13; seven UTC days counted; stale incident excluded; SHA-256 sources unchanged; native/modern syntax, compile/leak/deck PASS. |
 | 3 — fixture utilities/final | pending | pending | pending | RED captured during polish: BSD `sed -i` aborts before product assertion. |
 
 Run this ticket with the `execute-ticket` skill.

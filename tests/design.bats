@@ -34,6 +34,18 @@ run_design() {
 opened_events() { events_json | jq -c 'select(.event=="design.proposal.opened")'; }
 skipped_events() { events_json | jq -c 'select(.event=="design.proposal.skipped")'; }
 
+source_checksums() {
+  python3 - "$@" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+
+for raw_path in sys.argv[1:]:
+    path = Path(raw_path)
+    print(f"{path.name}:{hashlib.sha256(path.read_bytes()).hexdigest()}")
+PY
+}
+
 # plant_telemetry <project> — canned events + fyi + usage in the fixture.
 plant_telemetry() {
   local p="$1" today
@@ -95,9 +107,19 @@ plant_telemetry() {
 @test "collectors count events, fyi, and usage from planted files" {
   P="$(make_fixture_project mentcol names-spacetime.toml)"
   plant_telemetry "$P"
+  EVENT_SOURCE="$(events_file)"
+  EXPECTED_UTC_DAY="$(python3 - <<'PY'
+from datetime import datetime, timezone
+print(datetime.now(timezone.utc).date())
+PY
+)"
+  [ "$(basename "$EVENT_SOURCE")" = "$EXPECTED_UTC_DAY.jsonl" ]
+  CHECKSUM_BEFORE="$(source_checksums "$EVENT_SOURCE")"
   run bash -c "QUARTET_DIR='$QUARTET_ROOT' QUARTET_EVENTS_DIR='$EVENTS_DIR' \
     bash '$QUARTET_ROOT/$COLLECTORS' --project '$P' --json"
   [ "$status" -eq 0 ]
+  CHECKSUM_AFTER="$(source_checksums "$EVENT_SOURCE")"
+  [ "$CHECKSUM_AFTER" = "$CHECKSUM_BEFORE" ]
   echo "$output" | jq -e . >/dev/null
   [ "$(echo "$output" | jq -r '.sources.events.job_fail')" = "1" ]
   [ "$(echo "$output" | jq -r '.sources.events.job_ok')" = "1" ]
@@ -251,4 +273,5 @@ JSON
 @test "--self-test exits 0" {
   run bash -c "QUARTET_DIR='$QUARTET_ROOT' bash '$QUARTET_ROOT/$RUNNER' --self-test"
   [ "$status" -eq 0 ]
+  [[ "$output" == *"stale incident excluded"* ]]
 }

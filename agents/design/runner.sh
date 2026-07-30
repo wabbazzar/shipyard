@@ -99,7 +99,15 @@ TOML
   # ever show up in collect_signals()'s sources.medic_incidents.
   echo '{"incident_id":"stale1","detected_at":"2026-01-01T00:00:00Z","reason":"old"}' \
     >"$PROJ/tmp/medic-incident-stale.json"
-  touch -d "40 days ago" "$PROJ/tmp/medic-incident-stale.json"
+  python3 - "$PROJ/tmp/medic-incident-stale.json" <<'PY' \
+    || fail "could not set stale incident mtime"
+from datetime import datetime, timedelta, timezone
+import os
+import sys
+
+timestamp = (datetime.now(timezone.utc) - timedelta(days=40)).timestamp()
+os.utime(sys.argv[1], (timestamp, timestamp))
+PY
   echo '{"incident_id":"fresh1","detected_at":"'"$TODAY"'T00:00:00Z","reason":"new"}' \
     >"$PROJ/tmp/medic-incident-fresh.json"
 

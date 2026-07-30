@@ -43,15 +43,26 @@ _design_events_dir() {
 # _read_events <events-dir> <days> — concatenate the last <days> daily
 # JSONL files (today + preceding), corrupt-line-safe, as compact objects.
 _read_events() {
-  local dir="$1" days="${2:-7}" i d f
+  local dir="$1" days="${2:-7}" d f
   [ -d "$dir" ] || return 0
-  for ((i=0; i<days; i++)); do
-    d="$(date -u -d "-$i day" +%Y-%m-%d 2>/dev/null)" || d=""
-    [ -n "$d" ] || continue
+  while IFS= read -r d; do
     f="$dir/$d.jsonl"
     [ -f "$f" ] || continue
     jq -R 'fromjson?' <"$f" 2>/dev/null
-  done
+  done < <(python3 - "$days" <<'PY'
+from datetime import datetime, timedelta, timezone
+import sys
+
+try:
+    days = max(0, int(sys.argv[1]))
+except ValueError:
+    days = 0
+
+today = datetime.now(timezone.utc).date()
+for offset in range(days):
+    print(today - timedelta(days=offset))
+PY
+)
 }
 
 # _domain_from_config <cfg-json> — first host from a medic probe URL, or "".
