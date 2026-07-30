@@ -402,7 +402,7 @@ GREEN evidence, and honest deferrals before moving to the next phase.
 
 | Phase | Plan | Builder | Commit | Evidence / notes |
 |---|---|---|---|---|
-| 1 — Bash 3.2 contract | pending | pending | pending | RED captured during polish: `/bin/bash -n agents/design/runner.sh` rc=2. |
+| 1 — Bash 3.2 contract | Add a RED launchd-interpreter regression, make the embedded Python comment parser-safe, then run native + modern syntax gates. | builder: subagent (1 agent) | this phase commit; exact hash recorded in Phase 2 update | RED: `/bin/bash -n agents/design/runner.sh` rc=2 with unmatched backtick. GREEN: portability Bats 1/1, native + modern full syntax PASS, compile/leak/deck PASS; render rc=3 (Playwright unavailable). |
 | 2 — portable UTC/mtime | pending | pending | pending | RED captured during polish: current-day event count 0; BSD touch rejection. |
 | 3 — fixture utilities/final | pending | pending | pending | RED captured during polish: BSD `sed -i` aborts before product assertion. |
 

@@ -366,7 +366,7 @@ ts          = os.environ["TS"]
 available   = int(os.environ.get("AVAILABLE", "3"))
 raw         = os.environ.get("CLAUDE_TEXT", "")
 
-# strip ```json fences if the model added them
+# strip fenced JSON markers if the model added them
 m = re.search(r"\[.*\]", raw, re.S)
 proposals = []
 if m:
