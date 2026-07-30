@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-30
 - **Owner:** wabbazzar
-- **Status:** Pending — polished, ready for `execute-ticket`
+- **Status:** In Progress — implementation committed; live proof pending
 - **Type:** bugfix
 - **Estimated Points:** 8
 - **Refs:** `docs/tickets/complete/harness-agnostic-shoulder-mode.md`,
@@ -69,11 +69,11 @@ It affects any Codex-authored project installed in the same shape.
    for its originating `session_id`; later critiques cannot overwrite earlier
    undelivered items and findings cannot cross sessions.
 2. A Codex hook at the next supported local-tool boundary emits pending items
-   as concise model-visible `additionalContext`. Delivery is durable
-   **at-least-once**, because Codex provides no model-consumption
-   acknowledgement: every item carries a stable critique ID so a replay is
-   recognizable, and an ambiguous crash must prefer a duplicate over silent
-   loss.
+   as concise `additionalContext`, the official model-visible output shape.
+   Shipyard can guarantee durability only through one valid hook-emission
+   attempt because Codex provides no model-consumption acknowledgement. Every
+   item carries a stable critique ID; an ambiguous pre-emission crash replays,
+   while post-emission model consumption remains explicitly unacknowledged.
 3. The final-turn path cannot silently lose a pending critique. In required
    mode, a Codex `Stop` hook must deliver completed items or request an urgent
    watcher flush, bypass debounce, wait/continue only within a bounded state
@@ -140,12 +140,14 @@ required state transitions and observable contract.
 | D4 | Install remains opt-in; unset behavior stays byte-for-byte equivalent. |
 | D5 | The full acceptance gate uses a fresh Codex process because a running process does not reload new hook definitions. The builder must review/trust the exact definitions through `/hooks`; bypassing trust is allowed only for the separate isolated automation probe and does not prove the normal install trusted. |
 | D6 | `require_feedback = true` is fail-closed but bounded: it may continue a Stop turn at most twice. The first continuation requests/awaits urgent flush; the second reports an explicit release-critic hard blocker. A third Stop may end only after that blocker is the last assistant outcome. |
+| D7 | Authoring and reviewing harnesses are independent config axes. `[shoulder] harness` selects the active session that receives findings; `[shoulder] critic_harness` selects the cold release model. Both accept `claude`, `codex`, or `hermes`; changing either is configuration, never a code fork. |
+| D8 | This repair must preserve the existing Claude injector/fallback and Hermes native-send behavior with compatibility tests. Adding native Codex delivery must not make either existing pathway blocked, deprecated, or subordinate. |
 
 ### Open with defaults
 
 | # | Question | Default |
 |---|---|---|
-| O1 | Mailbox storage shape | `tmp/critic-feedback/<sha256(session_id)>/{pending,claims,emitted}/<epoch>-<critique_id>.json`; schema version 1, mode `0700` directory/`0600` file, 32 KiB and 50-line summary cap, stable SHA-256 critique ID, oldest-first drain, `mkdir` cross-process lock with a 30-second stale-claim lease, and 7-day emitted/stale cleanup. |
+| O1 | Mailbox storage shape | A user-private XDG state root, `${XDG_STATE_HOME:-$HOME/.local/state}/shipyard/critic-feedback`, with an installer-owned allowlist and `<sha256(canonical-project)>/<sha256(session_id)>/{pending,claims,emitted,quarantine}/<epoch>-<critique_id>.json`; schema version 1, mode `0700` directory/`0600` file, no symlink components/items, a 128 KiB hook-input cap, 8 KiB and 50-line summary cap, checked SHA-256 operations, stable critique ID, oldest-first drain, token+PID/process-start-identity `mkdir` lock recovery, and 7-day emitted/quarantine cleanup. |
 | O2 | Hook boundary | Drain on all supported local `PostToolUse` events; use `Stop` for final-turn delivery/pending-work continuation. This preserves asynchronous critique and avoids blocking every edit. |
 | O3 | Required-feedback policy | Add `[shoulder] require_feedback`; unset/false remains note-only, while Aurora enables it for the repair and resumed ticket. |
 | O4 | Critic harness for Aurora | Set `[shoulder] critic_harness = "codex"` so the installed watcher uses the available authenticated harness instead of the currently failing Claude spawn path. |
@@ -220,36 +222,49 @@ of pre-change `main`, then make it green in the working tree.
 **Slice.**
 
 - Add `agents/release/critic-codex-feedback.sh`. On a Codex `PostToolUse`
-  payload it resolves the project from `.cwd`, hashes the opaque `.session_id`,
-  takes the session `mkdir` lock, recovers claims older than 30 seconds, and
-  claims the oldest immutable schema-v1 item under
-  `tmp/critic-feedback/<session-hash>/pending/`. With no pending item it exits
-  `0` silently. With one, it emits exit-0 JSON exactly shaped as
+  payload it resolves the canonical project from `.cwd`, requires that exact
+  project in the private installer-owned allowlist, hashes canonical project
+  plus opaque `.session_id`, takes the token/PID/process-start-safe session
+  lock, recovers dead-owner claims, and claims the oldest immutable schema-v1 item from the
+  external XDG state root. No workspace-controlled file can become hook
+  context. With no pending item it exits `0` silently. With one, it emits
+  exit-0 JSON exactly shaped as
   `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":
   "Release critic [<critique-id>]: ..."}}`. Plain stdout is invalid and normal
   comment delivery must not use `decision:block` or `continue:false`, because
   those replace the completed tool result. After successful JSON emission the
-  item moves to `emitted/`; an ambiguous crash may replay the same stable ID.
+  item moves to `emitted/`; an ambiguous pre-emission crash may replay the same
+  stable ID, while model consumption after valid output is not acknowledged.
+  Malformed hook input/state fails open (`0`, no stdout) and moves unsafe items
+  to private quarantine with a private error marker rather than head-of-line
+  blocking later tools.
 - In `critic-note.sh --harness codex`, use `CRITIC_PROJECT_DIR` to atomically
-  deposit a new immutable item for that exact session without overwriting older
-  work. Derive `critique_id` from the reviewed snapshot plus summary, write via
-  temp-file + `mv` under the same lock, set directory/file permissions, and
-  garbage-collect emitted/stale files older than seven days. Return `0` only
-  after the mailbox rename succeeds. Missing project configuration must return
-  a retryable nonzero status rather than owner-alert/log success.
+  deposit a new immutable item for that exact allowlisted canonical project and
+  session without overwriting older work. Derive `critique_id` from the reviewed
+  snapshot plus summary, write via temp-file + `mv` under the same lock, reject
+  symlink/non-owner/non-private state, and garbage-collect emitted/quarantined
+  files older than seven days. Return `0` only after the item and parent
+  directory are synced; a stable-ID retry must re-prove that durability before
+  acknowledging the reviewed edit queue. Missing authorization or deposit
+  failure is retryable and cannot fall through to a human-only success.
 - In `critic-watch.sh`, derive `CRITIC_NOTE_ID` from the exact queue snapshot
   plus findings and export it only for the existing two-argument note-command
   invocation. Existing external delivery commands keep their argv contract and
   may ignore the new environment value.
-- Preserve custom `CRITIC_NOTE_DELIVER_CMD`, Claude, and Hermes behavior.
-- Enforce the locked 32 KiB/50-line cap before deposit and JSON-escape with
-  `jq`; do not read the authoring transcript.
+- For Codex, native durable deposit is authoritative and happens before any
+  optional custom injector/owner duplicate notification. Preserve custom
+  injector pass-through for Claude and Hermes behavior.
+- Enforce a 128 KiB hook-input cap and the locked 8 KiB/50-line summary cap
+  with bounded/streaming reads before deposit; JSON-escape with `jq` and do not
+  read the authoring transcript.
 - Add `tests/codex-feedback-delivery.bats` covering no-pending silence, correct
   exit-0 JSON/schema, exact session isolation, stable-ID dedupe, two queued
   critiques with no overwrite, oldest-first emission, permitted same-ID replay
   after an ambiguous claim, invalid session/path rejection, malformed mailbox
-  restore, 32 KiB/50-line bounds, 30-second claim recovery, 7-day cleanup,
-  simultaneous writers/drainers under the real lock, mode bits, atomic replace,
+  fail-open quarantine, hook/summary bounds, live-owner lease protection,
+  dead-owner and reused-PID recovery, file/directory durability, 7-day cleanup,
+  simultaneous writers/drainers under the real lock, bounded visible lock
+  contention, exact-prefix queue acknowledgement, mode bits, atomic replace,
   and the former Codex log-and-skip false success.
 
 **Red-first proof.**
@@ -266,7 +281,8 @@ checkout.
 bats tests/codex-feedback-delivery.bats \
   tests/shoulder-mode-harness.bats tests/shoulder-mode.bats
 bash -n agents/release/critic-codex-feedback.sh \
-  agents/release/critic-note.sh agents/release/critic-watch.sh
+  agents/release/critic-note.sh agents/release/critic-queue-lib.sh \
+  agents/release/critic-watch.sh
 bash scripts/leak-check.sh
 git diff --check
 ```
@@ -274,10 +290,11 @@ git diff --check
 Run the new hook once with a canned `PostToolUse` payload and read the actual
 JSON with `jq -e`; then run it again and observe empty output.
 
-**Observable DoD.** A Codex critique summary becomes valid model-visible hook
-JSON for only its originating session; immutable items are delivered
-at-least-once with stable IDs and no overwrite; a failed deposit/drain keeps
-recoverable state; focused gates pass.
+**Observable DoD.** A Codex critique summary becomes valid hook JSON for only
+its originating authorized project/session; immutable items remain durable
+through one valid emission attempt with stable IDs and no overwrite; ambiguous
+pre-emission failure replays, post-emission model consumption is honestly
+unacknowledged, and unsafe state fails open into quarantine; focused gates pass.
 
 **Delegation:** subagent — implement the mailbox writer/drainer and focused
 red-first tests only; return ≤40 lines with files, red/green case names, exact
@@ -305,7 +322,7 @@ exit codes, and blockers.
   4. if still pending, return one continuation reason telling Codex the release
      review is pending and that no completion claim is allowed.
 - When `stop_hook_active = true`, poll once more for at most 20 seconds. Deliver
-  all ready summaries within the 32 KiB cap if they arrived. If not, write a
+  all ready summaries within the 8 KiB cap if they arrived. If not, write a
   terminal state and return one final continuation reason:
   `Release critic unavailable (<budget|spawn|watcher|delivery|timeout>); stop
   all implementation and report this hard blocker to the user.` On the next
@@ -376,12 +393,18 @@ return ≤40 lines with files, red/green cases, exact JSON/exits, and blockers.
   active state. The captured Aurora legacy unit and configured-but-never-run
   hooks must fail doctor before repair.
 - Keep install without shoulder opt-in byte-identical. Do not alter existing
-  Claude/Hermes wiring.
+  Claude/Hermes behavior. Parse and validate `[shoulder] harness` and
+  `[shoulder] critic_harness` independently against
+  `claude|codex|hermes`; invalid values exit `2`. The watcher receives
+  `CRITIC_HARNESS` from `critic_harness`, while capture/delivery wiring uses
+  `harness`.
 - Extend `tests/shoulder-wire.bats` (and a focused unit fixture if clearer) for
   three-hook additive/idempotent wiring, unrelated hook survival, watcher unit
   generation, legacy-unit replacement, missing-hook/env/unit doctor failures,
   configured-but-runtime-unverified doctor failure, runtime-seen doctor success,
-  and unset invariance.
+  unset invariance, all three valid authoring/reviewer selections, independent
+  authoring-vs-reviewer selection, invalid-value exit `2`, and unchanged
+  Claude/Hermes delivery contracts.
 - Unit ownership is explicit: installer writes
   `~/.config/systemd/user/<project>-<release-display>-watch.service` through a
   temporary file and atomic rename, then `systemctl --user daemon-reload` and
@@ -513,13 +536,145 @@ Append before each phase: the slice plan, `builder:` line, red-first evidence,
 verification outputs, commit hash, and any default applied. Never record a
 secret, machine-specific home path, or raw session identifier.
 
+### Phase 1 — complete
+
+- **Plan:** add the immutable per-session feedback mailbox, stable critique
+  IDs, atomic/capped Codex note deposit, model-visible PostToolUse drain, and
+  red-first concurrency/recovery coverage. Preserve all non-Codex delivery
+  behavior.
+- **builder:** subagent (2 builders + 1 cold reviewer)
+- **Baseline:** combined cross-platform `main` is clean; `bats tests/` passed
+  523/523; syntax, Python compile, leak, deck freshness/completeness, lifecycle,
+  doctor, and diff checks all exited 0.
+- **Red-first:** the new model-visible delivery and former false-success cases
+  failed against the pre-change behavior. Later critic-driven regressions also
+  failed before remediation: oversized hook input timed out, deposit ignored a
+  simulated sync failure, a writer lost an edit after more than one second of
+  lock contention, and a reused process ID pinned stale queue/mailbox locks.
+- **Verification:** root rerun `bats tests/codex-feedback-delivery.bats
+  tests/shoulder-mode-harness.bats tests/shoulder-mode.bats` at 74/74, the
+  phase shell syntax sweep exited 0, leak-check was clean, and working/cached
+  diff checks exited 0. Eight repeated concurrent-writer stress passes were
+  green. The cold final diff audit reported no Phase-1 blocker.
+- **Real critic proof:** a real Codex release critic produced findings from the
+  queued diff and the feedback hook returned those findings as valid
+  `PostToolUse.additionalContext` JSON in the active Codex session. A second
+  drain emitted no duplicate.
+- **Defaults applied:** O1 mailbox/state limits and O2 all-local PostToolUse
+  boundary exactly as recorded above.
+- **Integration correction:** the final full-suite pass exposed a shell-owner
+  race that the earlier focused stress had not triggered: one Bash execution
+  shape reported a short-lived helper PID. The portable path now uses
+  `BASHPID` when available and a foreground-child parent probe on stock macOS
+  Bash 3.2. Direct disappearing-process and Bash-3.2-fallback cases are green.
+- **Commit:** integrated implementation commit
+  `19abfe27ca8008187c61157046637b9295aebb19`. The phase was not committed
+  independently because the pre-Phase-3 fresh-install authorization gap made
+  that intermediate tree unreleasable.
+
+### Phase 2 — complete
+
+- **Plan:** add the crash-safe Stop claim/commit/rollback path, bounded
+  required-feedback state machine, urgent watcher bypass, per-session status,
+  and exact cleanup for completed and clean paths.
+- **builder:** subagent (Stop state machine and focused tests)
+- **Red-first:** the completed-mailbox and first-required-Stop cases failed
+  0/2 with exit `1` against pre-change behavior; both produced empty legacy
+  output and `jq` exit `4`.
+- **Verification:** the required focused matrix passed 72/72. Pending,
+  completed, terminal, and clean canned Stop payloads all returned their exact
+  documented JSON/exit shapes. Invalid `require_feedback` and non-boolean
+  `stop_hook_active` payloads exit `2`. Maximum-size summaries emit whole;
+  abandoned pre-emission claims replay the same stable ID; later ready items
+  remain pending rather than being partially acknowledged.
+- **Hardening:** state, flush, and status files clear on success; state reads
+  require owner, mode `0600`, and link count `1`; required-mode budget, spawn,
+  and delivery failures preserve the reviewed queue.
+- **Commit:** integrated implementation commit
+  `19abfe27ca8008187c61157046637b9295aebb19`.
+
+### Phase 3 — complete
+
+- **Plan:** provision the exact three-hook Codex bundle, project
+  authorization, independent author/reviewer harnesses, systemd-compatible
+  env, atomic watcher replacement/rollback, runtime proof, and loaded-unit
+  doctor checks.
+- **builder:** subagent (installer, doctor, unit wiring, and focused tests)
+- **Red-first:** the original seven hook/env/unit/doctor cases failed with
+  exit `1`; rollback and stale-loaded-unit cases also failed before their
+  respective fixes.
+- **Verification:** `tests/shoulder-wire.bats` passed 19/19 and the combined
+  Phase-3 matrix passed 91/91. The hermetic dry-run exited `0`, printed the
+  complete `WorkingDirectory`, `EnvironmentFile`, `ExecStart`, restart, and
+  `WantedBy` surface, and left config/env/unit checksums unchanged. Syntax,
+  leak, and diff gates passed.
+- **Hardening:** TOML parsing falls back from `tomllib` to `tomli`; wrapper
+  input is capped at 128 KiB; runtime state is private and rejects hardlinks;
+  env/unit writes are target-adjacent atomic renames; activation failure
+  restores the exact prior env/unit and loaded service. Doctor queries the
+  loaded unit as well as its file, so a repaired file with a stale active
+  definition remains red.
+- **Commit:** integrated implementation commit
+  `19abfe27ca8008187c61157046637b9295aebb19`.
+
+### Integrated release gates — complete
+
+- **Plan:** independently audit the merged production/test surface, remediate
+  findings, and run the complete repository battery before any fleet-live
+  change.
+- **builder:** inline (the orchestrator must read the cold findings and every
+  release-gate result itself)
+- **Cold review:** three fresh read-only Codex critics audited bounded
+  mailbox, queue/watcher, and install/Stop batches. They found a
+  symlink-followable watcher-status temporary name and string-vs-boolean Stop
+  validation; both were fixed with targeted green cases. A cross-file
+  follow-up returned `AUDIT_RESULT=NO_BLOCK`. The apparent missing
+  authorization finding was a batching artifact and the installer batch
+  confirmed the exact allowlist provisioning path.
+- **Verification:** `bats tests/` passed 659/659. The full shell syntax sweep,
+  Python compile, leak firewall, deck freshness, deck completeness, deck DOM
+  render, lifecycle check, Shipyard doctor, delegation report, and diff check
+  all exited `0`.
+- **Commit:** `19abfe27ca8008187c61157046637b9295aebb19`,
+  canonical identity verified with the Codex co-author trailer.
+
+### Phase 4 — in progress
+
+- **Plan:** preserve the exact prior Aurora config/unit/env/Codex config,
+  enable the approved Codex/Codex required-feedback configuration, install the
+  trusted three-hook bundle and watcher, then prove deterministic nonce
+  visibility and one real cold-critic round trip in fresh normal Codex
+  sessions. Clean only bounded probe state and leave the watcher active.
+- **builder:** inline (fleet-live authorization, process observation, rollback
+  custody, and model-context proof cannot be delegated)
+- **Pre-live gate:** the implementation is committed locally only after the
+  659/659 battery and cold `NO_BLOCK` review. Push, CI, live installation,
+  rollback record, fresh-session evidence, and Signal owner notification
+  remain pending.
+
+### Follow-up — dual-model pull-request release gate
+
+After this blocker and Aurora ticket 043, scope a separate feature for
+independent Claude+Codex pull-request reviews whose findings are posted as
+attributed GitHub PR comments. That ticket must define spend caps, duplicate
+finding reconciliation, disagreement/escalation behavior, required-vs-advisory
+merge status, comment update/idempotence, and failure behavior when only one
+reviewer completes. It is deliberately not part of this live shoulder-delivery
+repair.
+
+Also consider streaming exact-prefix comparison/copy for unusually large edit
+queues. Phase 1 keeps the queue lock bounded and fail-open, but the current
+prefix operation reads the reviewed queue into memory; this is a hardening
+follow-up, not a correctness blocker for the present small queue contract.
+
 ## Definition of Done
 
 - [ ] A regression test fails against pre-change `main` on the captured defect
       and passes with the fix.
-- [ ] Codex findings are durably keyed to the originating session and surfaced
-      at-least-once as model-visible hook context with stable IDs; ambiguous
-      recovery may replay but cannot silently lose or overwrite an item.
+- [ ] Codex findings are durably keyed to the authorized canonical project and
+      originating session through one valid hook emission, with stable IDs and
+      no overwrite; ambiguous pre-emission recovery may replay, while
+      post-emission model consumption is explicitly unacknowledged.
 - [ ] Stop either delivers required feedback or causes the authoring Codex to
       report a named hard blocker within the two-continuation ceiling.
 - [ ] A failed model-delivery attempt remains retryable; a human alert or log
