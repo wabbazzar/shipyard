@@ -384,6 +384,31 @@ are complete.
 
 Append before and after each phase. Required shape:
 
+### Phase 1 — Installer and Doctor share a safe role contract
+
+builder: subagent (1 agent)
+
+plan: Own `install.sh` and the focused installer/Doctor/launchd tests; capture
+the pre-change RED for partial-role activation, implement D-1 through D-4 and
+D-7, and return focused evidence for orchestrator re-verification.
+
+commit: Phase 1 commit (hash recorded in the Phase 2 Ledger entry).
+
+evidence: Execute baseline before source edits passed `668/668`; configured
+syntax, Python compile, leak, deck freshness/completeness, and Shipyard Doctor
+all exited `0`. RED-first cases proved the old installer created and enabled
+all four roles for implicit systemd and launchd partial installs; explicit
+missing prompts returned `0` and mutated files; Doctor returned clean. After
+implementation, the orchestrator ran
+`bats tests/doctor.bats tests/gap-fixes.bats tests/launchd-install.bats`:
+`61/61` passed. `bash -n install.sh`, `git diff --check`, and leak check exited
+`0`. The explicit failure case snapshots project/manifests and proves zero
+`systemctl` and `crontab` calls. Ice timer state remained
+`disabled/disabled/disabled/enabled` and
+`inactive/inactive/inactive/active`.
+
+deferred: none
+
 ```text
 ### Phase N — <title>
 builder: subagent (1 agent) | inline (<allowed reason>)

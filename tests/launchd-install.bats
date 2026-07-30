@@ -29,6 +29,25 @@ do_install() {
       --agents build,release,medic "$@"
 }
 
+@test "launchd: implicit partial install uses the same eligible role set" {
+  P="$(make_fixture_project macpartial clean-install.toml)"
+  fixture_replace_in_place "$P/.agents/config.toml" \
+    '^\[install\.timers\]\n(?:[^\n]*\n)*' \
+    $'[install.timers]\nscribe = "*-*-* 01:00:00"\n'
+  rm -f "$P/.agents/build.md" "$P/.agents/release.md" "$P/.agents/medic.md"
+
+  run env QUARTET_DIR="$QUARTET_ROOT" QUARTET_EVENTS_DIR="$EVENTS_DIR" \
+    QUARTET_NOTIFY_CMD="$NOTIFY_CMD" SHIPYARD_SCHEDULER=launchd \
+    /bin/bash "$QUARTET_ROOT/install.sh" --project "$P"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ -f "$JOBS/macpartial-scribe.plist" ]
+  [ ! -e "$JOBS/macpartial-build.plist" ]
+  [ ! -e "$JOBS/macpartial-release.plist" ]
+  [ ! -e "$JOBS/macpartial-medic.plist" ]
+  [ "$(grep -c '^bootstrap ' "$SHIM_LOG/launchctl.argv")" -eq 1 ]
+}
+
 @test "launchd install emits and loads exactly the requested role subset" {
   launchd_fixture
   do_install >/dev/null

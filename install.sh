@@ -10,8 +10,9 @@
 #
 #   --project    Path to the target project (must contain .agents/config.toml).
 #   --dry-run    Print every change without writing anything.
-#   --agents     Comma list of roles to install. Default: build,release,medic,scribe
-#                (design is opt-in).
+#   --agents     Comma list of roles to install. Without it, reuse configured
+#                or enabled roles; a fresh project defaults to
+#                build,release,medic,scribe (design is opt-in).
 #   --doctor     Read-only conformance audit of this project's crew install.
 #                Prints `DOCTOR <class>: <detail>` one line per finding; exit 0
 #                clean / 1 on drift. Never writes, never touches the scheduler.
@@ -140,6 +141,7 @@ usage() {
 PROJECT_DIR=""
 DRY_RUN=0
 AGENTS="build,release,medic,scribe"
+AGENTS_EXPLICIT=0
 THEME="plain"
 THEME_EXPLICIT=0
 MODE="install"   # install | doctor | configure-git-identity | relink | uninstall
@@ -150,7 +152,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --project)   PROJECT_DIR="$2"; shift 2 ;;
     --dry-run)   DRY_RUN=1; shift ;;
-    --agents)    AGENTS="$2"; shift 2 ;;
+    --agents)    AGENTS="$2"; AGENTS_EXPLICIT=1; shift 2 ;;
     --theme)     THEME="$2"; THEME_EXPLICIT=1; shift 2 ;;
     --doctor)    MODE="doctor"; shift ;;
     --configure-git-identity) MODE="configure-git-identity"; shift ;;
@@ -373,6 +375,78 @@ timer_enabled() {
   esac
 }
 
+# resolve_effective_roles — print the role set shared by install and Doctor.
+# An explicit --agents list is authoritative and keeps caller order. Otherwise
+# use configured timer keys union roles with a currently enabled canonical crew
+# job, in canonical order. Only a genuinely fresh/undeclared project gets the
+# historical four-role default.
+resolve_effective_roles() {
+  local role unit requested="${AGENTS//,/ }" timer_roles enabled=0 resolved=""
+  if [ "$AGENTS_EXPLICIT" = "1" ]; then
+    [ -n "$requested" ] || {
+      echo "--agents requires at least one role" >&2
+      return 2
+    }
+    for role in $requested; do
+      case " $QUARTET_ROLES " in
+        *" $role "*) : ;;
+        *)
+          echo "unknown role in --agents: $role (want design,build,release,medic,scribe)" >&2
+          return 2
+          ;;
+      esac
+    done
+    printf '%s\n' "$requested"
+    return 0
+  fi
+
+  timer_roles="$(
+    jq -r '(.install.timers // {}) | keys[]' <<<"$CFG_JSON" 2>/dev/null
+  )"
+  for role in $QUARTET_ROLES; do
+    if printf '%s\n' "$timer_roles" | grep -Fxq "$role"; then
+      resolved="${resolved:+$resolved }$role"
+      continue
+    fi
+    enabled=0
+    while IFS= read -r unit; do
+      [ -n "$unit" ] || continue
+      if timer_enabled "$unit"; then
+        enabled=1
+        break
+      fi
+    done <<<"$(crew_units_for_role "$role")"
+    [ "$enabled" = "1" ] && resolved="${resolved:+$resolved }$role"
+  done
+  [ -n "$resolved" ] || resolved="build release medic scribe"
+  printf '%s\n' "$resolved"
+}
+
+required_prompt_for_role() {
+  case "$1" in
+    build|release|medic|scribe)
+      printf '%s/.agents/%s.md\n' "$PROJECT_DIR" "$1"
+      ;;
+    design) return 1 ;;
+  esac
+}
+
+# Explicit prompt preflight is intentionally before any install write or
+# scheduler call. Implicit selection may make read-only scheduler queries while
+# resolving the enabled-role half of the eligibility union, but still performs
+# no mutation before every required prompt is known to exist.
+preflight_required_prompts() {
+  local role prompt missing=""
+  for role in $ROLES_LIST; do
+    prompt="$(required_prompt_for_role "$role" || true)"
+    [ -z "$prompt" ] || [ -f "$prompt" ] ||
+      missing+="${missing:+$'\n'}  $role: $prompt"
+  done
+  [ -z "$missing" ] && return 0
+  printf 'install: missing required project prompts\n%s\n' "$missing" >&2
+  return 2
+}
+
 crew_manifest_path() {
   case "$SCHEDULER" in
     systemd) printf '%s/%s.service\n' "$SYSTEMD_DIR" "$1" ;;
@@ -408,21 +482,17 @@ run_doctor() {
   # job; installer default when both are empty. (The installed agent set is
   # not recorded in config, so this is the honest lower bound — extra
   # installed roles are tolerated, a scheduled-but-not-running role is caught.)
-  local timer_roles enabled_roles="" expected
-  timer_roles="$(jq -r '(.install.timers // {}) | keys[]' <<<"$CFG_JSON" 2>/dev/null)"
-  for role in $QUARTET_ROLES; do
-    while IFS= read -r u; do
-      [ -z "$u" ] && continue
-      timer_enabled "$u" && { enabled_roles+="$role "; break; }
-    done <<<"$(crew_units_for_role "$role")"
-  done
-  expected="$(printf '%s\n%s\n' "$timer_roles" "$(printf '%s' "$enabled_roles" | tr ' ' '\n')" \
-    | sed '/^$/d' | sort -u)"
-  [ -z "$expected" ] && expected="build release medic scribe"
+  local expected
+  expected="$(resolve_effective_roles)" || return $?
 
   # (a) each expected role: an enabled crew unit whose ExecStart runner lives
   #     under $QUARTET_DIR (realpath-tolerant — the compat symlink path is ok).
   for role in $expected; do
+    local prompt
+    prompt="$(required_prompt_for_role "$role" || true)"
+    if [ -n "$prompt" ] && [ ! -f "$prompt" ]; then
+      emit "prompt: expected '$role' project prompt missing: $prompt"
+    fi
     local units; units="$(crew_units_for_role "$role")"
     if [ -z "$units" ]; then
       emit "unit: expected '$role' crew unit missing for $PROJECT_NAME"
@@ -903,6 +973,11 @@ case "$MODE" in
   relink)                run_relink; exit $? ;;
   uninstall)             run_uninstall; exit $? ;;
 esac
+
+# Resolve and validate the scheduler role set before install mutates config,
+# project files, manifests, crontab, or scheduler state.
+ROLES_LIST="$(resolve_effective_roles)" || exit $?
+preflight_required_prompts || exit $?
 
 # ---------- theme → [names] block -------------------------------------------
 # Resolve the theme into a display name per role (order: design build release

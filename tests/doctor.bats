@@ -120,6 +120,38 @@ retired_word_a() { printf '%s' "au""gur"; }
   [[ "$output" == *"DOCTOR unit: 'medic' present but its timer is not enabled"* ]]
 }
 
+@test "doctor: expected role missing its required prompt is a finding" {
+  doctor_install
+  rm -f "$P/.agents/build.md"
+  run_doctor
+  echo "$output"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"DOCTOR prompt: expected 'build' project prompt missing"* ]]
+  [[ "$output" == *"$P/.agents/build.md"* ]]
+}
+
+@test "doctor: disabled undeclared latent roles do not require prompts" {
+  P="$(make_fixture_project docpartial clean-install.toml)"
+  fixture_replace_in_place "$P/.agents/config.toml" \
+    '^\[install\.timers\]\n(?:[^\n]*\n)*' \
+    $'[install.timers]\nscribe = "*-*-* 01:00:00"\n'
+  rm -f "$P/.agents/build.md" "$P/.agents/release.md" "$P/.agents/medic.md"
+  QUARTET_DIR="$QUARTET_ROOT" \
+    bash "$QUARTET_ROOT/install.sh" --project "$P" >/dev/null 2>&1
+
+  for role in build release medic; do
+    sed "s#agents/scribe/#agents/$role/#" \
+      "$UNITS/docpartial-scribe.service" >"$UNITS/docpartial-$role.service"
+    cp "$UNITS/docpartial-scribe.timer" "$UNITS/docpartial-$role.timer"
+    touch "$UNITS/docpartial-$role.timer.disabled"
+  done
+
+  run_doctor
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ -z "$(printf '%s' "$output" | grep '^DOCTOR ' || true)" ]
+}
+
 @test "doctor (a): ExecStart runner not under \$QUARTET_DIR -> finding" {
   doctor_install
   fixture_replace_in_place "$UNITS/docp-build.service" \

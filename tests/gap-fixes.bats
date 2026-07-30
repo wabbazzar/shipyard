@@ -18,6 +18,26 @@ setup() {
   quartet_setup
 }
 
+# Content-and-link snapshot of installer-owned fixture surfaces. Git internals
+# are excluded: the contract under test is that project files and scheduler
+# manifests remain byte-for-byte unchanged when prompt preflight fails.
+fixture_surface_snapshot() {
+  local root path
+  for root in "$@"; do
+    [ -e "$root" ] || continue
+    while IFS= read -r -d '' path; do
+      if [ -L "$path" ]; then
+        printf 'link %s -> %s\n' "$path" "$(readlink "$path")"
+      else
+        sha256sum "$path"
+      fi
+    done < <(
+      find -P "$root" -path '*/.git' -prune -o \
+        \( -type f -o -type l \) -print0 | sort -z
+    )
+  done
+}
+
 # ---------------------------------------------------------------------------
 # Local helpers
 # ---------------------------------------------------------------------------
@@ -183,6 +203,65 @@ run_medic_scan() {
     QUARTET_OPS_JSON="$OPS_JSON" \
     QUARTET_SOURCE="test" \
     bash "$QUARTET_ROOT/agents/medic/runner.sh" --project "$1" --mode scan
+}
+
+# ---------------------------------------------------------------------------
+# Partial-install role eligibility and fail-closed prompt preflight
+# ---------------------------------------------------------------------------
+
+@test "install: implicit Scribe-only reinstall selects no latent roles" {
+  make_stub systemctl 0
+  make_stub crontab 0 ""
+  make_stub gh 0
+  make_stub claude 0
+  P="$(make_fixture_project partial-implicit clean-install.toml)"
+  UNITS="$HOME/.config/systemd/user"
+  fixture_replace_in_place "$P/.agents/config.toml" \
+    '^\[install\.timers\]\n(?:[^\n]*\n)*' \
+    $'[install.timers]\nscribe = "*-*-* 01:00:00"\n'
+  rm -f "$P/.agents/build.md" "$P/.agents/release.md" "$P/.agents/medic.md"
+
+  run env QUARTET_DIR="$QUARTET_ROOT" \
+    bash "$QUARTET_ROOT/install.sh" --project "$P"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ -f "$UNITS/partial-implicit-scribe.service" ]
+  [ -f "$UNITS/partial-implicit-scribe.timer" ]
+  [ ! -e "$UNITS/partial-implicit-build.service" ]
+  [ ! -e "$UNITS/partial-implicit-release.service" ]
+  [ ! -e "$UNITS/partial-implicit-medic.service" ]
+  [ "$(grep -c 'enable --now' "$SHIM_LOG/systemctl.argv")" -eq 1 ]
+}
+
+@test "install: explicit required roles with missing prompts fail before mutation" {
+  make_stub systemctl 0
+  make_stub crontab 0 ""
+  make_stub gh 0
+  make_stub claude 0
+  P="$(make_fixture_project partial-explicit clean-install.toml)"
+  UNITS="$HOME/.config/systemd/user"
+  mkdir -p "$UNITS"
+  printf 'sentinel\n' >"$UNITS/operator-owned.service"
+  rm -f "$P/.agents/design.md" "$P/.agents/build.md" \
+    "$P/.agents/release.md" "$P/.agents/medic.md"
+  before="$(fixture_surface_snapshot "$P" "$UNITS")"
+
+  run env QUARTET_DIR="$QUARTET_ROOT" \
+    bash "$QUARTET_ROOT/install.sh" --project "$P" \
+      --agents design,build,release,medic,scribe
+  echo "$output"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"missing required project prompts"* ]]
+  [[ "$output" == *"build: $P/.agents/build.md"* ]]
+  [[ "$output" == *"release: $P/.agents/release.md"* ]]
+  [[ "$output" == *"medic: $P/.agents/medic.md"* ]]
+  [[ "$output" != *"design: $P/.agents/design.md"* ]]
+  [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" -eq 4 ]
+
+  after="$(fixture_surface_snapshot "$P" "$UNITS")"
+  [ "$before" = "$after" ]
+  [ "$(stub_calls systemctl)" = "0" ]
+  [ "$(stub_calls crontab)" = "0" ]
 }
 
 # ---------------------------------------------------------------------------
