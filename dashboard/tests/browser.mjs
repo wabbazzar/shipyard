@@ -272,6 +272,25 @@ async function main() {
     assert.match(exactStates.stale, /^No new event since .+; inspect scheduler status\.$/);
     assert.equal(exactStates.parseVisible, true);
     assert.equal(exactStates.parse, "One event line could not be read; earlier events remain available.");
+    const initialTopology = await evaluate(browser, `(() => {
+      const table = [...document.querySelectorAll('#service-table tr')].map(row =>
+        [row.cells[0].textContent.trim(), row.cells[1].textContent.trim(), row.cells[2].textContent.trim().toLowerCase()].join('/')
+      );
+      const cards = [...document.querySelectorAll('#service-cards .service-card')].map(card => {
+        const fields = card.querySelectorAll(':scope > p');
+        return [fields[0].textContent.trim().replace(' / ', '/'), fields[1].textContent.trim().toLowerCase()].join('/');
+      });
+      return {table, cards, blank: table.filter(row => row.startsWith('—/')).length};
+    })()`);
+    assert.deepEqual(initialTopology, {
+      table: ["atlas/build/failed", "beacon/scribe/healthy", "citadel/release/stale"],
+      cards: ["atlas/build/failed", "beacon/scribe/healthy", "citadel/release/stale"],
+      blank: 0,
+    });
+    assert.equal(
+      await evaluate(browser, "document.querySelector('#actionable-list .actionable-item:last-child .quiet-copy').textContent"),
+      "atlas / build · atlas-build",
+    );
 
     await evaluate(browser, `(() => {
       const input = document.getElementById('filter-event'); input.value = 'does-not-exist';
@@ -285,7 +304,7 @@ async function main() {
     await evaluate(browser, `(() => { document.getElementById('filter-event').value = ''; document.getElementById('filter-form').requestSubmit(); })()`);
     await waitFor(browser, "document.getElementById('event-total').textContent === '6 events'", "filter reset");
 
-    await evaluate(browser, `document.querySelector('[aria-label^="Inspect job.end for atlas build"]').focus()`);
+    await evaluate(browser, `document.querySelector('[aria-label^="Inspect job.end for unknown build"]').focus()`);
     const focusOutline = await evaluate(browser, "getComputedStyle(document.activeElement).outlineWidth");
     assert.notEqual(focusOutline, "0px", "event focus indicator is invisible");
     await press(browser, "Enter", "Enter", 13);
@@ -303,7 +322,7 @@ async function main() {
     assert.equal(await evaluate(browser, "document.querySelector('.raw-evidence pre').textContent.includes('<script>window.__hostile=1</script>')"), true);
     await evaluate(browser, `document.querySelector('[aria-label^="Inspect medic.incident.detected for atlas medic"]').click()`);
     assert.equal(await evaluate(browser, "document.getElementById('event-detail').textContent.includes('/var/tmp/shipyard/logs/atlas-medic.log')"), true);
-    await evaluate(browser, `document.querySelector('[aria-label^="Inspect job.end for atlas build"]').click()`);
+    await evaluate(browser, `document.querySelector('[aria-label^="Inspect job.end for unknown build"]').click()`);
 
     await evaluate(browser, `(() => {
       document.body.setAttribute('tabindex', '-1'); document.body.focus(); document.body.removeAttribute('tabindex'); window.scrollTo(0, 0);
@@ -374,6 +393,23 @@ async function main() {
     assert.equal(await evaluate(browser, "document.getElementById('event-detail').textContent"), selectedBefore, "SSE changed selected evidence");
     const scrollAfter = await evaluate(browser, "window.scrollY");
     assert.ok(Math.abs(scrollAfter - scrollBefore) <= 2, `SSE moved scroll from ${scrollBefore} to ${scrollAfter}`);
+    const finalTopology = await evaluate(browser, `(() => {
+      const table = [...document.querySelectorAll('#service-table tr')].map(row =>
+        [row.cells[0].textContent.trim(), row.cells[1].textContent.trim(), row.cells[2].textContent.trim().toLowerCase()].join('/')
+      );
+      return {
+        table,
+        tableCount: table.length,
+        cardCount: document.querySelectorAll('#service-cards .service-card').length,
+        blank: table.filter(row => row.startsWith('—/')).length,
+      };
+    })()`);
+    assert.deepEqual(finalTopology, {
+      table: ["atlas/build/failed", "beacon/scribe/healthy", "citadel/release/stale", "delta/release/healthy"],
+      tableCount: 4,
+      cardCount: 4,
+      blank: 0,
+    });
 
     await evaluate(browser, `(() => {
       const heading = document.querySelector('h1'); heading.setAttribute('tabindex', '-1'); heading.focus(); heading.blur();
@@ -394,6 +430,8 @@ async function main() {
     console.log(`states=loading,empty,stale,parse,disconnected exact=true`);
     console.log(`keyboard=skip-link,event-selection,raw-disclosure${options.width <= 800 ? ",filter-disclosure" : ""} focus_outline=${focusOutline}`);
     console.log(`semantics=${JSON.stringify(semantics)} filtered_actionable_highlight=truthful known_paths=result,scheduler_log`);
+    console.log(`service_watch_initial=table:${initialTopology.table.length},cards:${initialTopology.cards.length},blank:${initialTopology.blank} identities=${initialTopology.table.join(',')}`);
+    console.log(`service_watch_final=table:${finalTopology.tableCount},cards:${finalTopology.cardCount},blank:${finalTopology.blank} identities=${finalTopology.table.join(',')}`);
     console.log(`contrast=${JSON.stringify(contrast)} reduced_motion=${responsive.reduced}`);
     console.log(`hostile_text_inert=true mutation_controls=0 request_origins=${[...requests].join(",")}`);
     console.log(`sse=7_events selection_preserved=true scroll_before=${scrollBefore} scroll_after=${scrollAfter}`);

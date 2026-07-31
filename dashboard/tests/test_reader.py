@@ -288,6 +288,92 @@ class ReaderTest(unittest.TestCase):
         state = self.reader().summarize(window="24h", now=NOW)["services"][0]
         self.assertEqual((state.project, state.role, state.svc), ("", "", "display-name"))
 
+    def test_unambiguous_missing_project_reconciles_lifecycle_and_failure(self) -> None:
+        terminal = event(
+            NOW - timedelta(seconds=2), "job.end", project="alpha", role="build",
+            svc="shared-build", status="fail", duration_s=12,
+        )
+        terminal.pop("project")
+        append_rows(
+            self.root / "events.jsonl",
+            [
+                event(NOW - timedelta(seconds=4), "job.start", project="alpha", role="build", svc="shared-build"),
+                terminal,
+                event(NOW - timedelta(seconds=1), "release.note", project="alpha", role="build", svc="shared-build"),
+            ],
+        )
+        reader = self.reader()
+        summary = reader.summarize(window="24h", now=NOW)
+        self.assertEqual(len(summary["services"]), 1)
+        service = summary["services"][0]
+        self.assertEqual((service.project, service.role, service.svc), ("alpha", "build", "shared-build"))
+        self.assertEqual((service.state, service.terminal_status, service.duration_s), ("failed", "fail", 12.0))
+        self.assertEqual(service.last_activity, (NOW - timedelta(seconds=1)).isoformat().replace("+00:00", "Z"))
+        self.assertEqual(
+            [(item.kind, item.key) for item in summary["actionables"]],
+            [("failure", "alpha\x1fbuild\x1fshared-build")],
+        )
+        self.assertEqual(summary["actionables"][0].identity, ("alpha", "build", "shared-build"))
+        raw_terminal = reader.query_events(window="24h", event_family="job.end", now=NOW)[0]
+        self.assertNotIn("project", raw_terminal)
+
+    def test_missing_project_reconciliation_preserves_absent_and_ambiguous_identity(self) -> None:
+        absent = event(NOW - timedelta(seconds=3), "job.end", role="build", svc="absent", status="fail")
+        absent.pop("project")
+        ambiguous = event(NOW - timedelta(seconds=2), "job.end", role="build", svc="shared", status="fail")
+        ambiguous.pop("project")
+        append_rows(
+            self.root / "events.jsonl",
+            [
+                event(NOW - timedelta(seconds=5), "release.note", project="alpha", role="build", svc="shared"),
+                event(NOW - timedelta(seconds=4), "release.note", project="beta", role="build", svc="shared"),
+                absent,
+                ambiguous,
+            ],
+        )
+        summary = self.reader().summarize(window="24h", now=NOW)
+        self.assertEqual(
+            [(service.project, service.role, service.svc) for service in summary["services"]],
+            [("", "build", "absent"), ("", "build", "shared")],
+        )
+        self.assertEqual(
+            {item.key for item in summary["actionables"]},
+            {"\x1fbuild\x1fabsent", "\x1fbuild\x1fshared"},
+        )
+
+    def test_missing_project_terminal_clears_named_failure_actionable(self) -> None:
+        recovery = event(
+            NOW - timedelta(seconds=1), "job.end", project="alpha", role="build",
+            svc="shared-build", status="ok",
+        )
+        recovery.pop("project")
+        append_rows(
+            self.root / "events.jsonl",
+            [
+                event(
+                    NOW - timedelta(seconds=2), "job.end", project="alpha", role="build",
+                    svc="shared-build", status="fail",
+                ),
+                recovery,
+            ],
+        )
+        summary = self.reader().summarize(window="24h", now=NOW)
+        self.assertEqual(len(summary["services"]), 1)
+        self.assertEqual(
+            (summary["services"][0].project, summary["services"][0].state),
+            ("alpha", "healthy"),
+        )
+        self.assertEqual(summary["actionables"], [])
+
+    def test_non_lifecycle_evidence_does_not_create_service_watch_identity(self) -> None:
+        append_rows(
+            self.root / "events.jsonl",
+            [event(NOW - timedelta(seconds=1), "dashboard.smoke", project="shipyard", role="dashboard", svc="dashboard-smoke")],
+        )
+        summary = self.reader().summarize(window="24h", now=NOW)
+        self.assertEqual(summary["services"], [])
+        self.assertEqual(self.reader().query_events(window="24h", now=NOW)[0]["event"], "dashboard.smoke")
+
     def test_source_checksums_unchanged_by_refresh_queries_and_summary(self) -> None:
         append_rows(self.root / "one.jsonl", [event(NOW - timedelta(seconds=2), "job.start")])
         append_rows(self.root / "two.jsonl", [event(NOW - timedelta(seconds=1), "job.end", status="ok")])

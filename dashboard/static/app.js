@@ -81,8 +81,9 @@ function renderActionables() {
   const children = items.map(item => {
     const li = element("li", "actionable-item");
     const title = element("p", "event-name", item.event?.event || item.kind);
-    const label = item.kind === "failure" ? (item.event?.svc || "service failure") : item.key;
-    const context = element("p", "quiet-copy", `${item.event?.project || "unknown"} / ${item.event?.role || "unknown"} · ${label}`);
+    const identity = item.kind === "failure" ? (item.identity || {}) : (item.event || {});
+    const label = item.kind === "failure" ? (identity.svc || "service failure") : item.key;
+    const context = element("p", "quiet-copy", `${identity.project || "unknown"} / ${identity.role || "unknown"} · ${label}`);
     const button = element("button", "", "Inspect evidence");
     button.type = "button";
     button.addEventListener("click", () => inspect(item.event));

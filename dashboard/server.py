@@ -47,6 +47,7 @@ _VALID_PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
+    "/favicon.svg": ("favicon.svg", "image/svg+xml"),
     "/styles.css": ("styles.css", "text/css; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
 }
@@ -157,9 +158,10 @@ def _summary_payload(reader: EventReader, window: str) -> dict[str, Any]:
     actionables = []
     for item in summary["actionables"]:
         row = reader.read_event(item.reference)
-        actionables.append(
-            {"kind": item.kind, "key": item.key, "event": row, **_reference_location(reader, item.reference)}
-        )
+        payload = {"kind": item.kind, "key": item.key, "event": row, **_reference_location(reader, item.reference)}
+        if item.identity is not None:
+            payload["identity"] = dict(zip(("project", "role", "svc"), item.identity))
+        actionables.append(payload)
     return {
         "window": window,
         "counts": summary["counts"],

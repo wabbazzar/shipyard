@@ -278,10 +278,11 @@ class ServerTest(unittest.TestCase):
         static_root = self.root / "static"
         static_root.mkdir()
         (static_root / "index.html").write_text("<!doctype html><title>fixture</title>", encoding="utf-8")
+        (static_root / "favicon.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>", encoding="utf-8")
         (static_root / "styles.css").write_text("body{}", encoding="utf-8")
         (static_root / "app.js").write_text("'use strict';", encoding="utf-8")
         with mock.patch("dashboard.server.STATIC_DIR", static_root):
-            for path, content_type in (("/", "text/html"), ("/index.html", "text/html"), ("/styles.css", "text/css"), ("/app.js", "text/javascript")):
+            for path, content_type in (("/", "text/html"), ("/index.html", "text/html"), ("/favicon.svg", "image/svg+xml"), ("/styles.css", "text/css"), ("/app.js", "text/javascript")):
                 with self.subTest(path=path):
                     status, headers, body = self.request("GET", path)
                     self.assertEqual(status, 200)

@@ -95,6 +95,7 @@ paths = [
     root / "dashboard" / "reader.py",
     root / "dashboard" / "server.py",
     root / "dashboard" / "static" / "index.html",
+    root / "dashboard" / "static" / "favicon.svg",
     root / "dashboard" / "static" / "styles.css",
     root / "dashboard" / "static" / "app.js",
 ]

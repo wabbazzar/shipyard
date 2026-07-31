@@ -92,11 +92,36 @@ class ServiceState:
 
 @dataclass(frozen=True)
 class ActionableItem:
-    __slots__ = ("kind", "key", "reference")
+    __slots__ = ("kind", "key", "reference", "identity")
 
     kind: str
     key: str
     reference: EventRef
+    identity: Optional[tuple[str, str, str]]
+
+
+class _ServiceIdentityResolver:
+    """Resolve only unambiguous missing projects for derived service identity."""
+
+    __slots__ = ("_projects",)
+
+    def __init__(self, references: Iterable[EventRef]):
+        projects: dict[tuple[str, str], Optional[str]] = {}
+        for reference in references:
+            if not reference.project:
+                continue
+            key = (reference.role, reference.svc)
+            if key not in projects:
+                projects[key] = reference.project
+            elif projects[key] != reference.project:
+                projects[key] = None
+        self._projects = projects
+
+    def key(self, reference: EventRef) -> tuple[str, str, str]:
+        project = reference.project
+        if not project:
+            project = self._projects.get((reference.role, reference.svc)) or ""
+        return (project, reference.role, reference.svc)
 
 
 def _timestamp_us(value: Any) -> int:
@@ -409,12 +434,18 @@ class EventReader:
     def summarize(self, *, window: str = "7d", now: Optional[datetime | str] = None) -> dict[str, Any]:
         end_us = _now_us(now)
         refs = list(self._window_refs(window, now))
+        identity = _ServiceIdentityResolver(refs)
+        lifecycle_keys = {
+            identity.key(ref) for ref in refs if ref.event in {"job.start", "job.end"}
+        }
         activity: dict[tuple[str, str, str], EventRef] = {}
         start_or_end: dict[tuple[str, str, str], EventRef] = {}
         terminals: dict[tuple[str, str, str], EventRef] = {}
 
         for ref in refs:
-            key = (ref.project, ref.role, ref.svc)
+            key = identity.key(ref)
+            if key not in lifecycle_keys:
+                continue
             activity.setdefault(key, ref)
             if ref.event in {"job.start", "job.end"}:
                 start_or_end.setdefault(key, ref)
@@ -451,7 +482,7 @@ class EventReader:
                 )
             )
 
-        actionables = self._actionables(reversed(refs))
+        actionables = self._actionables(reversed(refs), identity)
         counts["actionable"] = len(actionables)
         return {
             "counts": counts,
@@ -460,14 +491,17 @@ class EventReader:
             "actionables": actionables,
         }
 
-    def _actionables(self, chronological: Iterable[EventRef]) -> list[ActionableItem]:
+    def _actionables(
+        self, chronological: Iterable[EventRef], identity: _ServiceIdentityResolver
+    ) -> list[ActionableItem]:
         active: dict[tuple[str, str], ActionableItem] = {}
         for ref in chronological:
             if ref.event == "job.end":
-                service_key = "\x1f".join((ref.project, ref.role, ref.svc))
+                service_identity = identity.key(ref)
+                service_key = "\x1f".join(service_identity)
                 key = ("failure", service_key)
                 if ref.status == "fail":
-                    active[key] = ActionableItem("failure", service_key, ref)
+                    active[key] = ActionableItem("failure", service_key, ref, service_identity)
                 else:
                     active.pop(key, None)
                 continue
@@ -477,13 +511,13 @@ class EventReader:
                 if ref.action_code == 2:
                     active.pop(key, None)
                 else:
-                    active[key] = ActionableItem("incident", ref.correlation_label, ref)
+                    active[key] = ActionableItem("incident", ref.correlation_label, ref, None)
                 continue
 
             if ref.action_code in {3, 4}:
                 key = ("notification", ref.correlation_key)
                 if ref.action_code == 3:
-                    active[key] = ActionableItem("notification", ref.correlation_label, ref)
+                    active[key] = ActionableItem("notification", ref.correlation_label, ref, None)
                 else:
                     active.pop(key, None)
 
