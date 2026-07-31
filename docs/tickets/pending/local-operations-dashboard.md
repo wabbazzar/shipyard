@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-29
 - **Owner:** wabbazzar
-- **Status:** in progress — Phase 2 loopback API/SSE
+- **Status:** in progress — Phase 3 operational UI
 - **Priority:** medium
 - **Type:** feature
 - **Estimated Points:** 13 (five phases: 3 · 3 · 3 · 2 · 2)
@@ -541,32 +541,32 @@ and cleanup evidence in the Ledger.
 - [ ] Fleet summary reports healthy/running/stale/failed/actionable counts and
       the latest event timestamp from synthetic and real local streams, using
       the exact deterministic state rules in Technical Requirements.
-- [ ] Project × role state uses canonical `project`/`role` identity and shows
+- [x] Project × role state uses canonical `project`/`role` identity and shows
       last terminal status, duration, and activity.
-- [ ] Timeline filters work for time window, project, role, event family, and
+- [x] Timeline filters work for time window, project, role, event family, and
       status, with exact 24h/7d/30d windows, default/max limits of 500/2,000,
       rejection of unknown/repeated query keys, and deterministic ordering.
-- [ ] SSE updates the page after a new JSONL append without a full reload,
+- [x] SSE updates the page after a new JSONL append without a full reload,
       losing selection, or moving the operator's scroll position; rotation,
       truncation, disconnect cleanup, 15-second heartbeats, and the eight-client
       cap are verified.
-- [ ] Empty, loading, stale, malformed-line, and disconnected-stream states use
+- [x] Empty, loading, stale, malformed-line, and disconnected-stream states use
       the exact actionable copy recorded in this ticket.
-- [ ] Malformed or partially written final lines never hide earlier valid
+- [x] Malformed or partially written final lines never hide earlier valid
       events and never crash the server.
-- [ ] Event-provided HTML/script text renders inertly; no endpoint permits
+- [x] Event-provided HTML/script text renders inertly; no endpoint permits
       arbitrary filesystem reads.
-- [ ] The UI matches the recorded hierarchy and visual system at `1440×900`
+- [x] The UI matches the recorded hierarchy and visual system at `1440×900`
       and `390×844`, with keyboard access, visible focus, readable contrast,
       no overflow, and reduced-motion behavior verified.
 - [ ] `scripts/install-dashboard.sh` is idempotent, supports native launchd and
       systemd user services, and leaves per-project scheduler jobs untouched.
 - [ ] `shipyard status` reports dashboard health/URL/event path/latest event,
       while `shipyard dashboard` provides the deterministic operator entrypoint.
-- [ ] `lsof` proves the listener is `127.0.0.1` only; non-loopback `Host`
+- [x] `lsof` proves the listener is `127.0.0.1` only; non-loopback `Host`
       values are rejected, no CORS allowance is emitted, and no-store, nosniff,
       and restrictive CSP headers are present.
-- [ ] No dashboard or event content leaves the machine, including during both
+- [x] No dashboard or event content leaves the machine, including during both
       browser proofs.
 - [ ] Notification Center remains the actionable/urgent alert transport; no
       routine event flood is introduced.
@@ -623,8 +623,8 @@ Application Support is a clean-install fallback only. Recorded 2026-07-30.
 | Phase | Plan | Builder | Commit | Evidence / notes |
 |---|---|---|---|---|
 | 1 — bounded reader/model | Add only the pure Python reader, reader tests, deterministic synthetic fixture generator, and 300k benchmark. Stream daily JSONL once into compact `(ts, file, byte_offset)` references; retain bounded normalized metadata for filtering/state; lazily reread raw rows; pin empty/multi-day/unknown-field/invalid-row/unterminated-tail/rotation/truncation/concurrent-append behavior; prove exact windows and limits plus source checksums. No socket, UI, installer, console, or docs implementation. | builder: subagent (1 agent) | `82d51dc` | Preflight repair `b661bdc`; 676/676 native Bats. Builder GREEN: reader 17/17, 300k in 3.036s / 112.9 MiB. Orchestrator GREEN: reader 17/17; default Python benchmark 3.055s / 121.7 MiB; system Python benchmark 3.684s / 108.6 MiB; 2,000 results; SHA-256 `a8f54709b7c6a398f7c0e50c64fabd3614fdbef3c6051f59f775e020d252f19d` unchanged. Python compile, leak, deck freshness/completeness, lifecycle, delegation, and diff gates rc=0. Rotation/truncation stale generations, concurrent append deferral, exact windows/limits, project-scoped incident/episode matching, episode-less delivery, and source immutability covered. No socket/UI/installer work entered the slice. |
-| 2 — loopback API/SSE | Add only the standard-library server, server tests, and deterministic live fixture. Resolve an explicit/configured event directory without caller-selected file reads; expose health/summary/events plus current-UTC-file SSE; strictly validate one-value query keys, windows, filters, and 1..2,000 limit; enforce loopback Host, loopback bind, JSON errors, no-store/nosniff/CSP and no CORS; cap SSE at eight, poll at 500 ms, heartbeat at 15 s, recover rotation/truncation, and release disconnects. Prove real port 0 listener/health/headers/Host/SSE behavior. No static UI, installer, console, or docs implementation. | builder: subagent (1 agent) | pending | Phase 1 committed locally as `82d51dc`. Builder GREEN: 33/33 focused tests; real loopback listener and health/Host checks passed. Orchestrator hardened non-standard JSON constants, lone-surrogate serialization, and event-store failure envelopes, then passed 36/36 tests on default and system Python (0.643s/0.884s) plus Python compile. The 300k gate remained GREEN at 3.598s/125.3 MiB and 4.475s/113.9 MiB, 2,000 results, fixture SHA-256 `a8f54709b7c6a398f7c0e50c64fabd3614fdbef3c6051f59f775e020d252f19d` unchanged. Deterministic live fixture SHA-256: `70f12debc0a27ca99fb7a88461c5f69026e420ea5f09abc16dba0157aa8005cb`. Final real listener proof used ephemeral `127.0.0.1:60893`: health 200/ready with 2 rows and 0 errors; bad Host 400; no-store/nosniff/restrictive CSP and no CORS; exit 143; temporary files and listener removed. Leak, deck freshness/completeness, lifecycle, delegation, and diff gates rc=0. Existing port 8765 process was untouched; 8766 remained free for the installed-service phase. No UI/installer/console implementation entered the slice. |
-| 3 — operational UI | Recorded visual system, interaction states, two rendered viewports, safe live refresh. | builder: subagent (1 agent) | pending | pending |
+| 2 — loopback API/SSE | Add only the standard-library server, server tests, and deterministic live fixture. Resolve an explicit/configured event directory without caller-selected file reads; expose health/summary/events plus current-UTC-file SSE; strictly validate one-value query keys, windows, filters, and 1..2,000 limit; enforce loopback Host, loopback bind, JSON errors, no-store/nosniff/CSP and no CORS; cap SSE at eight, poll at 500 ms, heartbeat at 15 s, recover rotation/truncation, and release disconnects. Prove real port 0 listener/health/headers/Host/SSE behavior. No static UI, installer, console, or docs implementation. | builder: subagent (1 agent) | `308f1ed` | Phase 1 committed locally as `82d51dc`. Builder GREEN: 33/33 focused tests; real loopback listener and health/Host checks passed. Orchestrator hardened non-standard JSON constants, lone-surrogate serialization, and event-store failure envelopes, then passed 36/36 tests on default and system Python (0.643s/0.884s) plus Python compile. The 300k gate remained GREEN at 3.598s/125.3 MiB and 4.475s/113.9 MiB, 2,000 results, fixture SHA-256 `a8f54709b7c6a398f7c0e50c64fabd3614fdbef3c6051f59f775e020d252f19d` unchanged. Deterministic live fixture SHA-256: `70f12debc0a27ca99fb7a88461c5f69026e420ea5f09abc16dba0157aa8005cb`. Final real listener proof used ephemeral `127.0.0.1:60893`: health 200/ready with 2 rows and 0 errors; bad Host 400; no-store/nosniff/restrictive CSP and no CORS; exit 143; temporary files and listener removed. Leak, deck freshness/completeness, lifecycle, delegation, and diff gates rc=0. Existing port 8765 process was untouched; 8766 remained free for the installed-service phase. No UI/installer/console implementation entered the slice. |
+| 3 — operational UI | Add only build-free `dashboard/static/index.html`, `styles.css`, `app.js`, a deterministic browser fixture/harness, and Ledger evidence. Implement the recorded quiet instrument-panel hierarchy: fleet summary, actionable queue, project × role matrix/cards, keel rail, bounded filters, selected-event evidence, and exact loading/empty/stale/parse/disconnected copy. Render untrusted fields with text-only DOM APIs; preserve selection and scroll across same-origin SSE refresh; provide semantic headings/table/list/disclosure structure, complete keyboard path, visible focus, reduced motion, contrast, and no horizontal overflow at 1440×900 and 390×844. Inspect both screenshots and remove one nonessential accessory after critique. Do not add installer, console, docs, dependencies, remote calls, or mutation controls. | builder: subagent (1 agent using `ui-design`) | pending | Phase 2 committed locally as `308f1ed`. Builder GREEN: reader/API 36/36; mandatory dependency-free CDP browser proof at both declared viewports; JavaScript syntax/diff clean. Orchestrator GREEN: 36/36 on default and system Python (0.672s/0.894s), Python/JavaScript compile, and fresh real browser proofs on ephemeral loopback ports 64377/64388. Wide 1440×900: table and coexisting panels visible, filters open, no overflow. Narrow 390×844: actionable queue precedes project cards, table hidden, filters keyboard-expandable, no overflow. Exact loading/empty/stale/parse/disconnected copy passed; skip link, event selection, raw evidence, focus outline 3px, semantic structure, and reduced motion passed. Contrast minima exceeded 4.5:1 (Alarm/Hull lowest at 6.83:1). Hostile HTML remained inert; known result/scheduler paths remained copyable text; mutation controls and external request origins were zero. SSE advanced 6→7 events with selected evidence unchanged and scroll 300→300; filtered actionable evidence clears false rail highlights. Deterministic browser seed SHA-256 `f7d214756d1ed61de6c628bc0de6849d5a6e47c2231b6b7555cf882775c266fa`. Both orchestrator screenshots were visually inspected: hierarchy, wide balance, narrow composition, and the keel rail matched the thesis. The `ui-design` critique removed the nonessential build badge and retained the rail as the sole signature element. Browser/server processes and fixtures cleaned; 8765/8766 untouched. Leak, deck freshness/completeness, lifecycle, delegation, and diff gates rc=0. No installer/console/docs implementation entered the slice. |
 | 4 — native installer | Hermetic launchd/systemd install/doctor/uninstall using owner-selected D-3 behavior. | builder: subagent (1 agent) | pending | pending |
 | 5 — console/docs/live final | CLI/docs integration, complete gate, explicit real-service smoke, cleanup, graduation. | builder: inline (real service mutation and cross-surface final integration retained by orchestrator) | pending | pending |
 
