@@ -2,12 +2,15 @@
 
 - **Created:** 2026-07-31
 - **Owner:** wabbazzar
-- **Status:** polished — ready to execute
+- **Status:** built and verified
 - **Priority:** high
 - **Type:** bugfix
 - **Estimated Points:** 2
-- **Refs:** `dashboard/reader.py`, `dashboard/tests/test_reader.py`,
-  `dashboard/tests/browser.mjs`, `dashboard/tests/fixtures/browser-seed.json`
+- **Refs:** `dashboard/reader.py`, `dashboard/server.py`,
+  `dashboard/static/app.js`, `dashboard/static/index.html`,
+  `dashboard/static/favicon.svg`, `dashboard/tests/test_reader.py`,
+  `dashboard/tests/browser.mjs`, `dashboard/tests/fixtures/browser-seed.json`,
+  `scripts/install-dashboard.sh`
 
 ## Summary
 
@@ -62,6 +65,8 @@ Root cause:
 - When the mapping is absent or ambiguous, preserve the empty project. Never
   infer identity by parsing the display-oriented `svc` string.
 - Apply the same reconciled key to summary state and failed-actionable state.
+- Present the reconciled identity on a failed-actionable card while preserving
+  the terminal event's raw missing project in the evidence detail and event API.
 - Include a Service watch identity only when the window contains `job.start` or
   `job.end` for it. Other events may update last activity for an already-known
   lifecycle identity but may not create a service row.
@@ -150,23 +155,24 @@ change, stop and report instead.
 
 ## Acceptance Criteria / Definition of Done
 
-- [ ] The captured pre-fix reproduction changes from 13 service rows with six
+- [x] The captured pre-fix reproduction changes from 13 service rows with six
       blank-project duplicates and one smoke-only row to six lifecycle rows
       with neither defect.
-- [ ] `dochound` and `judgify` each render exactly one build, medic, and release
+- [x] `dochound` and `judgify` each render exactly one build, medic, and release
       row, with terminal status/duration/activity consolidated correctly.
-- [ ] Missing project is reconciled only for one unambiguous `(role, svc)`
+- [x] Missing project is reconciled only for one unambiguous `(role, svc)`
       candidate; absent and ambiguous candidates remain empty.
-- [ ] Summary and failed-actionable derivation use the same resolved identity.
-- [ ] Non-lifecycle-only identities stay in event/actionable evidence and do
+- [x] Summary and failed-actionable derivation and presentation use the same
+      resolved identity while raw event evidence remains unchanged.
+- [x] Non-lifecycle-only identities stay in event/actionable evidence and do
       not appear as Service watch rows.
-- [ ] Raw event queries and the append-only JSONL source remain unchanged.
-- [ ] Development-browser inspection passes at 1440×900 and 390×844 with
+- [x] Raw event queries and the append-only JSONL source remain unchanged.
+- [x] Development-browser inspection passes at 1440×900 and 390×844 with
       correct row/card counts, responsive composition, no browser console
       errors, and only same-origin requests.
-- [ ] The installed macOS service is restarted from the changed source, reports
+- [x] The installed macOS service is restarted from the changed source, reports
       ready on loopback, and no proof browser process remains afterward.
-- [ ] Focused and full repository gates are green and the worktree is clean.
+- [x] Focused and full repository gates are green and the worktree is clean.
 
 ## Dependencies
 
@@ -193,6 +199,6 @@ change, stop and report instead.
 
 | Phase | Plan | Builder | Commit | Evidence / notes |
 |---|---|---|---|---|
-| 1 — identity reconciliation and rendered proof | Resolve only unambiguous missing-project lifecycle identity, exclude non-lifecycle-only services, close reader/browser coverage, update the served-app gate, verify synthetic and real viewports, restart the intended loopback service, and graduate this ticket. | pending | pending | Pre-fix evidence: API 13 services; desktop DOM 13 rows; narrow DOM 13 cards; six blank-project duplicates; one smoke-only service row; seven unique `svc` values with no aliases. Root cause and two rivals independently probed 2026-07-31. |
+| 1 — identity reconciliation and rendered proof | Resolve only unambiguous missing-project lifecycle identity, exclude non-lifecycle-only services, close reader/browser coverage, update the served-app gate, verify synthetic and real viewports, restart the intended loopback service, and graduate this ticket. | builder: subagent (1 agent) | `0ffe9bc` | Pre-fix RED: API/table/cards 13/13/13, six blank-project duplicates, one smoke-only row, and focused reader regression `2 != 1`; seven unique `svc` values ruled out aliases and API/DOM parity ruled out the front end. GREEN: default and system Python 40/40; focused native dashboard/gate Bats 52/52; 300k benchmark 3.764s / 126.3 MiB / 2,000 results with SHA-256 `a8f54709b7c6a398f7c0e50c64fabd3614fdbef3c6051f59f775e020d252f19d` unchanged. Synthetic Chrome 150 passed 1440×900 and 390×844 with exact table/card identities, reconciled `atlas / build` actionable label, responsive visibility, focus/state/hostile-text/reduced-motion/SSE assertions, same-origin traffic, and inspected screenshots. Orchestrator added the reconciled actionable presentation and a favicon after visual/browser critique exposed the contradictory `unknown / build` card and a console 404. Installed launchd service was restarted from the final source; doctor is clean, PID 74829 listens only on `127.0.0.1:8766`, live API is exactly `dochound` and `judgify` × build/medic/release with zero blanks/smoke rows, and inspected live Chrome screenshots passed at both viewports with no overflow, console/page/request errors, external origins, or leaked proof browser. Full native Bats passed 699/699 with `CRITIC_LOCK_WAIT_STEPS=1000`; the unchanged default five-second mailbox contention fixture was load-sensitive (one default failure, one traced pass), so the longer test-only wait is recorded rather than hidden. Bash/Python/JavaScript/SVG syntax, leak, deck freshness/completeness/render, lifecycle, delegation, and diff gates passed. Canonical skill reconciliation left zero worktree-targeted links. PID 10576 on 8765 remained untouched; no remote/push/tunnel action occurred. |
 
 Run this ticket with the `execute-ticket` skill.
