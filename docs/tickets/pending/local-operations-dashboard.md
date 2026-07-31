@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-29
 - **Owner:** wabbazzar
-- **Status:** pending — ratified; awaiting prerequisite integration
+- **Status:** in progress — Phase 1 bounded reader/model
 - **Priority:** medium
 - **Type:** feature
 - **Estimated Points:** 13 (five phases: 3 · 3 · 3 · 2 · 2)
@@ -44,7 +44,7 @@ The public deck at `docs/index.html` is a narrative/product surface, not this
 machine's operational console. The new dashboard must remain a separate,
 private runtime surface.
 
-## Verified pre-build baseline (2026-07-30)
+## Verified pre-build baseline (2026-07-31)
 
 - The server event store is already substantial: approximately 400 MB, with
   280,737 JSONL rows across the latest seven daily files. The implementation
@@ -56,12 +56,19 @@ private runtime surface.
   would split old and future history; migration requires an explicit service
   rebake.
 - Python 3.12, Bats 1.10+, Node, Playwright, Chrome, and Firefox are available
-  on the receiving server. The repository gate currently covers Bats, both
-  shell syntax surfaces, Python compilation, leak checks, deck
-  freshness/completeness/render, lifecycle checks, installer/doctor behavior,
-  and GitHub CI.
-- The prerequisite `macos-native-gate-parity` work is locally verified at
-  528/528 native Mac tests and is queued for canonical server-side integration.
+  on the receiving server. The repository gate covers Bats, both shell syntax
+  surfaces, Python compilation, leak checks, deck freshness/completeness/render,
+  lifecycle checks, installer/doctor behavior, and GitHub CI.
+- The prerequisite `macos-native-gate-parity` work is integrated on canonical
+  `main`. Preflight from that tip plus the local macOS feedback repair passed
+  676/676 native Apple Silicon Bats tests, both Bash syntax surfaces, Python
+  compilation, leak, deck freshness/completeness, lifecycle, delegation, and
+  diff gates. Deck render returned only its documented Playwright-unavailable
+  skip in this checkout.
+- Product default remains `127.0.0.1:8765`. This Mac's installed-service proof
+  will use the machine-local override `127.0.0.1:8766` because another local
+  service already owns port 8765; that process is outside this ticket and must
+  not be stopped or changed.
 
 ## Decisions
 
@@ -570,9 +577,9 @@ and cleanup evidence in the Ledger.
 
 ## Dependencies
 
-- Blocked by integration: `macos-native-gate-parity` must be canonicalized,
-  Linux-gated, pushed by the receiving server, and CI/Pages-green before Phase
-  1 starts.
+- Resolved 2026-07-31: `macos-native-gate-parity` is canonicalized on `main`;
+  Phase 1 started only after the latest tip passed the native macOS baseline
+  and repository gates recorded above.
 - External services: none for the MVP.
 - Enables: an optional follow-up for BopBop/Slack actionable-alert fan-out and
   later multi-machine aggregation.
@@ -615,7 +622,7 @@ Application Support is a clean-install fallback only. Recorded 2026-07-30.
 
 | Phase | Plan | Builder | Commit | Evidence / notes |
 |---|---|---|---|---|
-| 1 — bounded reader/model | Stream/index offsets, deterministic state/filter model, lazy detail, 300k benchmark. | builder: subagent (1 agent) | pending | pending |
+| 1 — bounded reader/model | Add only the pure Python reader, reader tests, deterministic synthetic fixture generator, and 300k benchmark. Stream daily JSONL once into compact `(ts, file, byte_offset)` references; retain bounded normalized metadata for filtering/state; lazily reread raw rows; pin empty/multi-day/unknown-field/invalid-row/unterminated-tail/rotation/truncation/concurrent-append behavior; prove exact windows and limits plus source checksums. No socket, UI, installer, console, or docs implementation. | builder: subagent (1 agent) | pending | Preflight repair `b661bdc`; 676/676 native Bats. Builder GREEN: reader 17/17, 300k in 3.036s / 112.9 MiB. Orchestrator GREEN: reader 17/17; default Python benchmark 3.055s / 121.7 MiB; system Python benchmark 3.684s / 108.6 MiB; 2,000 results; SHA-256 `a8f54709b7c6a398f7c0e50c64fabd3614fdbef3c6051f59f775e020d252f19d` unchanged. Python compile, leak, deck freshness/completeness, lifecycle, delegation, and diff gates rc=0. Rotation/truncation stale generations, concurrent append deferral, exact windows/limits, project-scoped incident/episode matching, episode-less delivery, and source immutability covered. No socket/UI/installer work entered the slice. |
 | 2 — loopback API/SSE | Read-only endpoints, validation/headers, bounded clients, rotation-safe tail, real listener proof. | builder: subagent (1 agent) | pending | pending |
 | 3 — operational UI | Recorded visual system, interaction states, two rendered viewports, safe live refresh. | builder: subagent (1 agent) | pending | pending |
 | 4 — native installer | Hermetic launchd/systemd install/doctor/uninstall using owner-selected D-3 behavior. | builder: subagent (1 agent) | pending | pending |
