@@ -251,11 +251,21 @@ can_merge = false
 /bin/bash ./install.sh --project /path/to/myproject --agents design,build,release,medic,scribe
 ```
 
-Default `--agents` is `build,release,medic,scribe` — design is opt-in. The
-installer auto-detects the host OS, bakes the `[names]` theme block into the
-config, and writes either systemd units under `~/.config/systemd/user/` or
-LaunchAgent plists under `~/Library/LaunchAgents/`. It then enables the jobs,
-symlinks the eight shared skills into `<project>/.claude/skills/`,
+On a fresh project, the default role set is
+`build,release,medic,scribe` — design is opt-in. On a re-run without
+`--agents`, the installer instead preserves the intentional install: it selects
+the canonical roles declared in `[install.timers]` plus any canonical role
+whose existing job is enabled. An explicit `--agents` list remains
+authoritative. Build, Release, Medic, and Scribe require their matching
+`.agents/<role>.md`; a missing required prompt names every affected role and
+exits 2 before any file write or scheduler mutation. Design has no project
+prompt requirement.
+
+The installer auto-detects the host OS, bakes the `[names]` theme block into
+the config, and writes either systemd units under
+`~/.config/systemd/user/` or LaunchAgent plists under
+`~/Library/LaunchAgents/`. It then enables the selected jobs, symlinks the
+eight shared skills into `<project>/.claude/skills/`,
 writes a root `AGENTS.md` skill bridge for Codex and Hermes when absent, drops
 `skills/gates.md.template` into `.agents/gates.md` (never clobbering an
 existing gate file), removes legacy cron launchers that would race the timers
@@ -300,13 +310,15 @@ install.sh --doctor --project <project_dir>
 ```
 
 Exit 0 clean; exit 1 with one `DOCTOR <class>: <detail>` line per finding.
-It checks the manifest install writes — expected jobs enabled and pointed at
-`$QUARTET_DIR`, no stale duplicate role jobs, no foreign `.service.d`
-drop-ins on systemd, no retired config keys, skill symlinks resolving into
-`$QUARTET_DIR/skills`, no dead `.claude/settings.json` hooks, no legacy
-launchers/cron, and exact local Git identity/hook keys for opted-in projects —
-and finishes in well under a second, so a `[[medic.checks]]` entry can run it
-every scan. It never writes or touches the scheduler.
+It checks the manifest install writes — configured or enabled jobs present,
+enabled, pointed at `$QUARTET_DIR`, and backed by the required project prompt;
+no stale duplicate role jobs; no foreign `.service.d` drop-ins on systemd; no
+retired config keys; skill symlinks resolving into `$QUARTET_DIR/skills`; no
+dead `.claude/settings.json` hooks; no legacy launchers/cron; and exact local
+Git identity/hook keys for opted-in projects. Disabled roles absent from
+`[install.timers]` are intentional, not Doctor drift. The audit finishes in
+well under a second, so a `[[medic.checks]]` entry can run it every scan. It
+never writes or touches the scheduler.
 
 **Uninstall** — remove exactly the installer-owned surface; the config you
 wrote and your data are left untouched:

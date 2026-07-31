@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-30
 - **Owner:** wabbazzar
-- **Status:** pending — polished; no open decisions
+- **Status:** complete — local and live proof green; remote result at handoff
 - **Priority:** high
 - **Type:** bugfix
 - **Estimated Points:** 8 (three phases: 3 · 3 · 2)
@@ -364,18 +364,18 @@ are complete.
 
 ## Acceptance Criteria / Definition of Done
 
-- [ ] The captured partial-install repro no longer plans or performs activation
+- [x] The captured partial-install repro no longer plans or performs activation
       of undeclared Build, Release, or Medic roles.
-- [ ] Explicit selection of a required-prompt role with no project prompt exits
+- [x] Explicit selection of a required-prompt role with no project prompt exits
       `2` before any write or scheduler mutation and names every missing prompt.
-- [ ] Fresh projects with no declared/enabled role set retain the documented
+- [x] Fresh projects with no declared/enabled role set retain the documented
       Build/Release/Medic/Scribe default.
-- [ ] Doctor exits `1` for an expected enabled role whose required prompt is
+- [x] Doctor exits `1` for an expected enabled role whose required prompt is
       absent, and remains clean for disabled undeclared latent roles.
-- [ ] `shipyard inspect --json` retains latent units in inventory without
+- [x] `shipyard inspect --json` retains latent units in inventory without
       turning intentional partial installs into current fault attention.
-- [ ] Linux and macOS scheduler tests pin the same eligibility behavior.
-- [ ] Ice and 2pizzaclub are verified read-only: Scribe remains enabled, absent
+- [x] Linux and macOS scheduler tests pin the same eligibility behavior.
+- [x] Ice and 2pizzaclub are verified read-only: Scribe remains enabled, absent
       roles remain disabled/absent, and no test starts them.
 - [ ] Full repository gates pass, the ticket is graduated only after completion,
       the Shipyard worktree is clean, and pushed CI is green.
@@ -428,6 +428,32 @@ complete `tests/shipyard-inspect.bats` suite (`74/74`), all green. Python
 compile, diff, leak, live schema-v1 JSON, and bounded human render exited `0`.
 Live Ice retains four unit records and now reports `no_fault_observed`; no
 scheduler mutation occurred.
+
+deferred: none
+
+### Phase 3 — Documentation, live proof, and roll-up
+
+builder: inline (final repository and live-system gates must be personally run
+and read by the orchestrator)
+
+plan: Update the existing README/install contract, run every configured gate,
+prove Ice and 2pizzaclub read-only, graduate the ticket, commit, push, and
+verify remote CI plus Pages.
+
+commit: final documentation/graduation commit (hash reported at handoff).
+
+evidence: Phase 2 committed as `a94b0cb`. The orchestrator ran `674/674`
+repository tests; the exact syntax/Python, leak, deck
+freshness/completeness, lifecycle, delegation-report, and Shipyard Doctor
+gates all exited `0`; no shared skill resolves through a worktree. Ice and
+2pizzaclub dry runs selected only Chronicler. Both Doctors were clean.
+Checksums for both configs and all eight Ice unit files were unchanged; Ice
+timer state stayed `disabled/disabled/disabled/enabled` and
+`inactive/inactive/inactive/active`. Schema-v1 inspection retained Ice roles
+`build/medic/release/scribe`, found six latent fault-property evidence rows,
+and linked zero into current state or attention. 2pizzaclub retained only its
+enabled Scribe unit. Remote CI/Pages evidence is read after this commit is
+pushed and reported in the handoff.
 
 deferred: none
 

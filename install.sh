@@ -41,12 +41,14 @@
 #
 # What it does (idempotent — re-running is safe):
 #
-#   1. Writes scheduler definitions for each agent:
+#   1. Writes scheduler definitions for each selected agent:
 #        Linux: ~/.config/systemd/user/<project>-<agent>.{service,timer}
 #        macOS: ~/Library/LaunchAgents/<project>-<agent>.plist
+#      Without --agents, selection preserves configured or enabled canonical
+#      roles; only a fresh/undeclared project uses the four-role default.
 #      Schedules come from config.toml's [install.timers] table, falling back
 #      to baked-in defaults (release 06:00, medic every 10 min, build 03:30,
-#      scribe 01:00).
+#      scribe 01:00). Required project prompts are validated before any write.
 #
 #   2. Enables each timer with systemd (Linux) or launchd (macOS).
 #
