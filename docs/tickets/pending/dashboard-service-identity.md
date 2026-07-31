@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-31
 - **Owner:** wabbazzar
-- **Status:** draft
+- **Status:** polished — ready to execute
 - **Priority:** high
 - **Type:** bugfix
 - **Estimated Points:** 2
@@ -69,6 +69,22 @@ Root cause:
   summaries only and never rewrites JSONL history.
 - Extend the browser fixture with a mixed-completeness lifecycle and assert one
   rendered service per logical identity at both declared viewports.
+- Update `.agents/gates.md` so the dashboard is a served-app surface and every
+  UI/UX completion claim requires development-browser semantic assertions
+  against the live page in addition to visual screenshot inspection.
+
+## Decisions
+
+| Decision | State | Rationale |
+|---|---|---|
+| Reconcile only an exact `(role, svc)` with exactly one named project | locked | Preserves canonical identity without parsing a display name. |
+| Keep absent/ambiguous project empty | locked | Unknown evidence must remain honest rather than guessed. |
+| Service watch contains lifecycle identities only | locked | Incidents and smoke are evidence, not installed services. |
+| Preserve raw JSONL and raw event API bytes | locked | The dashboard is a read-only derived view. |
+| Development-browser semantic checks join screenshots as a UI gate | locked | Visual plausibility did not catch the shipped topology defect. |
+
+There are no open decisions and no user-decision-class changes. The fix is
+local, read-only, reversible, and does not change external behavior or routing.
 
 ## Implementation Plan
 
@@ -79,9 +95,19 @@ service state and actionable failures, add focused reader regressions for
 unambiguous, absent, and ambiguous mappings, then strengthen the browser fixture
 and harness to assert service cardinality and no blank-project split.
 
-Delegation: subagent — implement the bounded reader/tests/browser-fixture slice
-and return changed files, exact test/browser outputs, and blockers in at most
-40 lines.
+Delegation: subagent — from the captured 13-row live reproduction, modify only
+`dashboard/reader.py`, `dashboard/tests/test_reader.py`,
+`dashboard/tests/fixtures/browser-seed.json`, `dashboard/tests/browser.mjs`, and
+`.agents/gates.md`. Implement unambiguous exact-key reconciliation, lifecycle-
+only Service watch membership, reader guards for absent/ambiguous mappings,
+and exact browser service-card/table assertions. Return at most 40 lines:
+files changed; commands and exit codes; pre-fix RED and post-fix GREEN evidence;
+browser row/card counts; blockers. Converge honestly or report the precise
+blocker with the actual evidence — NEVER fake green, weaken a check, or
+hand-wave "should work". Run the real command, read the real file, curl the
+real port, and report exact output (exit codes, JSONL lines, HTTP codes), not
+adjectives. If it needs a spend, an outward-facing action, or a destructive
+change, stop and report instead.
 
 ## Testing Strategy
 
@@ -95,6 +121,32 @@ and return changed files, exact test/browser outputs, and blockers in at most
   the expected responsive table/card presentation.
 - Run the canonical Python, browser, full Bats, syntax, leak, deck, lifecycle,
   and diff gate classes.
+
+### Exact verification surface
+
+1. Pre-change RED: the focused reader regression must report two identities
+   for one mixed-completeness lifecycle and the live browser must report
+   `DOM_ROW_COUNT=13`, `BLANK_PROJECT_ROWS=6`.
+2. Focused Python:
+   `python3 -m unittest -v dashboard.tests.test_reader dashboard.tests.test_server`
+   and the same command with `/usr/bin/python3`.
+3. Synthetic development browser at both declared viewports:
+   `node dashboard/tests/browser.mjs --browser chromium --viewport 1440x900 --screenshot-dir <tmp-wide>`
+   and the equivalent `390x844` command. Inspect both images; exact service
+   identities and cardinality must be asserted by the harness, not eyeballed.
+4. Reinstall/restart the real launchd service from this branch:
+   `/bin/bash scripts/install-dashboard.sh --install --port 8766`, then
+   `/bin/bash scripts/install-dashboard.sh --doctor --port 8766`.
+5. Real API: `curl -fsS 'http://127.0.0.1:8766/api/summary?window=7d'` must show
+   six services: `dochound` and `judgify` × `build`, `medic`, `release`; no
+   empty project and no `dashboard` role.
+6. Real development browser at 1440×900 and 390×844 must assert the same six
+   table rows/cards in the live DOM, zero console errors, no overflow, and only
+   `http://127.0.0.1:8766` request origins. Inspect both screenshots.
+7. Full gates: native `bats tests/`, Bash/Python/JavaScript syntax, reader
+   benchmark, leak, deck freshness/completeness/render, lifecycle, delegation,
+   and `git diff --check`. End with no headless browser process and a ready
+   launchd service.
 
 ## Acceptance Criteria / Definition of Done
 
@@ -136,3 +188,11 @@ and return changed files, exact test/browser outputs, and blockers in at most
 - Parsing project names from `svc`.
 - Hiding unknown or ambiguous identities in the UI.
 - Any push, tunnel, receive-workmac routing, or merge.
+
+## Ledger
+
+| Phase | Plan | Builder | Commit | Evidence / notes |
+|---|---|---|---|---|
+| 1 — identity reconciliation and rendered proof | Resolve only unambiguous missing-project lifecycle identity, exclude non-lifecycle-only services, close reader/browser coverage, update the served-app gate, verify synthetic and real viewports, restart the intended loopback service, and graduate this ticket. | pending | pending | Pre-fix evidence: API 13 services; desktop DOM 13 rows; narrow DOM 13 cards; six blank-project duplicates; one smoke-only service row; seven unique `svc` values with no aliases. Root cause and two rivals independently probed 2026-07-31. |
+
+Run this ticket with the `execute-ticket` skill.
