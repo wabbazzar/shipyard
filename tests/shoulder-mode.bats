@@ -9,6 +9,15 @@
 setup() {
   load helpers
   quartet_setup
+  if [ "$(uname -s)" = "Darwin" ] && [ -x /usr/bin/python3 ]; then
+    # Exercise the native hook with the native standard-library interpreter.
+    # An interactive pyenv shim may resolve to a translated x86_64 build whose
+    # startup cost overwhelms the queue race fixtures' synchronization seams.
+    NATIVE_PYTHON_BIN="$BATS_TEST_TMPDIR/native-python-bin"
+    mkdir -p "$NATIVE_PYTHON_BIN"
+    ln -s /usr/bin/python3 "$NATIVE_PYTHON_BIN/python3"
+    export PATH="$NATIVE_PYTHON_BIN:$PATH"
+  fi
 }
 
 teardown() {
@@ -588,6 +597,7 @@ EOF
   mkdir "$Q.lock"
   chmod 700 "$Q.lock"
 
+  STARTED_AT="$SECONDS"
   bash -c "printf '%s' \
     '{\"session_id\":\"s1\",\"tool_input\":{\"file_path\":\"src/bounded-default.ts\"}}' \
     | CLAUDE_PROJECT_DIR='$P' bash '$QUARTET_ROOT/$QUEUE_HOOK'" \
@@ -595,7 +605,7 @@ EOF
     2>"$BATS_TEST_TMPDIR/default-bound.err" &
   CAPTURE=$!
   CAPTURE_FINISHED=0
-  for ((i=0; i<1000; i++)); do
+  while [ "$((SECONDS - STARTED_AT))" -lt 10 ]; do
     if ! kill -0 "$CAPTURE" 2>/dev/null; then
       CAPTURE_FINISHED=1
       break
@@ -606,8 +616,10 @@ EOF
     kill "$CAPTURE" 2>/dev/null || true
   fi
   wait "$CAPTURE" 2>/dev/null || true
+  ELAPSED="$((SECONDS - STARTED_AT))"
 
   [ "$CAPTURE_FINISHED" -eq 1 ]
+  [ "$ELAPSED" -lt 10 ]
   [ ! -e "$Q" ]
   [[ "$(cat "$BATS_TEST_TMPDIR/default-bound.err")" == *"failing open"* ]]
 }
@@ -1093,20 +1105,32 @@ PY
       2>"$BATS_TEST_TMPDIR/$KIND.err" &
     CAPTURE=$!
     CAPTURE_FINISHED=0
-    for ((i=0; i<200; i++)); do
+    CAPTURE_STARTED_AT="$SECONDS"
+    while [ "$((SECONDS - CAPTURE_STARTED_AT))" -lt 10 ]; do
       if ! kill -0 "$CAPTURE" 2>/dev/null; then
         CAPTURE_FINISHED=1
         break
       fi
       sleep 0.01
     done
-    if [ "$CAPTURE_FINISHED" -eq 0 ] && [ "$KIND" = "fifo" ]; then
-      # Unblock the pre-fix reader only after observing the fixed hook bound.
-      printf 'poison\n' >"$Q.lock/owner"
+    CAPTURE_ELAPSED="$((SECONDS - CAPTURE_STARTED_AT))"
+    if [ "$CAPTURE_FINISHED" -eq 0 ]; then
+      if [ "$KIND" = "fifo" ]; then
+        # Unblock the pre-fix reader so a failed assertion leaves no writer.
+        printf 'poison\n' >"$Q.lock/owner" &
+        FIFO_UNBLOCKER=$!
+      fi
+      kill "$CAPTURE" 2>/dev/null || true
     fi
     wait "$CAPTURE" 2>/dev/null || true
+    if [ "${FIFO_UNBLOCKER:-}" ]; then
+      kill "$FIFO_UNBLOCKER" 2>/dev/null || true
+      wait "$FIFO_UNBLOCKER" 2>/dev/null || true
+      unset FIFO_UNBLOCKER
+    fi
 
     [ "$CAPTURE_FINISHED" -eq 1 ]
+    [ "$CAPTURE_ELAPSED" -lt 10 ]
     [ "$(grep -cE "^src/$KIND\\.ts [0-9]+$" "$Q" || true)" -eq 1 ]
     [ ! -e "$Q.lock" ]
     if [ "$KIND" = "owner-symlink" ]; then
@@ -1380,7 +1404,8 @@ EOF
       cq_queue_lock_release" \
     >"$BATS_TEST_TMPDIR/owner-handoff-publisher.out" 2>"$PUBLISH_LOG" &
   OWNER=$!
-  for ((i=0; i<500; i++)); do
+  READY_STARTED_AT="$SECONDS"
+  while [ "$((SECONDS - READY_STARTED_AT))" -lt 10 ]; do
     if [ -e "$PUBLISH_READY" ] ||
         grep -qFx 'critic-queue-test:outer-created' \
           "$PUBLISH_LOG" 2>/dev/null; then
@@ -1399,21 +1424,24 @@ EOF
       : >'$REAP_ACQUIRED'; cq_queue_lock_release" \
     >"$BATS_TEST_TMPDIR/owner-handoff-reaper.out" 2>"$REAP_LOG" &
   REAPER=$!
-  for ((i=0; i<500; i++)); do
+  READY_STARTED_AT="$SECONDS"
+  while [ "$((SECONDS - READY_STARTED_AT))" -lt 10 ]; do
     [ -e "$REAP_READY" ] && break
     sleep 0.01
   done
   [ -e "$REAP_READY" ]
 
   rm "$PUBLISH_PAUSE"
-  for ((i=0; i<500; i++)); do
+  READY_STARTED_AT="$SECONDS"
+  while [ "$((SECONDS - READY_STARTED_AT))" -lt 10 ]; do
     [ -e "$OWNER_ACQUIRED" ] && break
     sleep 0.01
   done
   [ -e "$OWNER_ACQUIRED" ]
 
   rm "$REAP_PAUSE"
-  for ((i=0; i<500; i++)); do
+  READY_STARTED_AT="$SECONDS"
+  while [ "$((SECONDS - READY_STARTED_AT))" -lt 10 ]; do
     if [ -e "$REAP_ATTEMPTED" ] ||
         grep -qFx 'critic-queue-test:claim-ready' "$REAP_LOG" 2>/dev/null; then
       break
@@ -1692,6 +1720,7 @@ os.utime(sys.argv[1], (future, future))
         chmod 700 "$Q.lock/.reap"
         printf '%s %s\n' "$$" legacy-token >"$Q.lock/.reap/owner"
         chmod 600 "$Q.lock/.reap/owner"
+        fixture_set_mtime_ago 2 "$Q.lock/.reap"
         ;;
       owner-symlink)
         mkdir "$Q.lock/.reap"
@@ -1705,6 +1734,7 @@ os.utime(sys.argv[1], (future, future))
             stat -f '%Lp' "$OWNER_TARGET"
         )"
         ln -s "$OWNER_TARGET" "$Q.lock/.reap/owner"
+        fixture_set_mtime_ago 2 "$Q.lock/.reap"
         ;;
     esac
 
@@ -1764,6 +1794,7 @@ os.utime(sys.argv[1], (future, future))
       ln "$OWNER_TARGET" "$Q.lock/.reap/owner"
     fi
     chmod 600 "$Q.lock/.reap/owner"
+    fixture_set_mtime_ago 2 "$Q.lock/.reap"
     if [ "$KIND" = "hardlink" ]; then
       TARGET_CONTENT_BEFORE="$(od -An -tx1 "$OWNER_TARGET")"
       TARGET_MODE_BEFORE="$(
@@ -1829,7 +1860,8 @@ while os.path.exists(pause):
 os.close(fd)
 PY
   MUTEX_HOLDER=$!
-  for ((i=0; i<200; i++)); do
+  READY_STARTED_AT="$SECONDS"
+  while [ "$((SECONDS - READY_STARTED_AT))" -lt 10 ]; do
     [ -e "$READY" ] && break
     sleep 0.01
   done
@@ -1842,21 +1874,28 @@ PY
     >"$BATS_TEST_TMPDIR/busy.out" 2>"$BATS_TEST_TMPDIR/busy.err" &
   BUSY_CAPTURE=$!
   CAPTURE_FINISHED=0
-  for ((i=0; i<100; i++)); do
+  CAPTURE_STARTED_AT="$SECONDS"
+  while [ "$((SECONDS - CAPTURE_STARTED_AT))" -lt 10 ]; do
     if ! kill -0 "$BUSY_CAPTURE" 2>/dev/null; then
       CAPTURE_FINISHED=1
       break
     fi
     sleep 0.01
   done
+  CAPTURE_ELAPSED="$((SECONDS - CAPTURE_STARTED_AT))"
 
   rm "$PAUSE"
   wait "$MUTEX_HOLDER"
+  if [ "$CAPTURE_FINISHED" -eq 0 ]; then
+    kill "$BUSY_CAPTURE" 2>/dev/null || true
+  fi
   wait "$BUSY_CAPTURE" 2>/dev/null || true
   [ "$CAPTURE_FINISHED" -eq 1 ]
+  [ "$CAPTURE_ELAPSED" -lt 10 ]
   [ ! -e "$Q" ]
   [[ "$(cat "$BATS_TEST_TMPDIR/busy.err")" == *"failing open"* ]]
 
+  fixture_set_mtime_ago 2 "$Q.lock/.reap"
   run bash -c "printf '%s' \
     '{\"session_id\":\"s1\",\"tool_input\":{\"file_path\":\"src/after-mutex.ts\"}}' \
     | CLAUDE_PROJECT_DIR='$P' bash '$QUARTET_ROOT/$QUEUE_HOOK'"
@@ -1877,7 +1916,19 @@ PY
   chmod 700 "$Q.lock/.reap"
   mkfifo "$Q.lock/.reap/owner"
   chmod 600 "$Q.lock/.reap/owner"
+  python3 - "$Q.lock/.reap" <<'PY'
+import os
+import sys
+import time
 
+# Start comfortably inside the grace window so shell startup cannot make the
+# marker stale before acquisition begins. The bounded retry still carries wall
+# time past the edge and must retain its frozen eligibility decision.
+stamp = time.time() - 0.2
+os.utime(sys.argv[1], (stamp, stamp))
+PY
+
+  FIFO_STARTED_AT="$SECONDS"
   bash -c "printf '%s' \
     '{\"session_id\":\"s1\",\"tool_input\":{\"file_path\":\"src/fifo-busy.ts\"}}' \
     | CQ_LOCK_WAIT_STEPS=5 CLAUDE_PROJECT_DIR='$P' \
@@ -1885,7 +1936,7 @@ PY
     >"$BATS_TEST_TMPDIR/fifo.out" 2>"$BATS_TEST_TMPDIR/fifo.err" &
   FIFO_CAPTURE=$!
   CAPTURE_FINISHED=0
-  for ((i=0; i<100; i++)); do
+  while [ "$((SECONDS - FIFO_STARTED_AT))" -lt 10 ]; do
     if ! kill -0 "$FIFO_CAPTURE" 2>/dev/null; then
       CAPTURE_FINISHED=1
       break
@@ -1894,15 +1945,24 @@ PY
   done
 
   if [ "$CAPTURE_FINISHED" -eq 0 ]; then
-    # Unblock the pre-fix reader only after the timing observation so the red
-    # case leaves no orphaned process behind.
-    printf 'poison\n' >"$Q.lock/.reap/owner"
+    # Unblock a pre-fix FIFO reader without letting the fallback writer become
+    # an orphan when no reader remains at the deadline.
+    printf 'poison\n' >"$Q.lock/.reap/owner" 2>/dev/null &
+    FIFO_UNBLOCKER=$!
+    kill "$FIFO_CAPTURE" 2>/dev/null || true
   fi
   wait "$FIFO_CAPTURE" 2>/dev/null || true
+  if [ -n "${FIFO_UNBLOCKER:-}" ]; then
+    kill "$FIFO_UNBLOCKER" 2>/dev/null || true
+    wait "$FIFO_UNBLOCKER" 2>/dev/null || true
+  fi
+  FIFO_ELAPSED="$((SECONDS - FIFO_STARTED_AT))"
   [ "$CAPTURE_FINISHED" -eq 1 ]
+  [ "$FIFO_ELAPSED" -lt 10 ]
   [ ! -e "$Q" ]
   [[ "$(cat "$BATS_TEST_TMPDIR/fifo.err")" == *"failing open"* ]]
 
+  fixture_set_mtime_ago 2 "$Q.lock/.reap"
   run bash -c "printf '%s' \
     '{\"session_id\":\"s1\",\"tool_input\":{\"file_path\":\"src/after-fifo.ts\"}}' \
     | CLAUDE_PROJECT_DIR='$P' bash '$QUARTET_ROOT/$QUEUE_HOOK'"

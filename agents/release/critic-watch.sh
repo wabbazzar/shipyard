@@ -541,9 +541,9 @@ critique_queue() {
       if [ "${f#/}" != "$f" ] && [ "${f#"$PROJECT_DIR"/}" = "$f" ]; then
         continue
       fi
-      case "$f" in
-        "$PROJECT_DIR"/*) f="${f#"$PROJECT_DIR"/}" ;;
-      esac
+      if [ "${f#"$PROJECT_DIR"/}" != "$f" ]; then
+        f="${f#"$PROJECT_DIR"/}"
+      fi
       git -C "$PROJECT_DIR" --literal-pathspecs check-ignore -q -- "$f" \
         2>/dev/null ||
         printf '%s\n' "$f"
@@ -557,10 +557,12 @@ critique_queue() {
   while IFS= read -r qf; do
     [ -n "$qf" ] || continue
     rel="$qf"
-    case "$qf" in
-      "$PROJECT_DIR"/*) rel="${qf#"$PROJECT_DIR"/}" ;;
-      /*) continue ;;
-    esac
+    if [ "${qf#/}" != "$qf" ]; then
+      if [ "${qf#"$PROJECT_DIR"/}" = "$qf" ]; then
+        continue
+      fi
+      rel="${qf#"$PROJECT_DIR"/}"
+    fi
     abs="$PROJECT_DIR/$rel"
     patch="$(git -C "$PROJECT_DIR" --literal-pathspecs diff "$trunk" -- \
       "$rel" 2>/dev/null || true)"

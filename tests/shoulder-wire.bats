@@ -34,7 +34,7 @@ esac'
   make_stub crontab 0 ""
   make_stub gh 0
   make_stub claude 0
-  export XDG_STATE_HOME="$BATS_TEST_TMPDIR/state"
+  export XDG_STATE_HOME="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/state"
   export CODEX_HOME="$BATS_TEST_TMPDIR/codex"
   export HERMES_HOME="$BATS_TEST_TMPDIR/hermes"
   WIRE="agents/lib/shoulder-wire.sh"
@@ -197,7 +197,7 @@ PY
   grep -Fxq "CRITIC_HARNESS=hermes" "$P/.agents/shoulder.env"
   grep -Fxq "CRITIC_NOTE_HARNESS=codex" "$P/.agents/shoulder.env"
   [ "$(find "$XDG_STATE_HOME/shipyard/critic-feedback/projects" -name '*.json' | wc -l | tr -d ' ')" -eq 1 ]
-  jq -e --arg project "$P" '.canonical_project == $project' \
+  jq -e --arg project "$(cd "$P" && pwd -P)" '.canonical_project == $project' \
     "$XDG_STATE_HOME"/shipyard/critic-feedback/projects/*.json
 
   unit="$HOME/.config/systemd/user/shpcodex-release-watch.service"

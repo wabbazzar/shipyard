@@ -11,7 +11,7 @@ setup() {
   NOTE="$QUARTET_ROOT/agents/release/critic-note.sh"
   STOP="$QUARTET_ROOT/agents/release/critic-stop-gate-codex.sh"
   WATCH="$QUARTET_ROOT/agents/release/critic-watch.sh"
-  export XDG_STATE_HOME="$BATS_TEST_TMPDIR/xdg-state"
+  export XDG_STATE_HOME="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/xdg-state"
 }
 
 checked_sha() {
