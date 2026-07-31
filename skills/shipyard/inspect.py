@@ -666,7 +666,9 @@ def _missing_user_bus(result: subprocess.CompletedProcess[str]) -> bool:
 
 
 def _systemd_adapter(
-    project: dict[str, Any], started_at: datetime
+    project: dict[str, Any],
+    config: dict[str, Any] | None,
+    started_at: datetime,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
     timer_props = (
         "LoadState",
@@ -684,7 +686,7 @@ def _systemd_adapter(
         "ExecMainStatus",
     )
     evidence: list[dict[str, Any]] = []
-    fault_ids: list[str] = []
+    fault_ids_by_role: dict[str, list[str]] = defaultdict(list)
     total = valid = invalid = 0
     command_failed = False
     unavailable = False
@@ -795,11 +797,44 @@ def _systemd_adapter(
         for prop in timer_fault_properties:
             evidence_id = property_ids.get((unit_record["timer_unit"], prop))
             if evidence_id is not None:
-                fault_ids.append(evidence_id)
+                fault_ids_by_role[role].append(evidence_id)
         for prop in service_fault_properties:
             evidence_id = property_ids.get((unit_record["service_unit"], prop))
             if evidence_id is not None:
-                fault_ids.append(evidence_id)
+                fault_ids_by_role[role].append(evidence_id)
+
+    install = config.get("install") if isinstance(config, dict) else None
+    timers = install.get("timers") if isinstance(install, dict) else None
+    eligible_roles = {
+        role
+        for role in ROLE_ORDER
+        if isinstance(timers, dict) and role in timers
+    }
+    enabled_states = {
+        "alias",
+        "enabled",
+        "enabled-runtime",
+        "generated",
+        "indirect",
+        "linked",
+        "linked-runtime",
+        "static",
+        "transient",
+    }
+    eligible_roles.update(
+        unit_record["role"]
+        for unit_record in project["units"]
+        if unit_record["role"] in ROLE_ORDER
+        and unit_record["unit_file_state"] in enabled_states
+    )
+    if not eligible_roles:
+        eligible_roles.update(("build", "release", "medic", "scribe"))
+    fault_ids = [
+        evidence_id
+        for role in ROLE_ORDER
+        if role in eligible_roles
+        for evidence_id in fault_ids_by_role[role]
+    ]
 
     if unavailable:
         state, reason = "unavailable", "systemd_unavailable"
@@ -4251,7 +4286,7 @@ def build_document(
             evidence.append(config_evidence)
 
         systemd_coverage, systemd_evidence, systemd_faults = _systemd_adapter(
-            project, started_at
+            project, config, started_at
         )
         coverage_by_key[(project["project_id"], "systemd")] = systemd_coverage
         evidence.extend(systemd_evidence)

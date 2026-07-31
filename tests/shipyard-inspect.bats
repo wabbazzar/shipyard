@@ -654,6 +654,118 @@ EOF
   ' <<<"$output"
 }
 
+@test "inspect: intentional partial install ignores disabled latent role faults" {
+  project="$BATS_TEST_TMPDIR/projects/partial"
+  mkdir -p "$project/.agents"
+  cat >"$project/.agents/config.toml" <<'EOF'
+project_name = "partial"
+[install.timers]
+scribe = "daily"
+EOF
+
+  local role stem
+  for role in build release medic scribe; do
+    case "$role" in
+      build) stem="partial-helldiver" ;;
+      release) stem="partial-proctor" ;;
+      medic) stem="partial-suk" ;;
+      scribe) stem="partial-chronicler" ;;
+    esac
+    write_service "$stem" "$role" "$project"
+    write_timer "$stem"
+    seed_show_output "$stem"
+    if [ "$role" != "scribe" ]; then
+      fixture_replace_in_place "$SHIM_LOG/$stem.timer.stdout" \
+        'ActiveState=active' 'ActiveState=inactive'
+      fixture_replace_in_place "$SHIM_LOG/$stem.timer.stdout" \
+        'SubState=waiting' 'SubState=dead'
+      fixture_replace_in_place "$SHIM_LOG/$stem.timer.stdout" \
+        'UnitFileState=enabled' 'UnitFileState=disabled'
+    fi
+  done
+  fixture_replace_in_place "$SHIM_LOG/partial-helldiver.service.stdout" \
+    'ActiveState=inactive' 'ActiveState=failed'
+  fixture_replace_in_place "$SHIM_LOG/partial-helldiver.service.stdout" \
+    'Result=success' 'Result=failed'
+  fixture_replace_in_place "$SHIM_LOG/partial-helldiver.service.stdout" \
+    'ExecMainStatus=0' 'ExecMainStatus=2'
+
+  run run_inspect
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    . as $doc
+    | ([.fleet[0].units[].role] | sort)
+        == ["build","medic","release","scribe"]
+      and ([.fleet[0].units[]
+        | select(.role=="build")
+        | .timer_active_state=="inactive"
+          and .unit_file_state=="disabled"
+          and .service_active_state=="failed"
+          and .service_result=="failed"
+          and .exec_main_status==2] | all)
+      and ([.fleet[0].units[]
+        | select(.role=="release" or .role=="medic")
+        | .timer_active_state=="inactive"
+          and .unit_file_state=="disabled"
+          and .service_active_state=="inactive"
+          and .service_result=="success"] | all)
+      and ([.fleet[0].units[]
+        | select(.role=="scribe")
+        | .timer_active_state=="active"
+          and .unit_file_state=="enabled"
+          and .service_result=="success"] | all)
+      and ([.evidence[]
+        | select(.source=="systemd"
+          and (.fields.role=="build"
+            or .fields.role=="release"
+            or .fields.role=="medic"))
+        | select(
+            ((.fields.unit | endswith(".timer"))
+              and .fields.property=="ActiveState"
+              and .fields.value=="inactive")
+            or ((.fields.unit | endswith(".timer"))
+              and .fields.property=="UnitFileState"
+              and .fields.value=="disabled")
+            or ((.fields.unit | endswith(".service"))
+              and .fields.property=="ActiveState"
+              and .fields.value=="failed")
+            or ((.fields.unit | endswith(".service"))
+              and .fields.property=="Result"
+              and .fields.value=="failed"))
+        | .id] | length)==8
+      and ([.evidence[]
+        | select(.source=="systemd"
+          and (.fields.role=="build"
+            or .fields.role=="release"
+            or .fields.role=="medic"))
+        | select(
+            ((.fields.unit | endswith(".timer"))
+              and .fields.property=="ActiveState"
+              and .fields.value=="inactive")
+            or ((.fields.unit | endswith(".timer"))
+              and .fields.property=="UnitFileState"
+              and .fields.value=="disabled")
+            or ((.fields.unit | endswith(".service"))
+              and .fields.property=="ActiveState"
+              and .fields.value=="failed")
+            or ((.fields.unit | endswith(".service"))
+              and .fields.property=="Result"
+              and .fields.value=="failed"))
+        | .id] - .fleet[0].state_reason_ids | length)==8
+      and ([.attention[]
+        | select(.kind=="observed_fault")
+        | .evidence_ids[]
+        | select(. as $id
+          | any($doc.evidence[];
+              .id==$id and .source=="systemd"
+              and (.fields.role=="build"
+                or .fields.role=="release"
+                or .fields.role=="medic")))]
+        | length)==0
+  ' <<<"$output"
+}
+
 @test "inspect: missing user bus is unavailable not a fabricated fault" {
   project="$BATS_TEST_TMPDIR/projects/no-bus"
   mkdir -p "$project"

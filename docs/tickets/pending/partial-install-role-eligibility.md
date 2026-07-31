@@ -409,6 +409,28 @@ implementation, the orchestrator ran
 
 deferred: none
 
+### Phase 2 — Fleet inspection respects partial installs
+
+builder: subagent (1 agent)
+
+plan: Own `skills/shipyard/inspect.py` and
+`tests/shipyard-inspect.bats`; capture the pre-change RED for an intentional
+Scribe-only install with disabled latent manifests, then implement D-5 without
+changing schema-v1 or hiding unit inventory.
+
+commit: Phase 2 commit (hash recorded in the Phase 3 Ledger entry).
+
+evidence: Phase 1 committed as `61a0bf7`. The new inspect case was RED on the
+old adapter because eight retained latent-role fault-property evidence IDs
+were promoted into current state/attention. After implementation, the
+orchestrator ran the eligible-fault guard plus the new case (`2/2`) and the
+complete `tests/shipyard-inspect.bats` suite (`74/74`), all green. Python
+compile, diff, leak, live schema-v1 JSON, and bounded human render exited `0`.
+Live Ice retains four unit records and now reports `no_fault_observed`; no
+scheduler mutation occurred.
+
+deferred: none
+
 ```text
 ### Phase N — <title>
 builder: subagent (1 agent) | inline (<allowed reason>)
