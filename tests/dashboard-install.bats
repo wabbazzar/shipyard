@@ -42,6 +42,7 @@ esac'
   make_stub_script launchctl '
 case "$*" in
   *"bootstrap gui/4242 "*) : >"$DASHBOARD_TEST_STATE"; exit 0 ;;
+  *"kickstart -k gui/4242/com.shipyard.dashboard"*) [ -f "$DASHBOARD_TEST_STATE" ]; exit $? ;;
   *"print gui/4242/com.shipyard.dashboard"*) [ -f "$DASHBOARD_TEST_STATE" ]; exit $? ;;
   *"bootout gui/4242/com.shipyard.dashboard"*) unlink "$DASHBOARD_TEST_STATE" 2>/dev/null || true; exit 0 ;;
   *) exit 0 ;;
@@ -177,6 +178,7 @@ PY
   [ "$first" = "$second" ]
   echo "launchd_first=$first launchd_reinstall=$second"
   grep -Fq 'bootstrap gui/4242' "$SHIM_LOG/launchctl.argv"
+  grep -Fq 'kickstart -k gui/4242/com.shipyard.dashboard' "$SHIM_LOG/launchctl.argv"
   run launch_dashboard --doctor --events-dir "$EVENTS_DIR"
   [ "$status" -eq 0 ]
 }

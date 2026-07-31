@@ -6,10 +6,12 @@ kind: frontdoor
 description: >
   Inspect and extend an installed crew from inside a project. Triggers on
   "/shipyard", "/shipyard status", "shipyard status", "what crew is installed
-  here", "/shipyard inspect", "shipyard inspect", "fleet health", "where should
+  here", "/shipyard dashboard", "shipyard dashboard", "open the dashboard",
+  "/shipyard inspect", "shipyard inspect", "fleet health", "where should
   the next Shipyard PR focus", "add a specialist for <subsystem>", or "shipyard
-  learn <lesson>". Four subcommands: `status` (read-only report of the local
-  install), `inspect` (strictly read-only current-user fleet evidence, rendered
+  learn <lesson>". Five subcommands: `status` (read-only report of the local
+  install), `dashboard` (report the private loopback URL and health, with an
+  explicit-only browser opener), `inspect` (strictly read-only current-user fleet evidence, rendered
   for humans by default or as stable schema-v1 JSON), `add-specialist
   <subsystem>` (scaffold and wire a domain specialist), and `learn "<lesson>"`
   (route a lesson through the ADAPTING.md taxonomy). The deterministic core is
@@ -39,6 +41,7 @@ Run the core from the project you're asking about. Codex discovers
 
 ```bash
 bash .claude/skills/shipyard/shipyard.sh status
+bash .claude/skills/shipyard/shipyard.sh dashboard [--open]
 bash .claude/skills/shipyard/shipyard.sh inspect [--json] [--days N]
 bash .claude/skills/shipyard/shipyard.sh add-specialist <subsystem>
 bash .claude/skills/shipyard/shipyard.sh learn "<lesson>"
@@ -52,9 +55,21 @@ Pass `--project <dir>` to target a different checkout than the current one.
 
 Read-only. Enumerates the systemd user timers installed for this project, lists
 where each role's `.agents/<role>.md` project block lives, and — when the full
-toolchain is present — runs `install.sh --doctor` for a drift audit. Exits `3`
+toolchain is present — runs `install.sh --doctor` for a drift audit. It also
+reports the machine-level dashboard's loaded/running state, loopback URL,
+health, event path, latest event, or precise install command. Exits `3`
 when nothing is installed here (a deliberate no-op the caller can branch on),
 `0` otherwise. Never writes anything.
+
+### `dashboard`
+
+Read-only by default. Reports stable `service`, `loaded`, `running`, `url`,
+`health`, `event_path`, and `latest_event` fields from the native dashboard
+manifest plus its loopback health endpoint. When absent it prints the exact
+install command and exits `3`. `--open` is the only path that calls
+`open`/`xdg-open`; without that explicit flag it never launches an application.
+The command never exposes the listener beyond `127.0.0.1` or changes service
+state.
 
 ### `inspect`
 

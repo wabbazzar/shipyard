@@ -395,6 +395,7 @@ activate_service() {
     "$LAUNCHCTL" bootout "$DOMAIN/$SERVICE_ID" >/dev/null 2>&1 || true
     "$LAUNCHCTL" bootstrap "$DOMAIN" "$MANIFEST" || return 2
     "$LAUNCHCTL" enable "$DOMAIN/$SERVICE_ID" >/dev/null 2>&1 || return 2
+    "$LAUNCHCTL" kickstart -k "$DOMAIN/$SERVICE_ID" || return 2
   else
     "$SYSTEMCTL" --user daemon-reload || return 2
     "$SYSTEMCTL" --user enable --now "$SERVICE_ID" || return 2
