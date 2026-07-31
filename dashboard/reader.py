@@ -136,6 +136,17 @@ def _text(event: Mapping[str, Any], field: str) -> str:
     return sys.intern(value) if isinstance(value, str) else ""
 
 
+def _reject_json_constant(value: str) -> Any:
+    raise ValueError(f"non-standard JSON constant: {value}")
+
+
+def _decode_event(raw: bytes) -> dict[str, Any]:
+    decoded = json.loads(raw, parse_constant=_reject_json_constant)
+    if not isinstance(decoded, dict):
+        raise ValueError("JSON row is not an object")
+    return decoded
+
+
 class EventReader:
     """Snapshot and query a directory of newline-delimited event files."""
 
@@ -227,9 +238,7 @@ class EventReader:
                             incomplete.append((path.name, row_offset))
                             break
                         try:
-                            decoded = json.loads(row)
-                            if not isinstance(decoded, dict):
-                                raise ValueError("JSON row is not an object")
+                            decoded = _decode_event(row)
                             ts_us = _timestamp_us(decoded.get("ts"))
                         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
                             problems.append(ParseProblem(path.name, row_offset, str(exc)))
@@ -383,8 +392,14 @@ class EventReader:
             os.close(descriptor)
         if len(raw) != reference.byte_length or not raw.endswith(b"\n"):
             raise StaleReferenceError(f"event row changed: {indexed.name}:{reference.byte_offset}")
-        decoded = json.loads(raw)
-        if not isinstance(decoded, dict) or _timestamp_us(decoded.get("ts")) != reference.timestamp_us:
+        try:
+            decoded = _decode_event(raw)
+            timestamp_us = _timestamp_us(decoded.get("ts"))
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise StaleReferenceError(
+                f"event row changed: {indexed.name}:{reference.byte_offset}"
+            ) from exc
+        if timestamp_us != reference.timestamp_us:
             raise StaleReferenceError(f"event row changed: {indexed.name}:{reference.byte_offset}")
         return decoded
 

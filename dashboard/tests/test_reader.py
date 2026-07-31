@@ -77,12 +77,14 @@ class ReaderTest(unittest.TestCase):
         append_rows(path, [event(NOW - timedelta(seconds=3), "job.start")])
         with path.open("ab") as stream:
             stream.write(b'{"broken":]\n')
+            stream.write(b'{"ts":"2026-07-31T11:59:58Z","event":"bad.constant","value":NaN}\n')
         append_rows(path, [event(NOW - timedelta(seconds=1), "job.end", status="ok")])
         before = checksums(self.root)
         reader = self.reader()
         self.assertEqual(reader.row_count, 2)
-        self.assertEqual(reader.error_count, 1)
+        self.assertEqual(reader.error_count, 2)
         self.assertEqual(reader.problems[0].file, path.name)
+        self.assertIn("non-standard JSON constant", reader.problems[1].message)
         self.assertEqual(checksums(self.root), before)
 
     def test_unterminated_tail_is_retried_without_parse_error(self) -> None:

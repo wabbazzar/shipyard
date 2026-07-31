@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-29
 - **Owner:** wabbazzar
-- **Status:** in progress — Phase 1 bounded reader/model
+- **Status:** in progress — Phase 2 loopback API/SSE
 - **Priority:** medium
 - **Type:** feature
 - **Estimated Points:** 13 (five phases: 3 · 3 · 3 · 2 · 2)
@@ -207,7 +207,7 @@ Six named colors, each with one explicit job:
   - Serve static assets and these read-only endpoints:
     - `GET /api/health`
     - `GET /api/summary`
-    - `GET /api/events?window=&project=&role=&status=&limit=`
+    - `GET /api/events?window=&project=&role=&status=&event=&limit=`
     - `GET /api/stream` using server-sent events for newly appended lines.
   - Accept only `24h`, `7d`, or `30d` windows. Default `limit=500`, cap at
     2,000, reject repeated/unknown query keys, and return deterministic
@@ -535,7 +535,7 @@ and cleanup evidence in the Ledger.
       use exactly that path policy without silently splitting event history.
 - [ ] The service reads the configured append-only event directory without
       modifying, relocating, or deleting event files.
-- [ ] A deterministic 300,000-row fixture indexes within 10 seconds and below
+- [x] A deterministic 300,000-row fixture indexes within 10 seconds and below
       256 MiB peak RSS on the receiving server; queries retain at most 2,000
       decoded result rows and raw detail is loaded lazily.
 - [ ] Fleet summary reports healthy/running/stale/failed/actionable counts and
@@ -622,8 +622,8 @@ Application Support is a clean-install fallback only. Recorded 2026-07-30.
 
 | Phase | Plan | Builder | Commit | Evidence / notes |
 |---|---|---|---|---|
-| 1 — bounded reader/model | Add only the pure Python reader, reader tests, deterministic synthetic fixture generator, and 300k benchmark. Stream daily JSONL once into compact `(ts, file, byte_offset)` references; retain bounded normalized metadata for filtering/state; lazily reread raw rows; pin empty/multi-day/unknown-field/invalid-row/unterminated-tail/rotation/truncation/concurrent-append behavior; prove exact windows and limits plus source checksums. No socket, UI, installer, console, or docs implementation. | builder: subagent (1 agent) | pending | Preflight repair `b661bdc`; 676/676 native Bats. Builder GREEN: reader 17/17, 300k in 3.036s / 112.9 MiB. Orchestrator GREEN: reader 17/17; default Python benchmark 3.055s / 121.7 MiB; system Python benchmark 3.684s / 108.6 MiB; 2,000 results; SHA-256 `a8f54709b7c6a398f7c0e50c64fabd3614fdbef3c6051f59f775e020d252f19d` unchanged. Python compile, leak, deck freshness/completeness, lifecycle, delegation, and diff gates rc=0. Rotation/truncation stale generations, concurrent append deferral, exact windows/limits, project-scoped incident/episode matching, episode-less delivery, and source immutability covered. No socket/UI/installer work entered the slice. |
-| 2 — loopback API/SSE | Read-only endpoints, validation/headers, bounded clients, rotation-safe tail, real listener proof. | builder: subagent (1 agent) | pending | pending |
+| 1 — bounded reader/model | Add only the pure Python reader, reader tests, deterministic synthetic fixture generator, and 300k benchmark. Stream daily JSONL once into compact `(ts, file, byte_offset)` references; retain bounded normalized metadata for filtering/state; lazily reread raw rows; pin empty/multi-day/unknown-field/invalid-row/unterminated-tail/rotation/truncation/concurrent-append behavior; prove exact windows and limits plus source checksums. No socket, UI, installer, console, or docs implementation. | builder: subagent (1 agent) | `82d51dc` | Preflight repair `b661bdc`; 676/676 native Bats. Builder GREEN: reader 17/17, 300k in 3.036s / 112.9 MiB. Orchestrator GREEN: reader 17/17; default Python benchmark 3.055s / 121.7 MiB; system Python benchmark 3.684s / 108.6 MiB; 2,000 results; SHA-256 `a8f54709b7c6a398f7c0e50c64fabd3614fdbef3c6051f59f775e020d252f19d` unchanged. Python compile, leak, deck freshness/completeness, lifecycle, delegation, and diff gates rc=0. Rotation/truncation stale generations, concurrent append deferral, exact windows/limits, project-scoped incident/episode matching, episode-less delivery, and source immutability covered. No socket/UI/installer work entered the slice. |
+| 2 — loopback API/SSE | Add only the standard-library server, server tests, and deterministic live fixture. Resolve an explicit/configured event directory without caller-selected file reads; expose health/summary/events plus current-UTC-file SSE; strictly validate one-value query keys, windows, filters, and 1..2,000 limit; enforce loopback Host, loopback bind, JSON errors, no-store/nosniff/CSP and no CORS; cap SSE at eight, poll at 500 ms, heartbeat at 15 s, recover rotation/truncation, and release disconnects. Prove real port 0 listener/health/headers/Host/SSE behavior. No static UI, installer, console, or docs implementation. | builder: subagent (1 agent) | pending | Phase 1 committed locally as `82d51dc`. Builder GREEN: 33/33 focused tests; real loopback listener and health/Host checks passed. Orchestrator hardened non-standard JSON constants, lone-surrogate serialization, and event-store failure envelopes, then passed 36/36 tests on default and system Python (0.643s/0.884s) plus Python compile. The 300k gate remained GREEN at 3.598s/125.3 MiB and 4.475s/113.9 MiB, 2,000 results, fixture SHA-256 `a8f54709b7c6a398f7c0e50c64fabd3614fdbef3c6051f59f775e020d252f19d` unchanged. Deterministic live fixture SHA-256: `70f12debc0a27ca99fb7a88461c5f69026e420ea5f09abc16dba0157aa8005cb`. Final real listener proof used ephemeral `127.0.0.1:60893`: health 200/ready with 2 rows and 0 errors; bad Host 400; no-store/nosniff/restrictive CSP and no CORS; exit 143; temporary files and listener removed. Leak, deck freshness/completeness, lifecycle, delegation, and diff gates rc=0. Existing port 8765 process was untouched; 8766 remained free for the installed-service phase. No UI/installer/console implementation entered the slice. |
 | 3 — operational UI | Recorded visual system, interaction states, two rendered viewports, safe live refresh. | builder: subagent (1 agent) | pending | pending |
 | 4 — native installer | Hermetic launchd/systemd install/doctor/uninstall using owner-selected D-3 behavior. | builder: subagent (1 agent) | pending | pending |
 | 5 — console/docs/live final | CLI/docs integration, complete gate, explicit real-service smoke, cleanup, graduation. | builder: inline (real service mutation and cross-surface final integration retained by orchestrator) | pending | pending |
