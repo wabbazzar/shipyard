@@ -188,7 +188,7 @@
           "disposition": "kept",
           "source": "agents/release/role.md + runner.sh",
           "summary": "The deterministic floor.",
-          "detail": "Stays as the backstop and as suk's post-merge validator (D-4: shoulder mode runs beside it, not instead of it). The nightly LLM pass is repurposed from re-running already-green tests to critiquing what changed since its last run — the measured failure mode it replaces caught zero real regressions, every recorded failure environmental."
+          "detail": "Stays as the backstop and as suk's post-merge validator (D-4: shoulder mode runs beside it, not instead of it). The nightly LLM pass is repurposed from re-running already-green tests to critiquing what changed since its last run — the measured failure mode it replaces caught zero real regressions, every recorded failure environmental. Unchanged worktree dirt captured before the run is an actionable hygiene notice, not a failed verdict; new or changed dirt still fails."
         },
         {
           "_file": "coverage-audit",

@@ -157,6 +157,16 @@ now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 JOB_START="$(date +%s)"
 cd "$PROJECT_DIR"
 
+# Capture the caller-visible checkout state before the model can touch it.
+# Only byte-for-byte unchanged, pre-existing dirt can later be classified as
+# hygiene rather than a release failure.
+INITIAL_WORKTREE_STATUS="$(git status --porcelain 2>/dev/null || true)"
+if [ -n "$INITIAL_WORKTREE_STATUS" ]; then
+  INITIAL_WORKTREE_DIRTY=true
+else
+  INITIAL_WORKTREE_DIRTY=false
+fi
+
 [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.start \
   mode="$MODE" project="$PROJECT_NAME" || true
 
@@ -240,22 +250,30 @@ if [ "$BLOCKING_GATE_ACTIVE" -eq 1 ]; then
     --arg dir "$PROJECT_DIR" \
     --arg ts "$(now_iso)" \
     --arg result_file "$WORK_RESULT_FILE" \
+    --argjson initial_worktree_dirty "$INITIAL_WORKTREE_DIRTY" \
+    --arg initial_worktree_status "$INITIAL_WORKTREE_STATUS" \
     --argjson runner_owned_gate "$RUNNER_OWNED_GATE" \
     --argjson cfg "$CFG_JSON" \
     '{mode:$mode, project_name:$name, project_dir:$dir, timestamp:$ts,
-      result_file:$result_file, runner_owned_gate:$runner_owned_gate, config:$cfg}')"
+      result_file:$result_file,
+      initial_worktree:{dirty:$initial_worktree_dirty,status:$initial_worktree_status},
+      runner_owned_gate:$runner_owned_gate, config:$cfg}')"
 else
-  # Preserve the historical RUN_CONTEXT shape when the capability is absent or
-  # does not match this mode.
+  # Keep the same initial-worktree evidence available when the blocking-gate
+  # capability is absent or does not match this mode.
   RUN_CONTEXT="$(jq -n \
     --arg mode "$MODE" \
     --arg name "$PROJECT_NAME" \
     --arg dir "$PROJECT_DIR" \
     --arg ts "$(now_iso)" \
     --arg result_file "$RESULT_FILE" \
+    --argjson initial_worktree_dirty "$INITIAL_WORKTREE_DIRTY" \
+    --arg initial_worktree_status "$INITIAL_WORKTREE_STATUS" \
     --argjson cfg "$CFG_JSON" \
     '{mode:$mode, project_name:$name, project_dir:$dir, timestamp:$ts,
-      result_file:$result_file, config:$cfg}')"
+      result_file:$result_file,
+      initial_worktree:{dirty:$initial_worktree_dirty,status:$initial_worktree_status},
+      config:$cfg}')"
 fi
 
 PROMPT="$(cat "$ROLE_FILE")
@@ -339,8 +357,19 @@ if [ "$BLOCKING_GATE_ACTIVE" -eq 1 ]; then
 
   _bg_tmp="$(mktemp "$RESULT_DIR/.$SVC-blocking-gate.XXXXXX")"
   if [ "$BLOCKING_GATE_EXIT" -eq 0 ]; then
-    jq --arg key "$BLOCKING_GATE_RESULT_KEY" '
+    FINAL_WORKTREE_STATUS="$(git status --porcelain 2>/dev/null || true)"
+    jq --arg key "$BLOCKING_GATE_RESULT_KEY" \
+       --arg initial_worktree "$INITIAL_WORKTREE_STATUS" \
+       --arg final_worktree "$FINAL_WORKTREE_STATUS" '
+      def runner_pending_error:
+        type == "string" and startswith("run-in-progress");
+      def hygiene_error:
+        type == "string"
+        and (ascii_downcase | contains("worktree"))
+        and (ascii_downcase | contains("pre-existing"))
+        and (ascii_downcase | contains("notify-only"));
       . as $model
+      | [($model.errors // [])[] | select(hygiene_error)] as $hygiene
       | (
           $model.pass == false
           and $model.incomplete == true
@@ -350,11 +379,56 @@ if [ "$BLOCKING_GATE_ACTIVE" -eq 1 ]; then
           and all(($model.errors // [])[];
             type == "string" and startswith("run-in-progress"))
         ) as $only_runner_gate_pending
+      | (
+          $model.pass == false
+          and $model.incomplete == true
+          and (($model[$key].status // "") == "run-in-progress")
+          and ($initial_worktree | length) > 0
+          and $final_worktree == $initial_worktree
+          and (($model.errors // []) | type == "array")
+          and (($model.hygieneNotifications // []) | type == "array")
+          and ($hygiene | length) > 0
+          and all(($model.errors // [])[];
+            runner_pending_error or hygiene_error)
+          and (($model.vitest.failed // null) == 0)
+          and (($model.pytest.failed // null) == 0)
+          and (($model.typecheck.errors // null) == 0)
+          and (($model.build.ok // false) == true)
+          and (($model.scriptChecks // null) | type == "object")
+          and ($model.scriptChecks.worktreeClean == false)
+          and all($model.scriptChecks | to_entries[];
+            .key == "worktreeClean" or .value == true)
+          and (($model.dbIssues // null) | type == "array")
+          and (($model.dbIssues | length) == 0)
+          and (($model.fixAttempts // null) | type == "array")
+          and all($model.fixAttempts[];
+            ((.outcome // "") != "failed"))
+          and (
+            ($model.security // null) == null
+            or (
+              (($model.security.auditCritical // 0) == 0)
+              and (($model.security.headerIssues // []) | length) == 0
+              and (($model.security.secretsHits // []) | length) == 0
+              and (($model.security.headersOk // true) == true)
+            )
+          )
+        ) as $preexisting_hygiene_only
       | .[$key] = {status:"completed", pass:true, exitCode:0}
       | del(.incomplete)
       | .errors = [(.errors // [])[] |
-          select((type != "string") or (startswith("run-in-progress") | not))]
-      | if $only_runner_gate_pending then .pass = true else . end
+          select(
+            (runner_pending_error | not)
+            and (($preexisting_hygiene_only and hygiene_error) | not)
+          )]
+      | if $preexisting_hygiene_only then
+          .hygieneNotifications =
+            (((.hygieneNotifications // []) + $hygiene) | unique)
+          | .pass = true
+        elif $only_runner_gate_pending then
+          .pass = true
+        else
+          .
+        end
     ' "$WORK_RESULT_FILE" >"$_bg_tmp"
   else
     _bg_error="runner-owned blocking gate $BLOCKING_GATE_RESULT_KEY failed (exit $BLOCKING_GATE_EXIT)"
@@ -448,7 +522,17 @@ PY
 # from the events stream, not from the notification body.
 SUMMARY="$(tail -30 "$LOG_FILE" | grep -A20 -i "RELEASE RESULT" | head -10 || true)"
 [ -z "$SUMMARY" ] && SUMMARY="$SVC completed (mode=$MODE, exit=$FINAL_EXIT). See $LOG_FILE."
-if [ "$PASS" = "true" ]; then
+HYGIENE_COUNT="$(jq -r '
+  if ((.hygieneNotifications // null) | type) == "array"
+  then (.hygieneNotifications | length)
+  else 0
+  end' "$WORK_RESULT_FILE" 2>/dev/null || echo 0)"
+[[ "$HYGIENE_COUNT" =~ ^[0-9]+$ ]] || HYGIENE_COUNT=0
+if [ "$PASS" = "true" ] && [ "$HYGIENE_COUNT" -gt 0 ]; then
+  SUMMARY="$(jq -r '"Release gates passed with pre-existing worktree hygiene advisory:\n"
+    + ((.hygieneNotifications // []) | join("\n"))' "$WORK_RESULT_FILE")"
+  RUN_CLASS="actionable"; RUN_CAUSE="hygiene"
+elif [ "$PASS" = "true" ]; then
   RUN_CLASS="routine"; RUN_CAUSE="pass"
 elif [ "$INCOMPLETE" -eq 1 ]; then
   RUN_CLASS="routine"; RUN_CAUSE="incomplete"

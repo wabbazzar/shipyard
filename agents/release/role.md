@@ -185,6 +185,7 @@ the run crashed mid-way. Shape:
   ],
   "scriptChecks": {"<check_name>": true, ...},
   "dbIssues": [],
+  "hygieneNotifications": [],
   "errors": []
 }
 ```
@@ -194,6 +195,17 @@ AND no fix-attempt was left in a failed state. The runner uses this
 flag to set `JOB_STATUS` and to emit job.end status. On `pass = false`
 the runner's post-run hook will synchronously invoke medic to triage,
 so your hypothesis quality matters — it's the next agent's input.
+
+`RUN CONTEXT.initial_worktree` is runner-captured evidence from before model
+invocation. If its non-empty porcelain `status` is exactly unchanged at the
+end of the run, all executable gates are green, and the only issue explicitly
+says `worktree`, `pre-existing`, and `notify-only`, report that issue under
+`hygieneNotifications`, retain `scriptChecks.worktreeClean=false`, leave
+`errors` empty, and set `pass=true`. Do not clean or alter the checkout. Dirt
+first observed during the run, any changed porcelain status, or any genuine
+test, typecheck, build, database, security, script, or E2E failure remains an
+error with `pass=false`. A passing hygiene result is still sent by the runner
+as an actionable notification.
 
 Add fields freely beyond the schema above; the dashboard tolerates
 unknown keys. But the listed fields MUST be present.

@@ -49,6 +49,27 @@ printf "%s" "{\"result\":\"model found a failure\",\"usage\":{\"input_tokens\":1
 '
 }
 
+stub_model_hygiene_only() {
+  make_stub_script claude '
+for a in "$@"; do _last="$a"; done
+if [ ! -e "'"$MODEL_PROMPT"'" ]; then
+  printf "%s" "$_last" > "'"$MODEL_PROMPT"'"
+fi
+rf="$(printf "%s" "$_last" | grep -oE "\"result_file\":[[:space:]]*\"[^\"]*\"" | head -1 | sed "s/.*\"result_file\":[[:space:]]*\"//; s/\"$//")"
+project="$(dirname "$(dirname "$rf")")"
+if [ "${MODEL_CREATE_DIRT_DURING_RUN:-0}" = "1" ]; then
+  printf "%s\n" "created by model" >"$project/CREATED_DURING_RUN"
+fi
+case "$rf" in
+  *medic*) ;;
+  *)
+    printf "%s" "{\"pass\":false,\"mode\":\"daily\",\"timestamp\":\"model\",\"incomplete\":true,\"vitest\":{\"passed\":325,\"failed\":0,\"skipped\":0},\"pytest\":{\"passed\":265,\"failed\":0,\"skipped\":1},\"typecheck\":{\"errors\":0,\"warnings\":13},\"build\":{\"ok\":true},\"fixAttempts\":[],\"scriptChecks\":{\"dbAudit\":true,\"liveApiHealth200\":true,\"worktreeClean\":false},\"dbIssues\":[],\"errors\":[\"run-in-progress: waiting on e2eIsolated\",\"worktree not clean: pre-existing files present at run start, not touched by this run - notify-only\"],\"e2eIsolated\":{\"status\":\"run-in-progress\"}}" > "$rf"
+    ;;
+esac
+printf "%s" "{\"result\":\"model found pre-existing hygiene only\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"
+'
+}
+
 stub_model_pass_exit_9() {
   make_stub_script claude '
 for a in "$@"; do _last="$a"; done
@@ -212,6 +233,56 @@ EOF
   [ "$(job_end | jq -r '.status')" = "fail" ]
 }
 
+@test "successful gate promotes unchanged pre-existing worktree hygiene and still notifies" {
+  project="$(make_fixture_project blockhygiene can-merge-true.toml)"
+  configure_gate "$project" "true"
+  printf '\n[notify]\nsignal_level = "actionable"\n' >>"$project/.agents/config.toml"
+  git -C "$project" add .agents/config.toml
+  git -C "$project" commit -qm "configure release fixture"
+  printf '%s\n' "pre-existing" >"$project/PREEXISTING"
+  stub_model_hygiene_only
+
+  run run_runner release "$project" --mode daily
+  [ "$status" -eq 0 ]
+  public="$project/tmp/blockhygiene-release-result.json"
+  [ "$(jq -r '.pass' "$public")" = "true" ]
+  [ "$(jq -r '.scriptChecks.worktreeClean' "$public")" = "false" ]
+  [ "$(jq -r '.errors | length' "$public")" -eq 0 ]
+  jq -e '.hygieneNotifications == [
+    "worktree not clean: pre-existing files present at run start, not touched by this run - notify-only"
+  ]' "$public"
+  [ "$(job_end | jq -r '.status')" = "ok" ]
+  decision="$(events_json | jq -c 'select(.event=="notification.decision")')"
+  [ "$(jq -r '.class' <<<"$decision")" = "actionable" ]
+  [ "$(jq -r '.outcome' <<<"$decision")" = "delivered" ]
+  [[ "$(notify_log)" == *"pre-existing files present at run start"* ]]
+  grep -q '"initial_worktree"' "$MODEL_PROMPT"
+  grep -q '"dirty": true' "$MODEL_PROMPT"
+  grep -Fq '?? PREEXISTING' "$MODEL_PROMPT"
+}
+
+@test "successful gate does not promote dirt first created during the model run" {
+  project="$(make_fixture_project blocknewdirt can-merge-true.toml)"
+  configure_gate "$project" "true"
+  printf '\n[notify]\nsignal_level = "actionable"\n' >>"$project/.agents/config.toml"
+  git -C "$project" add .agents/config.toml
+  git -C "$project" commit -qm "configure release fixture"
+  stub_model_hygiene_only
+  export MODEL_CREATE_DIRT_DURING_RUN=1
+
+  run run_runner release "$project" --mode daily
+  [ "$status" -eq 0 ]
+  public="$project/tmp/blocknewdirt-release-result.json"
+  [ "$(jq -r '.pass' "$public")" = "false" ]
+  [ "$(jq -r '.hygieneNotifications // [] | length' "$public")" -eq 0 ]
+  jq -e '.errors == [
+    "worktree not clean: pre-existing files present at run start, not touched by this run - notify-only"
+  ]' "$public"
+  [ "$(job_end | jq -r '.status')" = "fail" ]
+  grep -q '"initial_worktree"' "$MODEL_PROMPT"
+  grep -q '"dirty": false' "$MODEL_PROMPT"
+}
+
 @test "successful gate cannot turn a nonzero model exit into job.end ok" {
   project="$(make_fixture_project blockpartial can-merge-true.toml)"
   configure_gate "$project" "true"
@@ -249,6 +320,8 @@ EOF
   [ "$(jq -r '.pass' "$public")" = "true" ]
   [ "$(jq -r '.e2eIsolated // "absent"' "$public")" = "absent" ]
   ! grep -q '"runner_owned_gate"' "$MODEL_PROMPT"
+  grep -q '"initial_worktree"' "$MODEL_PROMPT"
+  grep -q '"dirty": false' "$MODEL_PROMPT"
 }
 
 @test "malformed blocking gate fails with exit 2 before model result or events" {

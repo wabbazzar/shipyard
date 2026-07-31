@@ -46,7 +46,9 @@ session goes quiet, runs one cold-context critique over the whole diff — it
 never sees the author's transcript (goal contamination), never writes code,
 and delivers findings into the live session as notes, never hard stops. The
 **daily battery** runs the project's tests, typecheck, and every configured
-audit, fixes what it safely can, and reports.
+audit, fixes what it safely can, and reports. Unchanged worktree dirt captured
+before the run is an actionable hygiene notice, not a failed verdict; new or
+changed dirt still fails.
 
 Capture, critique, delivery, and the opt-in stop gate all work whether the
 authoring session runs **claude, codex, or hermes**: each harness fires a
