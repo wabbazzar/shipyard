@@ -2,7 +2,7 @@
 
 - **Created:** 2026-07-29
 - **Owner:** wabbazzar
-- **Status:** pending — ratified; awaiting prerequisite integration
+- **Status:** built and verified
 - **Priority:** medium
 - **Type:** feature
 - **Estimated Points:** 13 (five phases: 3 · 3 · 3 · 2 · 2)
@@ -44,7 +44,7 @@ The public deck at `docs/index.html` is a narrative/product surface, not this
 machine's operational console. The new dashboard must remain a separate,
 private runtime surface.
 
-## Verified pre-build baseline (2026-07-30)
+## Verified pre-build baseline (2026-07-31)
 
 - The server event store is already substantial: approximately 400 MB, with
   280,737 JSONL rows across the latest seven daily files. The implementation
@@ -56,12 +56,19 @@ private runtime surface.
   would split old and future history; migration requires an explicit service
   rebake.
 - Python 3.12, Bats 1.10+, Node, Playwright, Chrome, and Firefox are available
-  on the receiving server. The repository gate currently covers Bats, both
-  shell syntax surfaces, Python compilation, leak checks, deck
-  freshness/completeness/render, lifecycle checks, installer/doctor behavior,
-  and GitHub CI.
-- The prerequisite `macos-native-gate-parity` work is locally verified at
-  528/528 native Mac tests and is queued for canonical server-side integration.
+  on the receiving server. The repository gate covers Bats, both shell syntax
+  surfaces, Python compilation, leak checks, deck freshness/completeness/render,
+  lifecycle checks, installer/doctor behavior, and GitHub CI.
+- The prerequisite `macos-native-gate-parity` work is integrated on canonical
+  `main`. Preflight from that tip plus the local macOS feedback repair passed
+  676/676 native Apple Silicon Bats tests, both Bash syntax surfaces, Python
+  compilation, leak, deck freshness/completeness, lifecycle, delegation, and
+  diff gates. Deck render returned only its documented Playwright-unavailable
+  skip in this checkout.
+- Product default remains `127.0.0.1:8765`. This Mac's installed-service proof
+  will use the machine-local override `127.0.0.1:8766` because another local
+  service already owns port 8765; that process is outside this ticket and must
+  not be stopped or changed.
 
 ## Decisions
 
@@ -200,7 +207,7 @@ Six named colors, each with one explicit job:
   - Serve static assets and these read-only endpoints:
     - `GET /api/health`
     - `GET /api/summary`
-    - `GET /api/events?window=&project=&role=&status=&limit=`
+    - `GET /api/events?window=&project=&role=&status=&event=&limit=`
     - `GET /api/stream` using server-sent events for newly appended lines.
   - Accept only `24h`, `7d`, or `30d` windows. Default `limit=500`, cap at
     2,000, reject repeated/unknown query keys, and return deterministic
@@ -522,57 +529,59 @@ and cleanup evidence in the Ledger.
 
 ## Acceptance Criteria / Definition of Done
 
-- [ ] A native user service serves the dashboard at
-      `http://127.0.0.1:8765` and survives terminal/session closure.
+- [x] A native user service serves the dashboard at its configured loopback
+      URL and survives terminal/session closure. The product default remains
+      `http://127.0.0.1:8765`; this host's owner-selected smoke used `8766`
+      because an unrelated process already owned `8765`.
 - [x] D-3 is explicitly selected and recorded; install/upgrade behavior must
       use exactly that path policy without silently splitting event history.
-- [ ] The service reads the configured append-only event directory without
+- [x] The service reads the configured append-only event directory without
       modifying, relocating, or deleting event files.
-- [ ] A deterministic 300,000-row fixture indexes within 10 seconds and below
+- [x] A deterministic 300,000-row fixture indexes within 10 seconds and below
       256 MiB peak RSS on the receiving server; queries retain at most 2,000
       decoded result rows and raw detail is loaded lazily.
-- [ ] Fleet summary reports healthy/running/stale/failed/actionable counts and
+- [x] Fleet summary reports healthy/running/stale/failed/actionable counts and
       the latest event timestamp from synthetic and real local streams, using
       the exact deterministic state rules in Technical Requirements.
-- [ ] Project × role state uses canonical `project`/`role` identity and shows
+- [x] Project × role state uses canonical `project`/`role` identity and shows
       last terminal status, duration, and activity.
-- [ ] Timeline filters work for time window, project, role, event family, and
+- [x] Timeline filters work for time window, project, role, event family, and
       status, with exact 24h/7d/30d windows, default/max limits of 500/2,000,
       rejection of unknown/repeated query keys, and deterministic ordering.
-- [ ] SSE updates the page after a new JSONL append without a full reload,
+- [x] SSE updates the page after a new JSONL append without a full reload,
       losing selection, or moving the operator's scroll position; rotation,
       truncation, disconnect cleanup, 15-second heartbeats, and the eight-client
       cap are verified.
-- [ ] Empty, loading, stale, malformed-line, and disconnected-stream states use
+- [x] Empty, loading, stale, malformed-line, and disconnected-stream states use
       the exact actionable copy recorded in this ticket.
-- [ ] Malformed or partially written final lines never hide earlier valid
+- [x] Malformed or partially written final lines never hide earlier valid
       events and never crash the server.
-- [ ] Event-provided HTML/script text renders inertly; no endpoint permits
+- [x] Event-provided HTML/script text renders inertly; no endpoint permits
       arbitrary filesystem reads.
-- [ ] The UI matches the recorded hierarchy and visual system at `1440×900`
+- [x] The UI matches the recorded hierarchy and visual system at `1440×900`
       and `390×844`, with keyboard access, visible focus, readable contrast,
       no overflow, and reduced-motion behavior verified.
-- [ ] `scripts/install-dashboard.sh` is idempotent, supports native launchd and
+- [x] `scripts/install-dashboard.sh` is idempotent, supports native launchd and
       systemd user services, and leaves per-project scheduler jobs untouched.
-- [ ] `shipyard status` reports dashboard health/URL/event path/latest event,
+- [x] `shipyard status` reports dashboard health/URL/event path/latest event,
       while `shipyard dashboard` provides the deterministic operator entrypoint.
-- [ ] `lsof` proves the listener is `127.0.0.1` only; non-loopback `Host`
+- [x] `lsof` proves the listener is `127.0.0.1` only; non-loopback `Host`
       values are rejected, no CORS allowance is emitted, and no-store, nosniff,
       and restrictive CSP headers are present.
-- [ ] No dashboard or event content leaves the machine, including during both
+- [x] No dashboard or event content leaves the machine, including during both
       browser proofs.
-- [ ] Notification Center remains the actionable/urgent alert transport; no
+- [x] Notification Center remains the actionable/urgent alert transport; no
       routine event flood is introduced.
-- [ ] README and install docs distinguish the public deck, private dashboard,
+- [x] README and install docs distinguish the public deck, private dashboard,
       event store, service logs, and future Slack/BopBop alert adapters.
-- [ ] Full repository gates are green, and a real macOS smoke visibly advances
+- [x] Full repository gates are green, and a real macOS smoke visibly advances
       the dashboard after a synthetic Shipyard event.
 
 ## Dependencies
 
-- Blocked by integration: `macos-native-gate-parity` must be canonicalized,
-  Linux-gated, pushed by the receiving server, and CI/Pages-green before Phase
-  1 starts.
+- Resolved 2026-07-31: `macos-native-gate-parity` is canonicalized on `main`;
+  Phase 1 started only after the latest tip passed the native macOS baseline
+  and repository gates recorded above.
 - External services: none for the MVP.
 - Enables: an optional follow-up for BopBop/Slack actionable-alert fan-out and
   later multi-machine aggregation.
@@ -615,11 +624,11 @@ Application Support is a clean-install fallback only. Recorded 2026-07-30.
 
 | Phase | Plan | Builder | Commit | Evidence / notes |
 |---|---|---|---|---|
-| 1 — bounded reader/model | Stream/index offsets, deterministic state/filter model, lazy detail, 300k benchmark. | builder: subagent (1 agent) | pending | pending |
-| 2 — loopback API/SSE | Read-only endpoints, validation/headers, bounded clients, rotation-safe tail, real listener proof. | builder: subagent (1 agent) | pending | pending |
-| 3 — operational UI | Recorded visual system, interaction states, two rendered viewports, safe live refresh. | builder: subagent (1 agent) | pending | pending |
-| 4 — native installer | Hermetic launchd/systemd install/doctor/uninstall using owner-selected D-3 behavior. | builder: subagent (1 agent) | pending | pending |
-| 5 — console/docs/live final | CLI/docs integration, complete gate, explicit real-service smoke, cleanup, graduation. | builder: inline (real service mutation and cross-surface final integration retained by orchestrator) | pending | pending |
+| 1 — bounded reader/model | Add only the pure Python reader, reader tests, deterministic synthetic fixture generator, and 300k benchmark. Stream daily JSONL once into compact `(ts, file, byte_offset)` references; retain bounded normalized metadata for filtering/state; lazily reread raw rows; pin empty/multi-day/unknown-field/invalid-row/unterminated-tail/rotation/truncation/concurrent-append behavior; prove exact windows and limits plus source checksums. No socket, UI, installer, console, or docs implementation. | builder: subagent (1 agent) | `82d51dc` | Preflight repair `b661bdc`; 676/676 native Bats. Builder GREEN: reader 17/17, 300k in 3.036s / 112.9 MiB. Orchestrator GREEN: reader 17/17; default Python benchmark 3.055s / 121.7 MiB; system Python benchmark 3.684s / 108.6 MiB; 2,000 results; SHA-256 `a8f54709b7c6a398f7c0e50c64fabd3614fdbef3c6051f59f775e020d252f19d` unchanged. Python compile, leak, deck freshness/completeness, lifecycle, delegation, and diff gates rc=0. Rotation/truncation stale generations, concurrent append deferral, exact windows/limits, project-scoped incident/episode matching, episode-less delivery, and source immutability covered. No socket/UI/installer work entered the slice. |
+| 2 — loopback API/SSE | Add only the standard-library server, server tests, and deterministic live fixture. Resolve an explicit/configured event directory without caller-selected file reads; expose health/summary/events plus current-UTC-file SSE; strictly validate one-value query keys, windows, filters, and 1..2,000 limit; enforce loopback Host, loopback bind, JSON errors, no-store/nosniff/CSP and no CORS; cap SSE at eight, poll at 500 ms, heartbeat at 15 s, recover rotation/truncation, and release disconnects. Prove real port 0 listener/health/headers/Host/SSE behavior. No static UI, installer, console, or docs implementation. | builder: subagent (1 agent) | `308f1ed` | Phase 1 committed locally as `82d51dc`. Builder GREEN: 33/33 focused tests; real loopback listener and health/Host checks passed. Orchestrator hardened non-standard JSON constants, lone-surrogate serialization, and event-store failure envelopes, then passed 36/36 tests on default and system Python (0.643s/0.884s) plus Python compile. The 300k gate remained GREEN at 3.598s/125.3 MiB and 4.475s/113.9 MiB, 2,000 results, fixture SHA-256 `a8f54709b7c6a398f7c0e50c64fabd3614fdbef3c6051f59f775e020d252f19d` unchanged. Deterministic live fixture SHA-256: `70f12debc0a27ca99fb7a88461c5f69026e420ea5f09abc16dba0157aa8005cb`. Final real listener proof used ephemeral `127.0.0.1:60893`: health 200/ready with 2 rows and 0 errors; bad Host 400; no-store/nosniff/restrictive CSP and no CORS; exit 143; temporary files and listener removed. Leak, deck freshness/completeness, lifecycle, delegation, and diff gates rc=0. Existing port 8765 process was untouched; 8766 remained free for the installed-service phase. No UI/installer/console implementation entered the slice. |
+| 3 — operational UI | Add only build-free `dashboard/static/index.html`, `styles.css`, `app.js`, a deterministic browser fixture/harness, and Ledger evidence. Implement the recorded quiet instrument-panel hierarchy: fleet summary, actionable queue, project × role matrix/cards, keel rail, bounded filters, selected-event evidence, and exact loading/empty/stale/parse/disconnected copy. Render untrusted fields with text-only DOM APIs; preserve selection and scroll across same-origin SSE refresh; provide semantic headings/table/list/disclosure structure, complete keyboard path, visible focus, reduced motion, contrast, and no horizontal overflow at 1440×900 and 390×844. Inspect both screenshots and remove one nonessential accessory after critique. Do not add installer, console, docs, dependencies, remote calls, or mutation controls. | builder: subagent (1 agent using `ui-design`) | `7868c6d` | Phase 2 committed locally as `308f1ed`. Builder GREEN: reader/API 36/36; mandatory dependency-free CDP browser proof at both declared viewports; JavaScript syntax/diff clean. Orchestrator GREEN: 36/36 on default and system Python (0.672s/0.894s), Python/JavaScript compile, and fresh real browser proofs on ephemeral loopback ports 64377/64388. Wide 1440×900: table and coexisting panels visible, filters open, no overflow. Narrow 390×844: actionable queue precedes project cards, table hidden, filters keyboard-expandable, no overflow. Exact loading/empty/stale/parse/disconnected copy passed; skip link, event selection, raw evidence, focus outline 3px, semantic structure, and reduced motion passed. Contrast minima exceeded 4.5:1 (Alarm/Hull lowest at 6.83:1). Hostile HTML remained inert; known result/scheduler paths remained copyable text; mutation controls and external request origins were zero. SSE advanced 6→7 events with selected evidence unchanged and scroll 300→300; filtered actionable evidence clears false rail highlights. Deterministic browser seed SHA-256 `f7d214756d1ed61de6c628bc0de6849d5a6e47c2231b6b7555cf882775c266fa`. Both orchestrator screenshots were visually inspected: hierarchy, wide balance, narrow composition, and the keel rail matched the thesis. The `ui-design` critique removed the nonessential build badge and retained the rail as the sole signature element. Browser/server processes and fixtures cleaned; 8765/8766 untouched. Leak, deck freshness/completeness, lifecycle, delegation, and diff gates rc=0. No installer/console/docs implementation entered the slice. |
+| 4 — native installer | Add only `scripts/install-dashboard.sh`, hermetic `tests/dashboard-install.bats`, deterministic launchd/systemd manifest fixtures if needed, and Ledger evidence. Implement `--install`, `--doctor`, `--uninstall`, and `--dry-run` for only `com.shipyard.dashboard` / `shipyard-dashboard.service`; render loopback host, selected port, dashboard source/assets, owner-selected event directory, and platform-local logs with byte-stable reinstall output. Preserve any explicitly configured/baked event path and use Application Support/XDG only for clean fallback; never migrate history or inspect/mutate per-project jobs. Provide test-only path/command seams so macOS/Linux install, loaded/stopped state, wrong host/port/event directory, asset/version drift, uninstall leave-behinds, symlink refusal, modes, and first/reinstall checksums are proven without touching a real service. Parse under system and modern Bash. Do not load/unload a real service, bind a port, edit console/docs, or route remotely. | builder: subagent (1 installer builder) | `4d792f9` | Phase 3 committed locally as `7868c6d`. Builder GREEN: native Apple Bash 14/14; system/modern Bash syntax and diff checks rc=0. Systemd first/reinstall checksum `2891549776:1611` remained identical; launchd `3563540378:2199` remained identical; manifests are mode 0644 and bake only `127.0.0.1`, selected port, preserved event root, local logs, exact source/assets, build version, and deterministic runtime digest. D-3 precedence is explicit CLI/environment → matching crew manifests → existing dashboard manifest → clean Application Support/XDG fallback; ambiguous fleet roots require owner selection. Doctor classifies stopped, wrong host/port/event directory, and stale asset/version drift. Dry-run made no writes or scheduler calls. Uninstall preserved byte-identical crew units, event rows, and logs. Orchestrator hardened portable mode inspection, exact runtime digest inputs, decimal port normalization, scheduler command preflight, and exact-service uninstall after event/log roots move or become symlinks; fresh native 14/14 and both Bash syntax checks remained GREEN. Leak, deck freshness/completeness, lifecycle, delegation, and diff gates rc=0. No manifest fixtures were needed; plist parsing and systemd content are asserted directly. No real scheduler command, listener, event migration, console/docs edit, or remote action occurred; 8765 remained untouched and 8766 free. |
+| 5 — console/docs/live final | Extend only the deterministic `shipyard` skill/core, focused dashboard console tests, README/install docs, generated deck metadata required by the skill change, and this Ledger/ticket lifecycle. `shipyard dashboard` reports stable URL/health fields and opens a browser only with explicit `--open`; `shipyard status` adds loaded/running state, URL, event root, latest timestamp, and an exact install command when absent without changing existing crew semantics. Document the public-deck/private-dashboard boundary, macOS/Linux event and log defaults, D-3 preservation/rebake behavior, loopback-only reach, lifecycle commands, and future classified-alert adapters. Run focused console/installer/API/browser proofs, the complete native repository battery, then install the real macOS service at owner-selected `127.0.0.1:8766` against the currently baked crew event root, run doctor/status/health, append one canonical `dashboard.smoke` row through `log_event.sh`, prove API and rendered UI advance, and leave the intended service running while cleaning only proof processes/files. Record exact evidence, mark completed criteria, set status built/verified, and graduate the ticket. Do not touch 8765, delete/rewrite history, send notifications, call external origins, or route remotely. | builder: inline (orchestrator retains real mutation and cross-surface integration) | `c02d454` | Phase 4 committed locally as `4d792f9`. Console/docs GREEN: focused native installer/dashboard/status 30/30; default and system Python 36/36; both Bash parsers, Python/JavaScript compile, and diff checks rc=0. A live macOS preflight found the service absent and `8766` free while unrelated PID 10576 retained `8765`. The first real install exposed two launchd-only gaps: bootstrap did not spawn until kickstart, and `grep -q` under pipefail misread a running job; explicit kickstart plus a launchd console regression fixed both, with focused and complete tests green afterward. The final native repository battery passed 698/698. Reader benchmark: 300,000 rows, 2,000 retained results, 3.702s / 121.8 MiB, SHA-256 `a8f54709b7c6a398f7c0e50c64fabd3614fdbef3c6051f59f775e020d252f19d` unchanged. Fresh browser proofs passed at 1440×900 and 390×844 on ephemeral loopback ports 50760/50759; both screenshots were visually inspected, same-origin-only traffic and SSE 6→7 were proven, and processes/fixtures were cleaned. Real deck render, leak, deck freshness/completeness, lifecycle, delegation, and diff gates passed. Live service proof: `com.shipyard.dashboard`, PID 14243 with PPID 1, exactly `127.0.0.1:8766`, doctor clean, console loaded/running/ready, health 200 with 25 rows / 0 errors / build `0.1.0`, hostile Host 400, no-store/nosniff/restrictive CSP, and no CORS. Canonical helper append changed the daily stream from 10→11 lines and emitted `{"ts":"2026-07-31T15:47:52Z","svc":"dashboard-smoke","event":"dashboard.smoke","project":"shipyard","role":"dashboard","status":"ok","tokens":0,"source":"agent"}`; the filtered API returned exactly one match and the installed UI visibly rendered the selected event using only its own origin. Proof browsers, captures, and interrupted-suite shim were removed; the intended service remains running, event history remains append-only, PID 10576 on `8765` was untouched, no notification fired, and no remote/push/tunnel action occurred. |
 
 Run this ticket with the `execute-ticket` skill after the prerequisite
 integration is resolved.

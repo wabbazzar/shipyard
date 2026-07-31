@@ -1,0 +1,2 @@
+{"event":"job.start","project":"fixture","role":"build","svc":"fixture-build","ts":"2026-07-31T11:59:58Z"}
+{"duration_s":1.25,"event":"job.end","project":"fixture","role":"build","status":"ok","svc":"fixture-build","ts":"2026-07-31T11:59:59Z"}

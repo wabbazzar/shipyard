@@ -46,7 +46,7 @@ mark_installed() {
   editorial="$QUARTET_ROOT/docs/deck-editorial.json"
 
   grep -Fq '"/shipyard inspect"' "$skill"
-  grep -Fq 'Four subcommands:' "$skill"
+  grep -Fq 'Five subcommands:' "$skill"
   grep -Fq 'matching current-user manifests into this Shipyard core' "$skill"
   grep -Fq 'strictly read-only' "$skill"
   grep -Fq 'does not certify fleet health' "$skill"

@@ -6,6 +6,8 @@
 #
 #   status                     what's installed here (units, project blocks,
 #                              --doctor). Read-only. Exit 3 if nothing installed.
+#   dashboard [--open]         report the local dashboard URL and health;
+#                              open it only when explicitly requested.
 #   inspect [--json] [--days N] fleet observation for this Shipyard core.
 #   add-specialist <subsystem> scaffold + wire the domain-specialist archetype.
 #   learn "<lesson>"           route a lesson through the ADAPTING.md taxonomy.
@@ -26,6 +28,7 @@ OPT_TO=""       # learn: explicit route (project|generic|install)
 OPT_ROLE=""     # learn --to project: which .agents/<role>.md
 OPT_JSON=0      # inspect: emit the schema-v1 source document
 OPT_DAYS="7"    # inspect: rolling UTC window in days
+OPT_OPEN=0      # dashboard: open the loopback URL after reporting health
 OPT_PROJECT_SET=0
 OPT_TO_SET=0
 OPT_ROLE_SET=0
@@ -46,6 +49,7 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || { echo "shipyard: --days requires a value" >&2; exit 2; }
       OPT_DAYS="$2"; OPT_DAYS_SET=1; shift 2 ;;
     --json)    OPT_JSON=1; shift ;;
+    --open)    OPT_OPEN=1; shift ;;
     -h|--help) SUBCMD="help"; shift ;;
     -*) echo "shipyard: unknown flag '$1'" >&2; exit 2 ;;
     *)
@@ -58,6 +62,10 @@ done
 if [ "$SUBCMD" != "inspect" ] \
   && { [ "$OPT_JSON" -eq 1 ] || [ "$OPT_DAYS_SET" -eq 1 ]; }; then
   echo "shipyard $SUBCMD: --json/--days apply only to inspect" >&2
+  exit 2
+fi
+if [ "$SUBCMD" != "dashboard" ] && [ "$OPT_OPEN" -eq 1 ]; then
+  echo "shipyard $SUBCMD: --open applies only to dashboard" >&2
   exit 2
 fi
 
@@ -92,6 +100,7 @@ usage() {
 shipyard — inspect and extend an installed crew.
 
   shipyard status                  what's installed here (default)
+  shipyard dashboard [--open]      report the private local dashboard
   shipyard inspect [--json]        inspect this current-user Shipyard fleet
     [--days N]                     rolling UTC window (default 7)
   shipyard add-specialist <sub>    scaffold a domain-specialist for <sub>
@@ -101,6 +110,201 @@ shipyard — inspect and extend an installed crew.
 
 Exit: 0 ok · 2 bad invocation · 3 nothing installed.
 EOF
+}
+
+# ---- dashboard -------------------------------------------------------------
+_dashboard_manifest_value() {
+  python3 - "$1" "$2" <<'PY'
+import pathlib
+import plistlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+key = sys.argv[2]
+if not path.is_file() or path.is_symlink():
+    raise SystemExit(1)
+if path.suffix == ".plist":
+    with path.open("rb") as source:
+        value = plistlib.load(source).get("EnvironmentVariables", {}).get(key, "")
+else:
+    value = ""
+    prefix = 'Environment="' + key + "="
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith(prefix) and line.endswith('"'):
+            value = re.sub(r"\\(.)", r"\1", line[len(prefix):-1]).replace("%%", "%")
+            break
+if isinstance(value, str):
+    print(value)
+PY
+}
+
+_dashboard_health_record() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import json
+import sys
+import urllib.request
+
+host, port_text, expected_events = sys.argv[1:]
+port = int(port_text)
+request = urllib.request.Request(
+    f"http://{host}:{port}/api/health",
+    headers={"Accept": "application/json"},
+)
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+with opener.open(request, timeout=1.5) as response:
+    if response.status != 200:
+        raise SystemExit(1)
+    payload = json.load(response)
+if not isinstance(payload, dict):
+    raise SystemExit(1)
+actual_events = payload.get("event_directory")
+latest = payload.get("latest_timestamp")
+consistent = (
+    payload.get("ready") is True
+    and payload.get("host") == host
+    and payload.get("port") == port
+    and actual_events == expected_events
+)
+print("ready" if consistent else "drift")
+print(actual_events if isinstance(actual_events, str) and actual_events else "unknown")
+print(latest if isinstance(latest, str) and latest else "none")
+PY
+}
+
+_dashboard_valid_port() {
+  case "$1" in *[!0-9]*|"") return 1 ;; esac
+  [ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 65535 ] 2>/dev/null
+}
+
+_dashboard_report() {
+  local prefix="${1:-}" scheduler dash_home manifest service port host events
+  local loaded="false" running="false" health="absent" latest="unknown"
+  local systemctl_cmd launchctl_cmd launch_output="" record="" value=""
+  scheduler="$(_scheduler)" || { echo "shipyard: unsupported scheduler" >&2; return 2; }
+  dash_home="${SHIPYARD_DASHBOARD_HOME:-$HOME}"
+  host="127.0.0.1"
+  port="${SHIPYARD_DASHBOARD_PORT:-8765}"
+  case "$scheduler" in
+    launchd)
+      manifest="${SHIPYARD_DASHBOARD_LAUNCHD_DIR:-$dash_home/Library/LaunchAgents}/com.shipyard.dashboard.plist"
+      service="com.shipyard.dashboard"
+      ;;
+    systemd)
+      manifest="${SHIPYARD_DASHBOARD_SYSTEMD_DIR:-$dash_home/.config/systemd/user}/shipyard-dashboard.service"
+      service="shipyard-dashboard.service"
+      ;;
+  esac
+  DASHBOARD_URL="unavailable"
+  DASHBOARD_OPENABLE=0
+  if _dashboard_valid_port "$port"; then
+    DASHBOARD_URL="http://$host:$port"
+    DASHBOARD_OPENABLE=1
+  else
+    health="invalid-config"
+  fi
+  events="unknown"
+
+  if [ -f "$manifest" ] && [ ! -L "$manifest" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+      value="$(_dashboard_manifest_value "$manifest" SHIPYARD_DASHBOARD_HOST 2>/dev/null || true)"
+      [ -z "$value" ] || host="$value"
+      value="$(_dashboard_manifest_value "$manifest" SHIPYARD_DASHBOARD_PORT 2>/dev/null || true)"
+      [ -z "$value" ] || port="$value"
+      value="$(_dashboard_manifest_value "$manifest" QUARTET_EVENTS_DIR 2>/dev/null || true)"
+      [ -z "$value" ] || events="$value"
+    fi
+    if [ "$host" = "127.0.0.1" ] && _dashboard_valid_port "$port"; then
+      DASHBOARD_URL="http://$host:$port"
+      DASHBOARD_OPENABLE=1
+    else
+      health="invalid-config"
+      DASHBOARD_URL="unavailable"
+      DASHBOARD_OPENABLE=0
+    fi
+
+    if [ "$scheduler" = "launchd" ]; then
+      launchctl_cmd="${SHIPYARD_DASHBOARD_LAUNCHCTL:-launchctl}"
+      if command -v "$launchctl_cmd" >/dev/null 2>&1; then
+        if launch_output="$("$launchctl_cmd" print "gui/${SHIPYARD_DASHBOARD_UID:-$(id -u)}/$service" 2>/dev/null)"; then
+          loaded="true"
+          if printf '%s\n' "$launch_output" | grep -E 'state = running|pid = [0-9]+' >/dev/null; then
+            running="true"
+          fi
+        fi
+      else
+        loaded="unknown"; running="unknown"
+      fi
+    else
+      systemctl_cmd="${SHIPYARD_DASHBOARD_SYSTEMCTL:-systemctl}"
+      if command -v "$systemctl_cmd" >/dev/null 2>&1; then
+        "$systemctl_cmd" --user is-enabled "$service" >/dev/null 2>&1 && loaded="true"
+        "$systemctl_cmd" --user is-active "$service" >/dev/null 2>&1 && running="true"
+      else
+        loaded="unknown"; running="unknown"
+      fi
+    fi
+
+    if [ "$running" = "true" ] && [ "$health" != "invalid-config" ] \
+      && command -v python3 >/dev/null 2>&1; then
+      record="$(_dashboard_health_record "$host" "$port" "$events" 2>/dev/null || true)"
+      if [ -n "$record" ]; then
+        health="$(printf '%s\n' "$record" | sed -n '1p')"
+        events="$(printf '%s\n' "$record" | sed -n '2p')"
+        latest="$(printf '%s\n' "$record" | sed -n '3p')"
+      else
+        health="unavailable"
+      fi
+    elif [ "$health" != "invalid-config" ]; then
+      health="unavailable"
+    fi
+  fi
+
+  printf '%sservice=%s\n' "$prefix" "$service"
+  printf '%sloaded=%s\n' "$prefix" "$loaded"
+  printf '%srunning=%s\n' "$prefix" "$running"
+  printf '%surl=%s\n' "$prefix" "$DASHBOARD_URL"
+  printf '%shealth=%s\n' "$prefix" "$health"
+  printf '%sevent_path=%s\n' "$prefix" "$events"
+  printf '%slatest_event=%s\n' "$prefix" "$latest"
+  if [ ! -f "$manifest" ]; then
+    printf '%sinstall_command=/bin/bash %s/scripts/install-dashboard.sh --install --port %s\n' \
+      "$prefix" "$QUARTET_DIR" "$port"
+    return 3
+  fi
+  return 0
+}
+
+cmd_dashboard() {
+  [ "$OPT_TO_SET" -eq 0 ] && [ "$OPT_ROLE_SET" -eq 0 ] || {
+    echo "shipyard dashboard: --to/--role apply only to learn" >&2
+    return 2
+  }
+  [ "${#ARGS[@]}" -eq 0 ] || {
+    echo "shipyard dashboard: unexpected positional argument '${ARGS[0]}'" >&2
+    return 2
+  }
+  local report_rc=0 opener=""
+  _dashboard_report "" || report_rc=$?
+  if [ "$OPT_OPEN" -eq 1 ] && [ "$report_rc" -eq 0 ]; then
+    [ "$DASHBOARD_OPENABLE" -eq 1 ] || {
+      echo "shipyard dashboard: installed URL is invalid" >&2
+      return 2
+    }
+    case "$(uname -s)" in
+      Darwin) opener="${SHIPYARD_DASHBOARD_OPEN:-open}" ;;
+      *) opener="${SHIPYARD_DASHBOARD_OPEN:-xdg-open}" ;;
+    esac
+    command -v "$opener" >/dev/null 2>&1 || {
+      echo "shipyard dashboard: opener is unavailable: $opener" >&2
+      return 2
+    }
+    "$opener" "$DASHBOARD_URL" || {
+      echo "shipyard dashboard: opener failed" >&2
+      return 2
+    }
+  fi
+  return "$report_rc"
 }
 
 # ---- inspect ---------------------------------------------------------------
@@ -151,6 +355,8 @@ cmd_status() {
     echo "shipyard: no crew installed for '$PROJECT_NAME'"
     echo "  (no $unit_dir/$pattern)"
     echo "  install with: $QUARTET_DIR/install.sh --project $PROJECT_DIR"
+    echo "dashboard:"
+    _dashboard_report "  " || true
     return 3
   fi
 
@@ -169,6 +375,8 @@ cmd_status() {
     echo "doctor:"
     "$QUARTET_DIR/install.sh" --doctor --project "$PROJECT_DIR" 2>&1 | sed 's/^/  /' || true
   fi
+  echo "dashboard:"
+  _dashboard_report "  " || true
   return 0
 }
 
@@ -398,6 +606,7 @@ cmd_learn() {
 case "$SUBCMD" in
   help)   usage; exit 0 ;;
   status) cmd_status; exit $? ;;
+  dashboard) cmd_dashboard; exit $? ;;
   inspect) cmd_inspect; exit $? ;;
   add-specialist) cmd_add_specialist; exit $? ;;
   learn) cmd_learn; exit $? ;;

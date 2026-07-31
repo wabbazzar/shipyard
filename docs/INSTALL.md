@@ -108,6 +108,61 @@ recon  →  interview  →  write L2–L5  →  bake units  →  verify
    are green now, the scheduler reports each job loaded, and the eight skill
    symlinks resolve.
 
+## Private local operations dashboard
+
+The public deck in `docs/` explains Shipyard. The operations dashboard shows
+private runtime events from this machine. They are separate surfaces: the
+dashboard never publishes event content into the deck and never binds beyond
+loopback.
+
+Install the single native user service after the crew jobs exist:
+
+```bash
+# Preview performs no writes or scheduler calls.
+scripts/install-dashboard.sh --install --dry-run
+
+# Default: 127.0.0.1:8765. Override the port when that socket is occupied.
+SHIPYARD_DASHBOARD_PORT=8766 scripts/install-dashboard.sh --install
+scripts/install-dashboard.sh --doctor
+
+# Non-interactive by default; --open is the only browser-launching path.
+skills/shipyard/shipyard.sh dashboard
+skills/shipyard/shipyard.sh dashboard --open
+```
+
+The installer writes exactly one service:
+
+| Platform | Definition | Event fallback | Logs |
+|---|---|---|---|
+| macOS | `~/Library/LaunchAgents/com.shipyard.dashboard.plist` | `~/Library/Application Support/Shipyard/events/` | `~/Library/Logs/Shipyard/dashboard.log` and `dashboard.err.log` |
+| Linux | `${XDG_CONFIG_HOME:-~/.config}/systemd/user/shipyard-dashboard.service` | `${XDG_STATE_HOME:-~/.local/state}/shipyard/events/` | `${XDG_STATE_HOME:-~/.local/state}/shipyard/logs/dashboard.log` and `dashboard.err.log` |
+
+Event-path precedence is deliberate: explicit `--events-dir`, then
+`QUARTET_EVENTS_DIR`, then one unambiguous path already baked into crew
+manifests, then the existing dashboard manifest, then the clean-install
+fallback above. This preserves current history. The installer never copies,
+moves, rewrites, or deletes JSONL files. If crew jobs need a different path,
+re-run the project installer with the new `QUARTET_EVENTS_DIR` so those jobs
+are rebaked, then run the dashboard installer with the same explicit path.
+Moving old history remains a separate manual owner decision.
+
+`--doctor` is read-only and detects an absent/stopped service, a wrong host,
+port, or event directory, and source/asset version drift. Reinstall is
+byte-stable. Uninstall removes only the dashboard service and deliberately
+leaves events and logs:
+
+```bash
+scripts/install-dashboard.sh --uninstall --dry-run
+scripts/install-dashboard.sh --uninstall
+```
+
+The server accepts only loopback/localhost `Host`, emits no CORS allowance,
+and exposes read-only health, summary, event, and live-stream endpoints. It is
+not an authenticated LAN, tailnet, or public service. Notification Center
+remains the actionable/urgent attention path. A future Slack or BopBop adapter
+may sit downstream of classified notifications; it must not replace the local
+append-only event history.
+
 ## Opt-in Git identity
 
 A project may track only its non-sensitive identity policy at

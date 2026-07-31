@@ -210,6 +210,14 @@ has() {
   has "$f" 'builder:'
 }
 
+@test "gates template requires visual and semantic served-app proof" {
+  f="$QUARTET_ROOT/skills/gates.md.template"
+  has "$f" 'visual screenshot inspection'
+  has "$f" 'semantic assertions against the live page'
+  has "$f" 'Browser-runtime absence is RED'
+  has "$f" 'zero request origins outside the loopback server'
+}
+
 # .agents/ is gitignored (this box's self-install), so a fresh clone — CI
 # included — has no gate file to assert against. These cases check the LOCAL
 # install when it exists and skip when it doesn't; the tracked contract lives in

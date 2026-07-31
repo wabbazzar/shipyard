@@ -127,7 +127,12 @@ codes `0`/`2`/`3`):
 
 - `shipyard status` — read-only report of the scheduler jobs installed here, where
   each `.agents/<role>.md` block lives, and an `install.sh --doctor` drift audit
-  (exit `3` when nothing is installed).
+  (exit `3` when nothing is installed). It also reports the machine-level
+  dashboard's loaded/running state, private URL, event path, and latest event—or
+  the exact install command when the dashboard is absent.
+- `shipyard dashboard [--open]` — print the private dashboard URL and health.
+  The default is non-interactive; only the explicit `--open` flag launches a
+  browser.
 - `shipyard inspect [--json] [--days N]` — strictly read-only fleet evidence
   from matching current-user manifests into the current Shipyard core. The
   default human console and stable schema-v1 JSON are rendered from one
@@ -390,6 +395,7 @@ install.sh does not manage at all) must set it by hand:
 | `QUARTET_NOTIFY_CMD` | notification command taking `(title, body)` — Signal wrapper, `ntfy`, email, or `scripts/notify-macos.sh` for Notification Center; unset = silent (events still log) |
 | `QUARTET_EVENTS_DIR` | where the JSONL event stream lands (default `data/events/` in this repo) |
 | `QUARTET_OPS_JSON` | optional systemd/cron state snapshot for medic's scan |
+| `SHIPYARD_DASHBOARD_PORT` | private loopback dashboard port used by its separate installer/service (default `8765`) |
 | `QUARTET_SCRIBE_PRE_HOOK` | optional executable run before each scribe pass |
 | `CODE_ROOT` | root the dogfood overseer scans for `autonomous = true` repos (default `~/code`) |
 | `OVERSEER_HARNESS` | authoring harness the overseer's QA judge runs under (default `claude`) |
@@ -479,7 +485,30 @@ Every run appends JSONL to `data/events/YYYY-MM-DD.jsonl`: `job.start` /
 frozen, `repair_proposed`, resolved), `release.critique` +
 `release.critique.skipped`. Every event carries the canonical `role:` field
 (`design`/`build`/`release`/`medic`/`scribe`) alongside the display-named
-`svc`. Build dashboards on it, or just `jq` it.
+`svc`.
+
+The optional **private operations dashboard** is the built-in read-only view
+of that stream. It runs as one native user service, binds only
+`127.0.0.1:${SHIPYARD_DASHBOARD_PORT:-8765}`, and uses no database, cloud
+transport, or build step:
+
+```bash
+scripts/install-dashboard.sh --install
+skills/shipyard/shipyard.sh dashboard       # prints URL + health
+skills/shipyard/shipyard.sh dashboard --open
+```
+
+Existing installs keep the event path already baked into their crew jobs; a
+clean install falls back to `~/Library/Application Support/Shipyard/events/`
+on macOS or `${XDG_STATE_HOME:-~/.local/state}/shipyard/events/` on Linux.
+Changing the path rebakes configuration only—it never moves, rewrites, or
+deletes history. See [the install guide](docs/INSTALL.md#private-local-operations-dashboard)
+for service lifecycle, log locations, and doctor behavior.
+
+This private machine view is deliberately separate from the public narrative
+deck below. Notification Center remains the current actionable/urgent
+attention path; a future Slack or BopBop adapter may consume classified
+notifications, but chat is not the event-history store.
 
 ## Deck publishing
 

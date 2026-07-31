@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Shipyard local operations</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to operations</a>
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">Shipyard / local operations</p>
+      <h1>Fleet operations</h1>
+    </div>
+    <div class="connection" aria-live="polite">
+      <span class="connection-pip" aria-hidden="true"></span>
+      <span id="stream-state">Connecting locally…</span>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <section class="summary-section" aria-labelledby="fleet-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Current watch</p>
+          <h2 id="fleet-heading">Fleet summary</h2>
+        </div>
+        <p class="latest">Latest event <time id="latest-event">—</time></p>
+      </div>
+      <div id="loading-state" class="state-note" role="status">Reading the local event stream…</div>
+      <div id="empty-state" class="state-note" role="status" hidden>No Shipyard events in this time range.</div>
+      <div id="stale-state" class="state-note state-note-stale" role="status" hidden></div>
+      <div id="parse-state" class="state-note state-note-alarm" role="status" hidden>One event line could not be read; earlier events remain available.</div>
+      <dl class="fleet-counts" aria-label="Fleet state counts">
+        <div><dt>Healthy</dt><dd id="count-healthy">—</dd></div>
+        <div><dt>Running</dt><dd id="count-running">—</dd></div>
+        <div><dt>Stale</dt><dd id="count-stale">—</dd></div>
+        <div class="count-alarm"><dt>Failed</dt><dd id="count-failed">—</dd></div>
+        <div class="count-alarm"><dt>Actionable</dt><dd id="count-actionable">—</dd></div>
+      </dl>
+    </section>
+
+    <div class="workspace">
+      <section class="panel actionable-panel" aria-labelledby="actionable-heading">
+        <div class="section-heading compact-heading">
+          <div>
+            <p class="eyebrow">Needs attention</p>
+            <h2 id="actionable-heading">Actionable queue</h2>
+          </div>
+          <span id="actionable-total" class="panel-total" aria-label="Actionable item count">0</span>
+        </div>
+        <ol id="actionable-list" class="actionable-list"></ol>
+        <p id="actionable-empty" class="quiet-copy">No unresolved evidence in this window.</p>
+      </section>
+
+      <section class="panel matrix-panel" aria-labelledby="matrix-heading">
+        <div class="section-heading compact-heading">
+          <div>
+            <p class="eyebrow">Project × role</p>
+            <h2 id="matrix-heading">Service watch</h2>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">Project</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">Duration</th><th scope="col">Last activity</th></tr></thead>
+            <tbody id="service-table"></tbody>
+          </table>
+        </div>
+        <div id="service-cards" class="service-cards"></div>
+      </section>
+    </div>
+
+    <section class="timeline-section" aria-labelledby="timeline-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Chronological evidence</p>
+          <h2 id="timeline-heading">Keel rail</h2>
+        </div>
+        <p id="event-total" class="latest">0 events</p>
+      </div>
+
+      <details id="filter-disclosure" class="filters" open>
+        <summary>Filter timeline</summary>
+        <form id="filter-form" class="filter-grid">
+          <label>Window<select id="filter-window" name="window"><option value="24h">24 hours</option><option value="7d" selected>7 days</option><option value="30d">30 days</option></select></label>
+          <label>Project<select id="filter-project" name="project"><option value="">All projects</option></select></label>
+          <label>Role<select id="filter-role" name="role"><option value="">All roles</option></select></label>
+          <label>Status<select id="filter-status" name="status"><option value="">All statuses</option><option value="ok">OK</option><option value="fail">Fail</option></select></label>
+          <label>Event family<input id="filter-event" name="event" maxlength="100" placeholder="e.g. job"></label>
+          <button type="submit">Apply filters</button>
+        </form>
+      </details>
+
+      <div class="evidence-layout">
+        <div class="rail-region">
+          <ol id="keel-rail" class="keel-rail" aria-label="Event chronology"></ol>
+          <ol id="event-list" class="event-list"></ol>
+        </div>
+        <aside class="detail-panel" aria-labelledby="detail-heading">
+          <p class="eyebrow">Selected event</p>
+          <h3 id="detail-heading">Inspect evidence</h3>
+          <div id="event-detail" class="event-detail"><p class="quiet-copy">Select an event from the keel rail.</p></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

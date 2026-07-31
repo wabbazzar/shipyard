@@ -27,6 +27,7 @@ CQ_REAP_CLAIM_PID=""
 CQ_REAP_CLAIM_TOKEN=""
 CQ_REAP_CLAIM_IDENTITY=""
 CQ_LAST_ERROR=""
+CQ_LOCK_HARD_TIMEOUT_SEC=8
 CQ_PROCESS_IDENTITY_HELPER="$(
   cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
 )/critic-process-identity.py"
@@ -1098,8 +1099,12 @@ _cq_reap_claim_release() {
 }
 
 _cq_reap_orphan_recover() {
+  local acquire_started_epoch="${2:-}"
+  if [ -z "$acquire_started_epoch" ]; then
+    acquire_started_epoch="$(date +%s)" || return 1
+  fi
   python3 - "$1" "$CQ_REAP_GRACE_SEC" \
-    "$CQ_PROCESS_IDENTITY_HELPER" <<'PY'
+    "$CQ_PROCESS_IDENTITY_HELPER" "$acquire_started_epoch" <<'PY'
 import fcntl
 import errno
 import os
@@ -1112,6 +1117,7 @@ import time
 lock = os.path.abspath(sys.argv[1])
 grace = int(sys.argv[2])
 identity_helper = sys.argv[3]
+acquire_started_epoch = int(sys.argv[4])
 parent = os.path.dirname(lock)
 mutex_name = ".critic-reap-mutex"
 mutex_path = os.path.join(parent, mutex_name)
@@ -1290,8 +1296,10 @@ try:
             if owner is not None:
                 recover = not process_is_live(owner[0], owner[2])
             else:
-                now = time.time()
-                age = now - marker_stat.st_mtime
+                # Eligibility is frozen at acquisition entry. A slow Python
+                # startup must not let a fresh partial marker age into being
+                # removable during this same capture-hook invocation.
+                age = acquire_started_epoch - marker_stat.st_mtime
                 if age >= grace or age < -grace:
                     recover = True
         if not recover:
@@ -1328,7 +1336,13 @@ PY
 
 cq_queue_lock_acquire() {
   local queue="$1" lock="${1}.lock" attempt token identity snapshot owner_pid
-  local generation claim_wait
+  local generation claim_wait acquire_started_epoch hard_deadline
+  hard_deadline=$((SECONDS + CQ_LOCK_HARD_TIMEOUT_SEC))
+  # Whole-second wall time is available on both GNU and BSD date. Flooring the
+  # snapshot is deliberately conservative: an incomplete marker may require a
+  # later capture to become recoverable, but can never become eligible merely
+  # because this acquisition is slow.
+  acquire_started_epoch="$(date +%s)" || return 1
   _cq_require_lock_capabilities || return 1
   # A watcher is long-lived. If its previous recovery claim could not be
   # retired, retry that exact generation before touching any queue.
@@ -1346,6 +1360,7 @@ cq_queue_lock_acquire() {
   token="$owner_pid-${RANDOM:-0}-$(date +%s)"
   identity="$(_cq_process_identity "$owner_pid")" || return 1
   for ((attempt=0; attempt<CQ_LOCK_WAIT_STEPS; attempt++)); do
+    [ "$SECONDS" -lt "$hard_deadline" ] || return 1
     if generation="$(
       _cq_outer_lock_create "$lock" "$owner_pid" "$token" "$identity"
     )"; then
@@ -1357,6 +1372,7 @@ cq_queue_lock_acquire() {
           claim_wait<CQ_LOCK_WAIT_STEPS;
           claim_wait++)); do
         [ -e "$lock/.reap" ] || [ -L "$lock/.reap" ] || break
+        [ "$SECONDS" -lt "$hard_deadline" ] || break
         sleep 0.01
       done
       if [ ! -e "$lock/.reap" ] && [ ! -L "$lock/.reap" ] &&
@@ -1383,12 +1399,15 @@ cq_queue_lock_acquire() {
       # recovery helper. Dead/reused owners, partial publication, and poisoned
       # marker types are serialized under a kernel-released fcntl mutex.
       if _cq_reap_marker_is_strictly_live "$lock/.reap"; then
+        [ "$SECONDS" -lt "$hard_deadline" ] || return 1
         sleep 0.01
         continue
       fi
-      if _cq_reap_orphan_recover "$lock"; then
+      [ "$SECONDS" -lt "$hard_deadline" ] || return 1
+      if _cq_reap_orphan_recover "$lock" "$acquire_started_epoch"; then
         continue
       fi
+      [ "$SECONDS" -lt "$hard_deadline" ] || return 1
       sleep 0.01
       continue
     fi
@@ -1397,6 +1416,7 @@ cq_queue_lock_acquire() {
       # Snapshot the preclaim generation and age. Publishing .reap updates the
       # directory mtime, so the postclaim decision must use this snapshot and
       # never the claim-mutated timestamp.
+      [ "$SECONDS" -lt "$hard_deadline" ] || return 1
       if snapshot="$(_cq_outer_lock_reap_probe "$lock" pre)" &&
           _cq_reap_claim_acquire \
             "$lock" "$token" "$identity" "$snapshot" "$owner_pid"; then
@@ -1416,17 +1436,20 @@ cq_queue_lock_acquire() {
       # this attempt's mkdir failed. Retry that normal handoff race. A genuine
       # permissions/read-only failure remains bounded by CQ_LOCK_WAIT_STEPS and
       # is reported by cq_enqueue's fail-open path.
+      [ "$SECONDS" -lt "$hard_deadline" ] || return 1
       sleep 0.01
       continue
     fi
+    [ "$SECONDS" -lt "$hard_deadline" ] || return 1
     sleep 0.01
   done
   return 1
 }
 
 cq_queue_lock_release() {
-  local attempt rc=0
+  local attempt rc=0 hard_deadline
   [ -n "$CQ_LOCK_DIR" ] && [ -n "$CQ_LOCK_TOKEN" ] || return 0
+  hard_deadline=$((SECONDS + CQ_LOCK_HARD_TIMEOUT_SEC))
   # A generation reaper may have claimed this exact directory after observing
   # a stale/reused PID. Do not remove and replace the path underneath its final
   # validation. A genuinely live owner is normally classified live and never
@@ -1434,6 +1457,7 @@ cq_queue_lock_release() {
   # reaper crashes mid-claim.
   for ((attempt=0; attempt<CQ_LOCK_WAIT_STEPS; attempt++)); do
     [ -e "$CQ_LOCK_DIR/.reap" ] || [ -L "$CQ_LOCK_DIR/.reap" ] || break
+    [ "$SECONDS" -lt "$hard_deadline" ] || break
     sleep 0.01
   done
   if [ -e "$CQ_LOCK_DIR/.reap" ] || [ -L "$CQ_LOCK_DIR/.reap" ]; then
