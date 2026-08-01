@@ -114,13 +114,17 @@ whole critique on every 30-second poll.
 anything the hook appended while the model was thinking stays queued for the
 next pass instead of being deleted unreviewed.
 
-**Diff assembly.**
+**Diff assembly.** Scoped to the exact queued edit batch, not the whole
+branch — pulling every historical branch hunk into each batch made
+long-lived branches exceed both execve and model input limits and let
+unrelated older work contaminate current feedback.
 
-- Trunk resolved via `agents/lib/detect-trunk.sh`; `git diff <trunk>` for both
-  the diff body and the changed-file list, falling back to `git diff HEAD`.
-- Union the changed list with the queued files (covers what git can't see
-  yet), re-applying the same out-of-project and gitignore filters — older
-  hooks queued things the current filters would reject.
+- Trunk resolved via `agents/lib/detect-trunk.sh`, falling back to `HEAD`.
+- The changed-file list is exactly the queued paths (deduped, filtered to
+  this project, gitignore-excluded) — not the trunk-vs-branch diff's file
+  list.
+- Each queued tracked path gets its own `git diff <trunk> -- <path>` hunk;
+  results are concatenated into the diff body.
 - Untracked queued files never appear in `git diff`, so their hunks are
   synthesized with `git diff --no-index -- /dev/null <file>`. A brand-new file
   reaches the critic as reviewable content, not just a filename.
@@ -133,7 +137,13 @@ next pass instead of being deleted unreviewed.
 
 **Prompt.** `critic-role.md` + the project extension `.agents/release.md` +
 the changed-file list + the diff. Model is the `claude` default unless
-`CRITIC_MODEL` is set.
+`CRITIC_MODEL` is set. The project extension and diff sections are each
+capped (`_bounded_prompt_section`, e.g. 16000 bytes for the extension) to
+keep the prompt portable across every selectable harness — Hermes exposes
+only an argv query flag. A truncated section ends with a
+`[SHIPYARD: ... omitted N trailing bytes ...]` notice; `critic-role.md`
+tells the model to use read-only repo tools to inspect omitted content
+before finalizing findings.
 
 **Parsing.** `claude -p --output-format json` returns one object; the reply is
 `.result` and real usage is `.usage.input_tokens + .usage.output_tokens`.
