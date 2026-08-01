@@ -4,107 +4,108 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Shipyard local operations</title>
+  <title>Shipyard</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to operations</a>
-  <header class="masthead">
-    <div>
-      <p class="eyebrow">Shipyard / local operations</p>
-      <h1>Fleet operations</h1>
+  <a class="skip-link" href="#main">Skip to dashboard</a>
+  <header class="topbar">
+    <div class="brand-row">
+      <h1>Shipyard</h1>
+      <div class="connection" aria-live="polite">
+        <span class="connection-pip" aria-hidden="true"></span>
+        <span id="stream-state">Connecting locally…</span>
+      </div>
     </div>
-    <div class="connection" aria-live="polite">
-      <span class="connection-pip" aria-hidden="true"></span>
-      <span id="stream-state">Connecting locally…</span>
+    <div class="control-row">
+      <nav class="mode-tabs" aria-label="Dashboard modes" role="tablist">
+        <button id="tab-outcomes" type="button" role="tab" aria-selected="true" aria-controls="mode-outcomes" data-mode="outcomes">Outcomes</button>
+        <button id="tab-crew" type="button" role="tab" aria-selected="false" aria-controls="mode-crew" data-mode="crew" tabindex="-1">Crew</button>
+        <button id="tab-evidence" type="button" role="tab" aria-selected="false" aria-controls="mode-evidence" data-mode="evidence" tabindex="-1">Evidence</button>
+        <button id="tab-story" type="button" role="tab" aria-selected="false" aria-controls="mode-story" data-mode="story" tabindex="-1">Story</button>
+      </nav>
+      <label class="window-control">Window
+        <select id="window-select" aria-label="Operator window">
+          <option value="24h">24 hours</option>
+          <option value="7d">7 days</option>
+          <option value="30d">30 days</option>
+        </select>
+      </label>
     </div>
   </header>
 
   <main id="main" tabindex="-1">
-    <section class="summary-section" aria-labelledby="fleet-heading">
-      <div class="section-heading">
+    <div id="loading-state" class="notice" role="status">Reading the operator view…</div>
+    <div id="operator-state" class="notice" role="status" hidden></div>
+    <div id="error-state" class="notice" role="alert" hidden></div>
+
+    <section id="mode-outcomes" class="mode-panel" role="tabpanel" aria-labelledby="tab-outcomes" tabindex="0">
+      <header class="mode-heading">
         <div>
-          <p class="eyebrow">Current watch</p>
-          <h2 id="fleet-heading">Fleet summary</h2>
+          <h2>Outcomes</h2>
+          <p id="narrative-heading" class="lede">—</p>
+          <p id="narrative-subline" class="subline">—</p>
         </div>
-        <p class="latest">Latest event <time id="latest-event">—</time></p>
-      </div>
-      <div id="loading-state" class="state-note" role="status">Reading the local event stream…</div>
-      <div id="empty-state" class="state-note" role="status" hidden>No Shipyard events in this time range.</div>
-      <div id="stale-state" class="state-note state-note-stale" role="status" hidden></div>
-      <div id="parse-state" class="state-note state-note-alarm" role="status" hidden>One event line could not be read; earlier events remain available.</div>
-      <dl class="fleet-counts" aria-label="Fleet state counts">
-        <div><dt>Healthy</dt><dd id="count-healthy">—</dd></div>
-        <div><dt>Running</dt><dd id="count-running">—</dd></div>
-        <div><dt>Stale</dt><dd id="count-stale">—</dd></div>
-        <div class="count-alarm"><dt>Failed</dt><dd id="count-failed">—</dd></div>
-        <div class="count-alarm"><dt>Actionable</dt><dd id="count-actionable">—</dd></div>
-      </dl>
+        <p id="generated-at" class="utility">—</p>
+      </header>
+      <div id="promise-list" class="promise-grid" aria-label="Promise states"></div>
+      <div id="kpi-list" class="kpi-grid" aria-label="Outcome measures"></div>
+      <section class="attention-section" aria-labelledby="attention-heading">
+        <div class="section-row">
+          <h2 id="attention-heading">Needs you</h2>
+          <span id="attention-count" class="count-mark">0</span>
+        </div>
+        <ol id="attention-list" class="attention-list"></ol>
+        <p id="attention-empty" class="quiet">No operator action is supplied for this window.</p>
+      </section>
     </section>
 
-    <div class="workspace">
-      <section class="panel actionable-panel" aria-labelledby="actionable-heading">
-        <div class="section-heading compact-heading">
-          <div>
-            <p class="eyebrow">Needs attention</p>
-            <h2 id="actionable-heading">Actionable queue</h2>
-          </div>
-          <span id="actionable-total" class="panel-total" aria-label="Actionable item count">0</span>
+    <section id="mode-crew" class="mode-panel" role="tabpanel" aria-labelledby="tab-crew" tabindex="0" hidden>
+      <header class="mode-heading"><h2>Crew</h2></header>
+      <div class="crew-layout">
+        <div class="map-panel">
+          <ol id="topology-nodes" class="topology-nodes" role="tree" aria-label="Crew and skills in supplied order"></ol>
+          <ol id="topology-routes" class="topology-routes" aria-label="Declared and observed routes in supplied order"></ol>
         </div>
-        <ol id="actionable-list" class="actionable-list"></ol>
-        <p id="actionable-empty" class="quiet-copy">No unresolved evidence in this window.</p>
-      </section>
-
-      <section class="panel matrix-panel" aria-labelledby="matrix-heading">
-        <div class="section-heading compact-heading">
-          <div>
-            <p class="eyebrow">Project × role</p>
-            <h2 id="matrix-heading">Service watch</h2>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th scope="col">Project</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">Duration</th><th scope="col">Last activity</th></tr></thead>
-            <tbody id="service-table"></tbody>
-          </table>
-        </div>
-        <div id="service-cards" class="service-cards"></div>
-      </section>
-    </div>
-
-    <section class="timeline-section" aria-labelledby="timeline-heading">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Chronological evidence</p>
-          <h2 id="timeline-heading">Keel rail</h2>
-        </div>
-        <p id="event-total" class="latest">0 events</p>
-      </div>
-
-      <details id="filter-disclosure" class="filters" open>
-        <summary>Filter timeline</summary>
-        <form id="filter-form" class="filter-grid">
-          <label>Window<select id="filter-window" name="window"><option value="24h">24 hours</option><option value="7d" selected>7 days</option><option value="30d">30 days</option></select></label>
-          <label>Project<select id="filter-project" name="project"><option value="">All projects</option></select></label>
-          <label>Role<select id="filter-role" name="role"><option value="">All roles</option></select></label>
-          <label>Status<select id="filter-status" name="status"><option value="">All statuses</option><option value="ok">OK</option><option value="fail">Fail</option></select></label>
-          <label>Event family<input id="filter-event" name="event" maxlength="100" placeholder="e.g. job"></label>
-          <button type="submit">Apply filters</button>
-        </form>
-      </details>
-
-      <div class="evidence-layout">
-        <div class="rail-region">
-          <ol id="keel-rail" class="keel-rail" aria-label="Event chronology"></ol>
-          <ol id="event-list" class="event-list"></ol>
-        </div>
-        <aside class="detail-panel" aria-labelledby="detail-heading">
-          <p class="eyebrow">Selected event</p>
-          <h3 id="detail-heading">Inspect evidence</h3>
-          <div id="event-detail" class="event-detail"><p class="quiet-copy">Select an event from the keel rail.</p></div>
+        <aside id="crew-selection" class="selection-panel" aria-live="polite">
+          <h3>Skills</h3>
+          <p class="quiet">Select a crew or skill node.</p>
         </aside>
+      </div>
+    </section>
+
+    <section id="mode-evidence" class="mode-panel" role="tabpanel" aria-labelledby="tab-evidence" tabindex="0" hidden>
+      <header class="mode-heading">
+        <h2>Evidence</h2>
+        <p id="raw-event-count" class="utility">Raw events not loaded</p>
+      </header>
+      <div class="evidence-grid">
+        <div>
+          <div id="evidence-detail" class="evidence-detail"><p class="quiet">Choose “Inspect evidence” from any supplied claim.</p></div>
+          <ol id="evidence-list" class="evidence-list" aria-label="Operator evidence in supplied order"></ol>
+        </div>
+        <aside class="raw-panel">
+          <div id="raw-loading" class="quiet" role="status">Raw events load only in Evidence.</div>
+          <ol id="raw-event-list" class="raw-event-list" aria-label="Raw event evidence"></ol>
+          <div id="raw-detail" class="raw-detail"><p class="quiet">Select a raw event.</p></div>
+        </aside>
+      </div>
+      <ul id="coverage-list" class="coverage-list" aria-label="Evidence coverage"></ul>
+    </section>
+
+    <section id="mode-story" class="mode-panel" role="tabpanel" aria-labelledby="tab-story" tabindex="0" hidden>
+      <header class="mode-heading">
+        <div><h2>Story</h2><p id="story-focus" class="subline">—</p></div>
+        <p id="story-position" class="utility">0 / 0</p>
+      </header>
+      <article id="story-card" class="story-card" aria-live="polite">
+        <p class="quiet">No story beat is supplied.</p>
+      </article>
+      <div class="story-controls">
+        <button id="story-previous" type="button">Previous</button>
+        <button id="story-next" type="button">Next</button>
       </div>
     </section>
   </main>

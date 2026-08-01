@@ -218,11 +218,29 @@ async function main() {
   const portFile = join(work, "port");
   await mkdir(eventsDir);
   await mkdir(options.screenshotDir, {recursive: true});
+  const sentinel = JSON.parse(await readFile(join(here, "fixtures", "operator-sentinel.json"), "utf8"));
   const seed = JSON.parse(await readFile(join(here, "fixtures", "browser-seed.json"), "utf8"));
   const rows = seed.map(({seconds_ago: secondsAgo, ...event}) => ({
     ts: new Date(Date.now() - secondsAgo * 1000).toISOString(),
     ...event,
   }));
+  rows.push({
+    ts: new Date(Date.now() - 30 * 1000).toISOString(),
+    event: "raw.conflict.says.clear",
+    project: "raw-only",
+    role: "release",
+    status: "ok",
+    message: "RAW SAYS CLEAR SENTINEL",
+  });
+  for (let index = 0; index < 12; index += 1) {
+    rows.push({
+      ts: new Date(Date.now() - (40 + index) * 1000).toISOString(),
+      event: `raw.padding.${index}`,
+      project: "raw-only",
+      role: "release",
+      status: "ok",
+    });
+  }
   const today = new Date().toISOString().slice(0, 10);
   const eventFile = join(eventsDir, `${today}.jsonl`);
   await writeFile(eventFile, rows.map(row => JSON.stringify(row)).join("\n") + "\n{\"broken\":]\n");
@@ -235,206 +253,266 @@ async function main() {
   server.stdout.on("data", chunk => { serverLog += chunk.toString(); });
   server.stderr.on("data", chunk => { serverLog += chunk.toString(); });
   let browser = null;
+  let success = false;
+  let assertions = 0;
+  const verify = {
+    equal(actual, expected, message) { assertions += 1; assert.equal(actual, expected, message); },
+    notEqual(actual, expected, message) { assertions += 1; assert.notEqual(actual, expected, message); },
+    deepEqual(actual, expected, message) { assertions += 1; assert.deepEqual(actual, expected, message); },
+    ok(value, message) { assertions += 1; assert.ok(value, message); },
+    match(value, pattern, message) { assertions += 1; assert.match(value, pattern, message); },
+  };
+  const requestOrigins = new Set();
+  const requestPaths = [];
+  const responseStatuses = [];
+  const pageErrors = [];
+  let operatorRequests = 0;
+  let pausedApi = true;
+  const paused = [];
+  let screenshotPath = "";
+  let overflow = null;
+  let focusOutline = "";
+  let scrollBefore = 0;
+  let scrollAfter = 0;
+  let rawScrollBefore = 0;
+  let rawScrollAfter = 0;
+
   try {
     const port = await waitForFile(portFile, server);
     const origin = `http://127.0.0.1:${port}`;
     const executable = await chromiumExecutable();
     browser = await launchBrowser(executable, profile, options.width, options.height);
-    const requests = new Set();
-    const pageErrors = [];
-    let pauseApi = true;
-    const paused = [];
+
+    const handlePaused = async params => {
+      const url = new URL(params.request.url);
+      if (url.pathname === "/api/operator") {
+        operatorRequests += 1;
+        const document = operatorRequests === 1 ? sentinel.unavailable : sentinel.operator;
+        const body = Buffer.from(JSON.stringify(document)).toString("base64");
+        await browser.cdp.send("Fetch.fulfillRequest", {
+          requestId: params.requestId,
+          responseCode: 200,
+          responseHeaders: [
+            {name: "Content-Type", value: "application/json; charset=utf-8"},
+            {name: "Cache-Control", value: "no-store"},
+          ],
+          body,
+        }, browser.sessionId);
+      } else {
+        await browser.cdp.send("Fetch.continueRequest", {requestId: params.requestId}, browser.sessionId);
+      }
+    };
+
     browser.cdp.on("Network.requestWillBeSent", params => {
-      if (/^https?:/.test(params.request.url)) requests.add(new URL(params.request.url).origin);
+      if (/^https?:/.test(params.request.url)) {
+        const url = new URL(params.request.url);
+        requestOrigins.add(url.origin);
+        requestPaths.push(url.pathname + url.search);
+      }
+    });
+    browser.cdp.on("Network.responseReceived", params => {
+      if (/^https?:/.test(params.response.url)) {
+        const url = new URL(params.response.url);
+        responseStatuses.push(`${url.pathname}:${Math.trunc(params.response.status)}`);
+      }
     });
     browser.cdp.on("Runtime.exceptionThrown", params => pageErrors.push(params.exceptionDetails.text));
     browser.cdp.on("Fetch.requestPaused", params => {
-      if (pauseApi) paused.push(params.requestId);
-      else browser.cdp.send("Fetch.continueRequest", {requestId: params.requestId}, browser.sessionId).catch(error => pageErrors.push(error.message));
+      if (pausedApi) paused.push(params);
+      else handlePaused(params).catch(error => pageErrors.push(error.message));
     });
     await browser.cdp.send("Fetch.enable", {patterns: [{urlPattern: "*/api/*"}]}, browser.sessionId);
     await browser.cdp.send("Page.navigate", {url: origin}, browser.sessionId);
     await waitFor(browser, "document.readyState === 'interactive' || document.readyState === 'complete'", "DOM ready");
-    assert.equal(await evaluate(browser, "document.getElementById('loading-state').textContent"), "Reading the local event stream…");
-    assert.equal(await evaluate(browser, "document.getElementById('loading-state').hidden"), false);
-    pauseApi = false;
-    for (const requestId of paused.splice(0)) await browser.cdp.send("Fetch.continueRequest", {requestId}, browser.sessionId);
-    await waitFor(browser, "document.getElementById('event-total').textContent === '6 events'", "six fixture events");
-    assert.equal(sha256(await readFile(eventFile)), fixtureBefore, "initial UI reads mutated the fixture");
 
-    const exactStates = await evaluate(browser, `({
-      stale: document.getElementById('stale-state').textContent,
-      parse: document.getElementById('parse-state').textContent,
-      staleVisible: !document.getElementById('stale-state').hidden,
-      parseVisible: !document.getElementById('parse-state').hidden
+    verify.equal(await evaluate(browser, "document.getElementById('loading-state').hidden"), false, "loading state vanished before operator response");
+    verify.equal(requestPaths.some(path => path.startsWith("/api/events")), false, "raw events were fetched outside Evidence");
+    pausedApi = false;
+    for (const params of paused.splice(0)) await handlePaused(params);
+    await waitFor(browser, "document.getElementById('operator-state').textContent.startsWith('unavailable ·')", "supplied unavailable state");
+    verify.match(await evaluate(browser, "document.getElementById('operator-state').textContent"), /^unavailable · Wait for the bounded refresh$/, "unavailable state or next step drifted");
+    await waitFor(browser, "document.getElementById('narrative-heading').textContent === 'Sentinel promise audit'", "bounded operator poll");
+    verify.equal(operatorRequests, 2, "unavailable state did not poll exactly once before fresh document arrived");
+    verify.equal(await evaluate(browser, "document.getElementById('operator-state').textContent"), "stale · Inspect sentinel evidence", "adapter manufactured freshness or copy");
+    verify.equal(sha256(await readFile(eventFile)), fixtureBefore, "operator reads mutated raw evidence");
+
+    const operatorOrder = await evaluate(browser, `({
+      promises: [...document.querySelectorAll('.promise-card')].map(card => [card.dataset.promiseId, card.dataset.sourceState, card.querySelector('.card-title').textContent]),
+      attention: [...document.querySelectorAll('.attention-card')].map(card => [card.dataset.attentionId, card.dataset.sourceState, card.querySelector('.card-title').textContent, card.textContent.includes('Priority 99')]),
+      metrics: [...document.querySelectorAll('.kpi-card')].map(card => [card.dataset.metricGroup, card.dataset.sourceState]),
+      narrative: [document.getElementById('narrative-heading').textContent, document.getElementById('narrative-subline').textContent]
     })`);
-    assert.equal(exactStates.staleVisible, true);
-    assert.match(exactStates.stale, /^No new event since .+; inspect scheduler status\.$/);
-    assert.equal(exactStates.parseVisible, true);
-    assert.equal(exactStates.parse, "One event line could not be read; earlier events remain available.");
-    const initialTopology = await evaluate(browser, `(() => {
-      const table = [...document.querySelectorAll('#service-table tr')].map(row =>
-        [row.cells[0].textContent.trim(), row.cells[1].textContent.trim(), row.cells[2].textContent.trim().toLowerCase()].join('/')
-      );
-      const cards = [...document.querySelectorAll('#service-cards .service-card')].map(card => {
-        const fields = card.querySelectorAll(':scope > p');
-        return [fields[0].textContent.trim().replace(' / ', '/'), fields[1].textContent.trim().toLowerCase()].join('/');
-      });
-      return {table, cards, blank: table.filter(row => row.startsWith('—/')).length};
-    })()`);
-    assert.deepEqual(initialTopology, {
-      table: ["atlas/build/failed", "beacon/scribe/healthy", "citadel/release/stale"],
-      cards: ["atlas/build/failed", "beacon/scribe/healthy", "citadel/release/stale"],
-      blank: 0,
-    });
-    assert.equal(
-      await evaluate(browser, "document.querySelector('#actionable-list .actionable-item:last-child .quiet-copy').textContent"),
-      "atlas / build · atlas-build",
-    );
+    verify.deepEqual(operatorOrder.promises, [
+      ["promise:zeta", "violated", "Zeta promise stays first"],
+      ["promise:alpha", "verified", "Alpha promise stays second"],
+    ], "promise order/state was re-derived");
+    verify.deepEqual(operatorOrder.attention, [
+      ["attention:zeta", "waiting", "Zeta attention stays first", true],
+      ["attention:alpha", "alarm", "Alpha attention stays second", false],
+    ], "attention was sorted or reclassified in the adapter");
+    verify.deepEqual(operatorOrder.metrics, [
+      ["chains", "incomplete"], ["lineages", "unverified"], ["role_contracts", "partial"],
+      ["reliability", "partial"], ["operator_load", "measured"], ["efficiency", "unknown"],
+      ["shoulder", "measured"], ["changes", "unknown"],
+    ], "outcome/KPI order or states drifted");
+    verify.deepEqual(operatorOrder.narrative, ["Sentinel promise audit", "Operator truth beats raw noise"]);
+    const semanticTokens = await evaluate(browser, `Object.fromEntries(
+      ['complete','incomplete','running','available','measured','partial','observed','declared','fresh','stale','unavailable','future_state']
+        .map(value => [value, stateToken(value)]))`);
+    verify.deepEqual(semanticTokens, {
+      complete: "clear", incomplete: "waiting", running: "signal", available: "signal",
+      measured: "measured", partial: "partial", observed: "observed", declared: "declared",
+      fresh: "fresh", stale: "stale", unavailable: "unavailable", future_state: "unknown",
+    }, "core enum to semantic-token mapping is incomplete");
+    verify.equal(await evaluate(browser, "document.querySelector('[data-metric-group=operator_load]').textContent.includes('73')"), true, "supplied operator load lost");
+    verify.equal(await evaluate(browser, "document.body.textContent.includes('RAW SAYS CLEAR SENTINEL')"), false, "raw event content escaped Evidence mode");
 
-    await evaluate(browser, `(() => {
-      const input = document.getElementById('filter-event'); input.value = 'does-not-exist';
-      input.dispatchEvent(new Event('input', {bubbles: true})); document.getElementById('filter-form').requestSubmit();
-    })()`);
-    await waitFor(browser, "!document.getElementById('empty-state').hidden", "empty filter state");
-    assert.equal(await evaluate(browser, "document.getElementById('empty-state').textContent"), "No Shipyard events in this time range.");
-    await evaluate(browser, "document.querySelector('#actionable-list button').click()");
-    assert.equal(await evaluate(browser, "document.querySelectorAll('.keel-button[aria-pressed=true]').length"), 0, "filtered actionable produced a false timeline highlight");
-    assert.equal(await evaluate(browser, "document.getElementById('event-detail').textContent.includes('notification.decision')"), true);
-    await evaluate(browser, `(() => { document.getElementById('filter-event').value = ''; document.getElementById('filter-form').requestSubmit(); })()`);
-    await waitFor(browser, "document.getElementById('event-total').textContent === '6 events'", "filter reset");
+    await evaluate(browser, "document.getElementById('tab-outcomes').focus()");
+    await press(browser, "ArrowRight", "ArrowRight", 39);
+    verify.equal(await evaluate(browser, "document.activeElement.id"), "tab-crew", "right arrow did not focus Crew");
+    verify.equal(await evaluate(browser, "document.getElementById('mode-crew').hidden"), false, "Crew mode did not activate");
+    const topology = await evaluate(browser, `({
+      nodes: [...document.querySelectorAll('.topology-node')].map(item => [item.dataset.nodeId, item.dataset.order, item.querySelector('.node-card').dataset.sourceState]),
+      edges: [...document.querySelectorAll('.route-card')].map(item => [item.dataset.edgeId, item.dataset.order, item.dataset.sourceState]),
+      treeRole: document.getElementById('topology-nodes').getAttribute('role'),
+      svg: document.querySelectorAll('#mode-crew svg').length,
+      display: getComputedStyle(document.getElementById('topology-nodes')).display,
+      firstWidth: document.querySelector('.node-card').getBoundingClientRect().width,
+      activityDisplay: getComputedStyle(document.querySelector('[data-node-id="role:build"] .activity-mark')).display,
+      activityAnimation: getComputedStyle(document.querySelector('[data-node-id="skill:execute-ticket"] .activity-mark')).animationName
+    })`);
+    verify.deepEqual(topology.nodes, [
+      ["skill:polish-ticket", "0", "unknown"], ["role:human", "1", "declared"],
+      ["role:build", "2", "alarm"], ["skill:execute-ticket", "3", "observed"],
+    ], "node order/state was inferred");
+    verify.deepEqual(topology.edges, [
+      ["edge:zeta", "0", "declared"], ["edge:alpha", "1", "declared"], ["edge:observed", "2", "observed"],
+    ], "edge order/state was inferred");
+    verify.equal(topology.treeRole, "tree");
+    verify.equal(topology.svg, 0, "narrow map must not rely on squeezed SVG");
+    if (options.width <= 700) {
+      verify.equal(topology.display, "block", "narrow topology is not a vertical route");
+      verify.ok(topology.firstWidth >= 280, `narrow node was squeezed to ${topology.firstWidth}px`);
+    } else {
+      verify.equal(topology.display, "grid", "wide topology lost its map composition");
+    }
+    verify.notEqual(topology.activityDisplay, "none", "reduced motion removed the static activity mark");
+    verify.equal(topology.activityAnimation, "none", "reduced motion retained an activity pulse");
 
-    await evaluate(browser, `document.querySelector('[aria-label^="Inspect job.end for unknown build"]').focus()`);
-    const focusOutline = await evaluate(browser, "getComputedStyle(document.activeElement).outlineWidth");
-    assert.notEqual(focusOutline, "0px", "event focus indicator is invisible");
+    await evaluate(browser, "document.querySelector('[data-node-id=\"role:build\"] .node-card').focus()");
+    focusOutline = await evaluate(browser, "getComputedStyle(document.activeElement).outlineWidth");
+    verify.notEqual(focusOutline, "0px", "crew focus indicator is invisible");
     await press(browser, "Enter", "Enter", 13);
-    await waitFor(browser, "document.getElementById('event-detail').textContent.includes('<img src=x onerror=')", "hostile row selected");
-    const hostile = await evaluate(browser, `({
+    verify.equal(await evaluate(browser, "document.querySelector('[data-node-id=\"role:build\"] .node-card').getAttribute('aria-pressed')"), "true", "keyboard node selection failed");
+
+    await evaluate(browser, "document.querySelector('[data-promise-id=\"promise:zeta\"] button').click()");
+    await waitFor(browser, "document.getElementById('raw-event-count').textContent === '19 raw events'", "lazy raw evidence fetch");
+    verify.equal(requestPaths.some(path => path.startsWith("/api/events")), true, "Evidence mode did not fetch raw events");
+    verify.equal(await evaluate(browser, "document.querySelector('[data-evidence-id=\"ev:first\"]').getAttribute('aria-current')"), "true", "claim evidence selection was lost");
+    const hostileEvidence = await evaluate(browser, `({
       executed: window.__hostile === 1,
-      elements: Boolean(document.querySelector('#event-detail img, #event-detail script')),
-      text: document.getElementById('event-detail').textContent.includes('<script>window.__hostile=1</script>')
+      elements: Boolean(document.querySelector('#evidence-detail img, #evidence-detail script')),
+      text: document.getElementById('evidence-detail').textContent.includes('<script>window.__hostile=1</script>'),
+      rawConflict: document.getElementById('raw-event-list').textContent.includes('raw.conflict.says.clear')
     })`);
-    assert.deepEqual(hostile, {executed: false, elements: false, text: true});
+    verify.deepEqual(hostileEvidence, {executed: false, elements: false, text: true, rawConflict: true}, "hostile operator text executed or raw evidence was missing");
 
-    await evaluate(browser, "document.querySelector('.raw-evidence summary').focus()");
+    await evaluate(browser, `document.querySelector('#raw-event-list button[data-raw-key*="raw.conflict.says.clear"]').click()`);
+    verify.equal(await evaluate(browser, "document.getElementById('raw-detail').textContent.includes('RAW SAYS CLEAR SENTINEL')"), true, "raw evidence cannot be inspected inside Evidence");
+    const rawSelectionBefore = await evaluate(browser, "document.querySelector('#raw-event-list button[aria-current=true]').dataset.rawKey");
+    rawScrollBefore = await evaluate(browser, "document.getElementById('raw-event-list').scrollTo(0, 120); document.getElementById('raw-event-list').scrollTop");
+    verify.ok(rawScrollBefore > 0, "raw evidence fixture did not create a meaningful scroll position");
+
+    await evaluate(browser, "document.getElementById('tab-story').click()");
+    verify.equal(await evaluate(browser, "document.querySelector('#story-card .story-heading').textContent"), "Zeta beat first", "story did not start in supplied order");
+    await evaluate(browser, "document.getElementById('story-next').focus()");
     await press(browser, "Enter", "Enter", 13);
-    assert.equal(await evaluate(browser, "document.querySelector('.raw-evidence').open"), true);
-    assert.equal(await evaluate(browser, "document.querySelector('.raw-evidence pre').textContent.includes('<script>window.__hostile=1</script>')"), true);
-    await evaluate(browser, `document.querySelector('[aria-label^="Inspect medic.incident.detected for atlas medic"]').click()`);
-    assert.equal(await evaluate(browser, "document.getElementById('event-detail').textContent.includes('/var/tmp/shipyard/logs/atlas-medic.log')"), true);
-    await evaluate(browser, `document.querySelector('[aria-label^="Inspect job.end for unknown build"]').click()`);
+    verify.equal(await evaluate(browser, "document.querySelector('#story-card .story-heading').textContent"), "Alpha beat second", "story keyboard order drifted");
+    const hostileStory = await evaluate(browser, `({
+      state: document.getElementById('story-card').dataset.sourceState,
+      executed: window.__hostile === 1,
+      elements: Boolean(document.querySelector('#story-card img, #story-card script')),
+      text: document.querySelector('#story-card .story-body').textContent.includes('<script>window.__hostile=1</script>')
+    })`);
+    verify.deepEqual(hostileStory, {state: "clear", executed: false, elements: false, text: true}, "story copy/state was changed or executed");
 
     await evaluate(browser, `(() => {
       document.body.setAttribute('tabindex', '-1'); document.body.focus(); document.body.removeAttribute('tabindex'); window.scrollTo(0, 0);
     })()`);
     await press(browser, "Tab", "Tab", 9);
-    assert.equal(await evaluate(browser, "document.activeElement.classList.contains('skip-link')"), true, "skip link is not first keyboard stop");
+    verify.equal(await evaluate(browser, "document.activeElement.classList.contains('skip-link')"), true, "skip link is not first keyboard stop");
     await press(browser, "Enter", "Enter", 13);
-    assert.equal(await evaluate(browser, "document.activeElement.id"), "main");
+    verify.equal(await evaluate(browser, "document.activeElement.id"), "main", "skip link did not focus main");
+
+    await evaluate(browser, "document.getElementById('tab-evidence').click()");
+    await evaluate(browser, "document.querySelector('[data-evidence-id=\"ev:first\"]').click()");
+    scrollBefore = await evaluate(browser, "window.scrollTo(0, Math.min(320, document.documentElement.scrollHeight - innerHeight)); window.scrollY");
+    const appended = {ts: new Date().toISOString(), event: "job.end", project: "delta", role: "release", svc: "delta-release", status: "ok", duration_s: 3};
+    await writeFile(eventFile, `${await readFile(eventFile, "utf8")}${JSON.stringify(appended)}\n`);
+    await waitFor(browser, "document.getElementById('raw-event-count').textContent === '20 raw events'", "SSE raw refresh", 10000);
+    await waitFor(browser, `Math.abs(window.scrollY - ${scrollBefore}) <= 2`, "SSE scroll restoration");
+    scrollAfter = await evaluate(browser, "window.scrollY");
+    rawScrollAfter = await evaluate(browser, "document.getElementById('raw-event-list').scrollTop");
+    verify.equal(await evaluate(browser, "document.querySelector('[data-evidence-id=\"ev:first\"]').getAttribute('aria-current')"), "true", "SSE changed operator evidence selection");
+    verify.equal(await evaluate(browser, `document.querySelector('#raw-event-list button[aria-current=true]').dataset.rawKey === ${JSON.stringify(rawSelectionBefore)}`), true, "SSE changed raw evidence selection");
+    verify.ok(Math.abs(scrollAfter - scrollBefore) <= 2, `SSE moved scroll from ${scrollBefore} to ${scrollAfter}`);
+    verify.ok(Math.abs(rawScrollAfter - rawScrollBefore) <= 2, `SSE moved raw-list scroll from ${rawScrollBefore} to ${rawScrollAfter}`);
 
     const responsive = await evaluate(browser, `({
       overflow: document.documentElement.scrollWidth - window.innerWidth,
-      table: getComputedStyle(document.querySelector('.table-wrap')).display,
-      cards: getComputedStyle(document.getElementById('service-cards')).display,
-      filtersOpen: document.getElementById('filter-disclosure').open,
-      queueTop: document.querySelector('.actionable-panel').getBoundingClientRect().top,
-      matrixTop: document.querySelector('.matrix-panel').getBoundingClientRect().top,
       reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
-      duration: getComputedStyle(document.body).transitionDuration,
       controls: [...document.querySelectorAll('button')].map(item => item.textContent.trim()).filter(text => /restart|trigger|merge|deploy/i.test(text)),
-      mutationForms: document.querySelectorAll('form[method="post"], form[method="put"], form[method="delete"]').length
+      mutationForms: document.querySelectorAll('form[method="post"], form[method="put"], form[method="delete"]').length,
+      panels: [...document.querySelectorAll('[role=tabpanel]')].map(item => [item.id, item.hidden]),
+      headings: [...document.querySelectorAll('h1,h2,h3')].map(item => item.textContent.trim()),
+      treeItems: document.querySelectorAll('#topology-nodes [role=treeitem]').length
     })`);
-    const semantics = await evaluate(browser, `({
-      main: document.querySelectorAll('main').length,
-      h1: document.querySelectorAll('h1').length,
-      sections: document.querySelectorAll('section[aria-labelledby]').length,
-      tables: document.querySelectorAll('table th[scope="col"]').length,
-      lists: document.querySelectorAll('ol').length,
-      disclosures: document.querySelectorAll('details > summary').length
-    })`);
-    assert.ok(responsive.overflow <= 0, `horizontal overflow: ${responsive.overflow}px`);
-    assert.equal(responsive.reduced, true);
-    assert.ok(parseFloat(responsive.duration) <= 0.001, `reduced-motion duration remained ${responsive.duration}`);
-    assert.deepEqual(responsive.controls, []);
-    assert.equal(responsive.mutationForms, 0);
-    assert.deepEqual(semantics, {main: 1, h1: 1, sections: 4, tables: 5, lists: 3, disclosures: 2});
-    if (options.width <= 800) {
-      assert.equal(responsive.table, "none");
-      assert.notEqual(responsive.cards, "none");
-      assert.equal(responsive.filtersOpen, false);
-      assert.ok(responsive.queueTop < responsive.matrixTop, "narrow queue must precede project cards");
-      await evaluate(browser, "document.querySelector('#filter-disclosure summary').focus()");
-      await press(browser, "Enter", "Enter", 13);
-      assert.equal(await evaluate(browser, "document.getElementById('filter-disclosure').open"), true);
-      await press(browser, "Enter", "Enter", 13);
-      assert.equal(await evaluate(browser, "document.getElementById('filter-disclosure').open"), false);
-    } else {
-      assert.notEqual(responsive.table, "none");
-      assert.equal(responsive.cards, "none");
-      assert.equal(responsive.filtersOpen, true);
-      assert.ok(Math.abs(responsive.queueTop - responsive.matrixTop) < 2, "desktop matrix and queue do not coexist");
-    }
+    overflow = responsive.overflow;
+    verify.ok(responsive.overflow <= 0, `horizontal overflow: ${responsive.overflow}px`);
+    verify.equal(responsive.reduced, true);
+    verify.deepEqual(responsive.controls, [], "mutation-like controls appeared");
+    verify.equal(responsive.mutationForms, 0, "mutation form appeared");
+    verify.deepEqual(responsive.panels, [["mode-outcomes", true], ["mode-crew", true], ["mode-evidence", false], ["mode-story", true]], "mode visibility is ambiguous");
+    verify.deepEqual(responsive.headings, ["Shipyard", "Outcomes", "Needs you", "Crew", "Skills", "Evidence", "Story"], "headings exceeded the locked short vocabulary");
+    verify.equal(responsive.treeItems, 4, "semantic narrow tree is incomplete");
 
     const contrast = await evaluate(browser, `(() => {
       const root = getComputedStyle(document.documentElement);
       const rgb = value => { const hex = root.getPropertyValue(value).trim().slice(1); return [0,2,4].map(i => parseInt(hex.slice(i,i+2),16)/255); };
       const lum = value => rgb(value).map(c => c <= .04045 ? c/12.92 : ((c+.055)/1.055)**2.4).reduce((n,c,i) => n + c*[.2126,.7152,.0722][i],0);
       const ratio = (a,b) => (Math.max(lum(a),lum(b))+.05)/(Math.min(lum(a),lum(b))+.05);
-      return {chalkHull: ratio('--chalk','--hull'), signalHull: ratio('--signal','--hull'), clearHull: ratio('--clear','--hull'), alarmHull: ratio('--alarm','--hull'), chalkBulkhead: ratio('--chalk','--bulkhead')};
+      return Object.fromEntries(['--chalk','--signal','--clear','--waiting','--alarm','--neutral'].map(token => [token, ratio(token,'--hull')]));
     })()`);
-    for (const [name, ratio] of Object.entries(contrast)) assert.ok(ratio >= 4.5, `${name} contrast ${ratio} is below 4.5`);
+    for (const [name, ratio] of Object.entries(contrast)) verify.ok(ratio >= 4.5, `${name} contrast ${ratio} is below 4.5`);
 
-    const selectedBefore = await evaluate(browser, "document.getElementById('event-detail').textContent");
-    const scrollBefore = await evaluate(browser, "window.scrollTo(0, Math.min(300, document.documentElement.scrollHeight - innerHeight)); window.scrollY");
-    const appended = {ts: new Date().toISOString(), event: "job.end", project: "delta", role: "release", svc: "delta-release", status: "ok", duration_s: 3};
-    await writeFile(eventFile, `${await readFile(eventFile, "utf8")}${JSON.stringify(appended)}\n`);
-    await waitFor(browser, "document.getElementById('event-total').textContent === '7 events'", "SSE append refresh", 10000);
-    await waitFor(browser, `Math.abs(window.scrollY - ${scrollBefore}) <= 2`, "SSE scroll restoration");
-    assert.equal(await evaluate(browser, "document.getElementById('event-detail').textContent"), selectedBefore, "SSE changed selected evidence");
-    const scrollAfter = await evaluate(browser, "window.scrollY");
-    assert.ok(Math.abs(scrollAfter - scrollBefore) <= 2, `SSE moved scroll from ${scrollBefore} to ${scrollAfter}`);
-    const finalTopology = await evaluate(browser, `(() => {
-      const table = [...document.querySelectorAll('#service-table tr')].map(row =>
-        [row.cells[0].textContent.trim(), row.cells[1].textContent.trim(), row.cells[2].textContent.trim().toLowerCase()].join('/')
-      );
-      return {
-        table,
-        tableCount: table.length,
-        cardCount: document.querySelectorAll('#service-cards .service-card').length,
-        blank: table.filter(row => row.startsWith('—/')).length,
-      };
-    })()`);
-    assert.deepEqual(finalTopology, {
-      table: ["atlas/build/failed", "beacon/scribe/healthy", "citadel/release/stale", "delta/release/healthy"],
-      tableCount: 4,
-      cardCount: 4,
-      blank: 0,
-    });
+    verify.deepEqual([...requestOrigins], [origin], `requests escaped same origin: ${[...requestOrigins].join(",")}`);
+    verify.equal(requestPaths.some(path => path.startsWith("/api/summary") || path.startsWith("/api/health")), false, "legacy semantic endpoints were fetched");
+    verify.equal(responseStatuses.some(item => item === "/api/operator:200"), true, "operator HTTP 200 not observed");
+    verify.equal(responseStatuses.some(item => item === "/api/events:200"), true, "events HTTP 200 not observed");
+    verify.deepEqual(pageErrors, [], `page errors: ${pageErrors.join(" | ")}`);
 
-    await evaluate(browser, `(() => {
-      const heading = document.querySelector('h1'); heading.setAttribute('tabindex', '-1'); heading.focus(); heading.blur();
-    })()`);
-    assert.equal(await evaluate(browser, "document.querySelector('.skip-link').matches(':focus')"), false);
-
-    const screenshotPath = join(resolve(options.screenshotDir), `dashboard-${options.width}x${options.height}.png`);
+    if (options.width <= 700) {
+      await evaluate(browser, "document.getElementById('tab-crew').focus(); document.getElementById('tab-crew').click()");
+    } else {
+      await evaluate(browser, "document.getElementById('tab-outcomes').focus(); document.getElementById('tab-outcomes').click()");
+    }
+    screenshotPath = join(resolve(options.screenshotDir), `dashboard-${options.width}x${options.height}.png`);
     await screenshot(browser, screenshotPath);
     server.kill("SIGTERM");
     await waitForExit(server);
-    await waitFor(browser, "document.getElementById('stream-state').textContent === 'Live updates paused; retrying locally.'", "disconnected state", 10000);
-    assert.equal(await evaluate(browser, "document.getElementById('stream-state').textContent"), "Live updates paused; retrying locally.");
+    await waitFor(browser, "document.getElementById('stream-state').textContent === 'Updates paused; retrying locally'", "disconnected state", 10000);
+    verify.equal(await evaluate(browser, "document.getElementById('stream-state').textContent"), "Updates paused; retrying locally");
+    success = true;
 
-    assert.deepEqual([...requests], [origin], `requests escaped loopback: ${[...requests].join(",")}`);
-    assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join(" | ")}`);
     console.log(`browser=${browser.version.product} executable=${browser.executable}`);
-    console.log(`viewport=${options.width}x${options.height} overflow=${responsive.overflow}px table=${responsive.table} cards=${responsive.cards} filters_open=${responsive.filtersOpen}`);
-    console.log(`states=loading,empty,stale,parse,disconnected exact=true`);
-    console.log(`keyboard=skip-link,event-selection,raw-disclosure${options.width <= 800 ? ",filter-disclosure" : ""} focus_outline=${focusOutline}`);
-    console.log(`semantics=${JSON.stringify(semantics)} filtered_actionable_highlight=truthful known_paths=result,scheduler_log`);
-    console.log(`service_watch_initial=table:${initialTopology.table.length},cards:${initialTopology.cards.length},blank:${initialTopology.blank} identities=${initialTopology.table.join(',')}`);
-    console.log(`service_watch_final=table:${finalTopology.tableCount},cards:${finalTopology.cardCount},blank:${finalTopology.blank} identities=${finalTopology.table.join(',')}`);
-    console.log(`contrast=${JSON.stringify(contrast)} reduced_motion=${responsive.reduced}`);
-    console.log(`hostile_text_inert=true mutation_controls=0 request_origins=${[...requests].join(",")}`);
-    console.log(`sse=7_events selection_preserved=true scroll_before=${scrollBefore} scroll_after=${scrollAfter}`);
+    console.log(`viewport=${options.width}x${options.height} overflow=${overflow}px`);
+    console.log(`operator_requests=${operatorRequests} unavailable_poll=true final_inspection_state=stale operator_wins=true`);
+    console.log(`modes=Outcomes,Crew,Evidence,Story keyboard=skip,tabs,node,story focus_outline=${focusOutline}`);
+    console.log(`topology=nodes:4,edges:3 supplied_order=true narrow_tree=${options.width <= 700}`);
+    console.log(`reduced_motion=static_activity_mark contrast=${JSON.stringify(contrast)}`);
+    console.log(`hostile_text_inert=true mutation_controls=0 request_origins=${[...requestOrigins].join(",")}`);
+    console.log(`network=operator:200,events:200 raw_only_in_evidence=true`);
+    console.log(`sse=20_raw_events operator_selection_preserved=true raw_selection_preserved=true window_scroll=${scrollBefore}:${scrollAfter} raw_scroll=${rawScrollBefore}:${rawScrollAfter}`);
     console.log(`fixture_read_checksum=${fixtureBefore} unchanged_before_authorized_append=true`);
     console.log(`screenshot=${screenshotPath}`);
     console.log(`server_port=${port} server_log_lines=${serverLog.trim().split("\n").filter(Boolean).length}`);
@@ -444,12 +522,12 @@ async function main() {
       try { await waitForExit(browser.child); } catch { browser.child.kill("SIGTERM"); await waitForExit(browser.child); }
       browser.socket.close();
       await new Promise(resolvePromise => setTimeout(resolvePromise, 100));
-      assert.deepEqual(processSet("chrome-headless-shell"), browser.before, "browser process set changed after cleanup");
+      verify.deepEqual(processSet(profile), [], "browser processes survived cleanup");
     }
     if (server.exitCode === null && server.signalCode === null) server.kill("SIGTERM");
     const serverExit = await waitForExit(server);
     await rm(work, {recursive: true});
-    console.log(`cleanup=browser_closed,temp_removed,server_${serverExit.signal || serverExit.code}`);
+    console.log(`cleanup=browser_closed,temp_removed,server_${serverExit.signal || serverExit.code} success=${success} assertions=${assertions}`);
   }
 }
 

@@ -1,15 +1,29 @@
 "use strict";
 
 const state = {
-  health: null,
-  summary: null,
-  events: [],
-  selectedKey: null,
+  document: null,
+  mode: "outcomes",
+  selectedEvidenceId: null,
+  selectedNodeId: null,
+  selectedRawKey: null,
+  storyIndex: 0,
+  rawEvents: [],
   source: null,
   refreshing: false,
+  rawRefreshing: false,
+  unavailablePolls: 0,
+  pollTimer: null,
 };
 
-const knownPathFields = new Set(["result_path", "result_file", "scheduler_log", "scheduler_log_path", "log_path"]);
+const modeNames = ["outcomes", "crew", "evidence", "story"];
+const stateTokens = new Map([
+  ["verified", "verified"], ["clear", "clear"], ["healthy", "healthy"],
+  ["complete", "clear"],
+  ["violated", "violated"], ["alarm", "alarm"], ["failed", "failed"],
+  ["unverified", "unverified"], ["waiting", "waiting"], ["partial", "partial"], ["stale", "stale"], ["incomplete", "waiting"],
+  ["observed", "observed"], ["signal", "signal"], ["measured", "measured"], ["fresh", "fresh"], ["running", "signal"], ["available", "signal"],
+  ["unknown", "unknown"], ["declared", "declared"], ["not_applicable", "not_applicable"], ["unavailable", "unavailable"],
+]);
 
 function element(tag, className, text) {
   const item = document.createElement(tag);
@@ -18,231 +32,454 @@ function element(tag, className, text) {
   return item;
 }
 
-function eventKey(event) {
-  return JSON.stringify(event);
+function present(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function labelKey(value) {
+  return String(value).replaceAll("_", " ");
+}
+
+function sourceState(value) {
+  return typeof value === "string" && value ? value : "unknown";
+}
+
+function stateToken(value) {
+  return stateTokens.get(sourceState(value)) || "unknown";
+}
+
+function markState(item, value) {
+  const supplied = sourceState(value);
+  item.dataset.state = stateToken(supplied);
+  item.dataset.sourceState = supplied;
+}
+
+function stateMark(value) {
+  const supplied = sourceState(value);
+  const badge = element("span", "state-mark", supplied);
+  badge.dataset.state = stateToken(supplied);
+  badge.dataset.sourceState = supplied;
+  badge.setAttribute("aria-label", `State: ${supplied}`);
+  return badge;
 }
 
 function formatTimestamp(value) {
   if (!value) return "—";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.valueOf())) return String(value);
-  return new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "medium"}).format(parsed);
+  return new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "short"}).format(parsed);
 }
 
-function formatDuration(value) {
-  return typeof value === "number" ? `${value.toFixed(value < 10 ? 2 : 0)}s` : "—";
+function eventKey(event) {
+  return JSON.stringify(event);
 }
 
-function setCount(name, value) {
-  document.getElementById(`count-${name}`).textContent = String(value ?? 0);
+function limitationsText(value) {
+  return Array.isArray(value) && value.length ? value.map(String).join(", ") : "none";
 }
 
-function setFilterOptions(id, values, label) {
-  const select = document.getElementById(id);
-  const selected = select.value;
-  const options = [element("option", "", label)];
-  options[0].value = "";
-  for (const value of [...values].filter(Boolean).sort()) {
-    const option = element("option", "", value);
-    option.value = value;
-    options.push(option);
-  }
-  select.replaceChildren(...options);
-  if ([...values].includes(selected)) select.value = selected;
-}
-
-function renderSummary() {
-  const counts = state.summary?.counts || {};
-  for (const name of ["healthy", "running", "stale", "failed", "actionable"]) setCount(name, counts[name]);
-  document.getElementById("latest-event").textContent = formatTimestamp(state.health?.latest_timestamp);
-  document.getElementById("loading-state").hidden = true;
-  document.getElementById("empty-state").hidden = state.events.length !== 0;
-  const latest = Date.parse(state.health?.latest_timestamp || "");
-  const stale = Number.isFinite(latest) && Date.now() - latest > 7200 * 1000;
-  const staleState = document.getElementById("stale-state");
-  staleState.textContent = stale ? `No new event since ${formatTimestamp(state.health.latest_timestamp)}; inspect scheduler status.` : "";
-  staleState.hidden = !stale;
-  document.getElementById("parse-state").hidden = !(state.summary?.errors?.length > 0);
-}
-
-function inspect(event) {
-  const key = eventKey(event);
-  const present = state.events.some(item => eventKey(item) === key);
-  state.selectedKey = present ? key : null;
-  renderEvents(present);
-  if (!present) renderDetail(event);
-}
-
-function renderActionables() {
-  const list = document.getElementById("actionable-list");
-  const items = state.summary?.actionables || [];
-  document.getElementById("actionable-total").textContent = String(items.length);
-  document.getElementById("actionable-empty").hidden = items.length !== 0;
-  const children = items.map(item => {
-    const li = element("li", "actionable-item");
-    const title = element("p", "event-name", item.event?.event || item.kind);
-    const identity = item.kind === "failure" ? (item.identity || {}) : (item.event || {});
-    const label = item.kind === "failure" ? (identity.svc || "service failure") : item.key;
-    const context = element("p", "quiet-copy", `${identity.project || "unknown"} / ${identity.role || "unknown"} · ${label}`);
-    const button = element("button", "", "Inspect evidence");
-    button.type = "button";
-    button.addEventListener("click", () => inspect(item.event));
-    li.append(title, context, button);
-    return li;
-  });
-  list.replaceChildren(...children);
-}
-
-function stateClass(value) {
-  return `state state-${value || "unknown"}`;
-}
-
-function renderServices() {
-  const services = state.summary?.services || [];
-  const rows = services.map(service => {
-    const tr = document.createElement("tr");
-    tr.append(
-      element("td", "", service.project || "—"),
-      element("td", "", service.role || "—"),
-      element("td", stateClass(service.state), service.state || "unknown"),
-      element("td", "", formatDuration(service.duration_s)),
-      element("td", "", formatTimestamp(service.last_activity)),
-    );
-    return tr;
-  });
-  document.getElementById("service-table").replaceChildren(...rows);
-  const cards = services.map(service => {
-    const card = element("article", "service-card");
-    card.append(
-      element("p", "", `${service.project || "—"} / ${service.role || "—"}`),
-      element("p", stateClass(service.state), service.state || "unknown"),
-      element("p", "service-meta", `${service.svc || "—"} · ${formatDuration(service.duration_s)} · ${formatTimestamp(service.last_activity)}`),
-    );
-    return card;
-  });
-  document.getElementById("service-cards").replaceChildren(...cards);
-}
-
-function makeSelectButton(event, rail) {
-  const selected = eventKey(event) === state.selectedKey;
-  const button = element("button", rail ? "keel-button" : "");
+function evidenceButton(evidenceIds) {
+  const button = element("button", "", "Inspect evidence");
   button.type = "button";
-  button.dataset.role = String(event.role || "unknown");
-  button.setAttribute("aria-label", `Inspect ${event.event || "event"} for ${event.project || "unknown"} ${event.role || "unknown"} at ${formatTimestamp(event.ts)}`);
-  if (rail) button.setAttribute("aria-pressed", String(selected));
-  else button.setAttribute("aria-current", String(selected));
-  button.addEventListener("click", () => inspect(event));
+  const ids = Array.isArray(evidenceIds) ? evidenceIds.map(String) : [];
+  button.addEventListener("click", () => {
+    state.selectedEvidenceId = ids[0] || null;
+    setMode("evidence", {focus: true});
+  });
   return button;
 }
 
-function renderEvents(autoSelect = true) {
-  if (state.selectedKey && !state.events.some(item => eventKey(item) === state.selectedKey)) state.selectedKey = null;
-  if (autoSelect && !state.selectedKey && state.events.length) state.selectedKey = eventKey(state.events[0]);
-  document.getElementById("event-total").textContent = `${state.events.length} ${state.events.length === 1 ? "event" : "events"}`;
-  const railItems = state.events.slice().reverse().map(event => {
-    const li = element("li", "keel-item");
-    li.append(makeSelectButton(event, true), element("span", "keel-label", event.event || "unknown"));
+function renderOperatorState() {
+  const metadata = state.document?.metadata || {};
+  const narrative = state.document?.narrative || {};
+  const supplied = sourceState(metadata.inspection_state);
+  const notice = document.getElementById("operator-state");
+  markState(notice, supplied);
+  notice.textContent = `${supplied} · ${present(narrative.operator_action)}`;
+  notice.hidden = false;
+  document.getElementById("generated-at").textContent = `${present(metadata.window)} · ${formatTimestamp(metadata.generated_at)}`;
+}
+
+function renderPromises() {
+  const promises = Array.isArray(state.document?.promises) ? state.document.promises : [];
+  const cards = promises.map((promise, index) => {
+    const card = element("article", "promise-card");
+    card.dataset.promiseId = present(promise.id);
+    card.dataset.order = String(index);
+    markState(card, promise.state);
+    const title = element("p", "card-title", present(promise.label));
+    const values = element("div", "claim-values");
+    const observed = element("div");
+    observed.append(element("span", "", "Observed"), element("strong", "", present(promise.observed_value)));
+    const target = element("div");
+    const targetValue = promise.target || {};
+    target.append(
+      element("span", "", "Target"),
+      element("strong", "", [targetValue.operator, targetValue.value, targetValue.unit].filter(value => value !== null && value !== undefined && value !== "").map(String).join(" ") || "—"),
+    );
+    values.append(observed, target);
+    const limitations = element("p", "quiet", `Limits · ${limitationsText(promise.limitations)}`);
+    card.append(title, values, stateMark(promise.state), limitations, evidenceButton(promise.evidence_ids));
+    return card;
+  });
+  document.getElementById("promise-list").replaceChildren(...cards);
+}
+
+function metricCard(group, item, index) {
+  const card = element("article", "kpi-card");
+  card.dataset.metricGroup = group;
+  card.dataset.order = String(index);
+  markState(card, item?.state);
+  card.append(element("p", "kpi-name", labelKey(group)), stateMark(item?.state));
+  const fields = element("dl", "metric-list");
+  for (const [key, value] of Object.entries(item || {})) {
+    if (key === "state" || key === "limitations" || key === "evidence_ids") continue;
+    fields.append(element("dt", "", labelKey(key)), element("dd", "", present(value)));
+  }
+  fields.append(element("dt", "", "limitations"), element("dd", "", limitationsText(item?.limitations)));
+  card.append(fields);
+  if (Array.isArray(item?.evidence_ids) && item.evidence_ids.length) card.append(evidenceButton(item.evidence_ids));
+  return card;
+}
+
+function renderMetrics() {
+  const outcomes = state.document?.outcomes || {};
+  const cards = [];
+  let order = 0;
+  for (const [group, value] of Object.entries(outcomes)) {
+    if (Array.isArray(value)) {
+      const disclosure = element("details", "outcome-group");
+      disclosure.dataset.metricGroup = group;
+      disclosure.append(element("summary", "", `${labelKey(group)} · ${value.length}`));
+      const groupCards = element("div", "outcome-group-cards");
+      groupCards.append(...value.map(item => metricCard(group, item, order++)));
+      disclosure.append(groupCards);
+      cards.push(disclosure);
+    } else if (value && typeof value === "object") {
+      cards.push(metricCard(group, value, order++));
+    }
+  }
+  const changes = Array.isArray(state.document?.changes) ? state.document.changes : [];
+  for (const change of changes) cards.push(metricCard("changes", change, order++));
+  document.getElementById("kpi-list").replaceChildren(...cards);
+}
+
+function renderAttention() {
+  const attention = Array.isArray(state.document?.attention) ? state.document.attention : [];
+  document.getElementById("attention-count").textContent = String(attention.length);
+  document.getElementById("attention-empty").hidden = attention.length !== 0;
+  const cards = attention.map((item, index) => {
+    const li = document.createElement("li");
+    const card = element("article", "attention-card");
+    card.dataset.attentionId = present(item.id);
+    card.dataset.order = String(index);
+    markState(card, item.state);
+    card.append(
+      element("p", "card-title", present(item.label)),
+      stateMark(item.state),
+      element("p", "quiet", `Priority ${present(item.priority)} · ${formatTimestamp(item.detected_at)}`),
+      element("p", "quiet", `Limits · ${limitationsText(item.limitations)}`),
+      evidenceButton(item.evidence_ids),
+    );
+    li.append(card);
     return li;
   });
-  document.getElementById("keel-rail").replaceChildren(...railItems);
-  const rows = state.events.map(event => {
-    const li = element("li", "event-row");
-    const button = makeSelectButton(event, false);
+  document.getElementById("attention-list").replaceChildren(...cards);
+}
+
+function nodeById(id) {
+  const nodes = Array.isArray(state.document?.topology?.nodes) ? state.document.topology.nodes : [];
+  return nodes.find(node => String(node.id) === id) || null;
+}
+
+function renderCrewSelection() {
+  const root = document.getElementById("crew-selection");
+  const heading = element("h3", "", "Skills");
+  const node = nodeById(state.selectedNodeId);
+  if (!node) {
+    root.replaceChildren(heading, element("p", "quiet", "Select a crew or skill node."));
+    return;
+  }
+  const fields = element("dl", "evidence-fields");
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "evidence_ids") continue;
+    fields.append(element("dt", "", labelKey(key)), element("dd", "", key === "last_activity" ? formatTimestamp(value) : present(value)));
+  }
+  root.replaceChildren(heading, element("p", "card-title", present(node.label)), stateMark(node.state), fields, evidenceButton(node.evidence_ids));
+}
+
+function renderCrew() {
+  const topology = state.document?.topology || {};
+  const nodes = Array.isArray(topology.nodes) ? topology.nodes : [];
+  if (!nodeById(state.selectedNodeId)) state.selectedNodeId = nodes[0] ? String(nodes[0].id) : null;
+  const items = nodes.map((node, index) => {
+    const li = element("li", "topology-node");
+    li.setAttribute("role", "treeitem");
+    li.setAttribute("aria-level", "1");
+    li.dataset.nodeId = present(node.id);
+    li.dataset.order = String(index);
+    const button = element("button", "node-card");
+    button.type = "button";
+    button.setAttribute("aria-pressed", String(String(node.id) === state.selectedNodeId));
+    markState(button, node.state);
+    const activity = element("span", "activity-mark");
+    activity.setAttribute("aria-hidden", "true");
+    const meta = element("span", "node-meta");
+    meta.append(activity, document.createTextNode(`${sourceState(node.state)} · ${present(node.observed_count)}`));
     button.append(
-      element("span", "event-name", event.event || "unknown event"),
-      element("span", "event-role", `${event.project || "—"} / ${event.role || "—"}`),
-      element("time", "event-time", formatTimestamp(event.ts)),
+      element("span", "node-kind", present(node.kind)),
+      element("span", "node-label", present(node.label)),
+      meta,
+      element("span", "node-meta", formatTimestamp(node.last_activity)),
     );
+    button.addEventListener("click", () => {
+      state.selectedNodeId = String(node.id);
+      renderCrew();
+      document.querySelector(`[data-node-id="${CSS.escape(String(node.id))}"] .node-card`)?.focus();
+    });
     li.append(button);
     return li;
   });
-  document.getElementById("event-list").replaceChildren(...rows);
-  const selected = state.events.find(item => eventKey(item) === state.selectedKey);
-  renderDetail(selected || null);
+  document.getElementById("topology-nodes").replaceChildren(...items);
+
+  const edges = [
+    ...(Array.isArray(topology.declared_edges) ? topology.declared_edges : []),
+    ...(Array.isArray(topology.observed_edges) ? topology.observed_edges : []),
+  ];
+  const routes = edges.map((edge, index) => {
+    const li = element("li", "route-card");
+    li.dataset.edgeId = present(edge.id);
+    li.dataset.order = String(index);
+    markState(li, edge.state);
+    li.append(
+      element("span", "", `${present(edge.from)} → ${present(edge.to)}`),
+      element("span", "route-meta", `${present(edge.kind)} · ${sourceState(edge.state)}${edge.count === undefined ? "" : ` · ${edge.count}`}`),
+    );
+    if (Array.isArray(edge.evidence_ids) && edge.evidence_ids.length) {
+      li.tabIndex = 0;
+      li.setAttribute("role", "button");
+      li.setAttribute("aria-label", `Inspect evidence for ${present(edge.id)}`);
+      const open = () => {
+        state.selectedEvidenceId = String(edge.evidence_ids[0]);
+        setMode("evidence", {focus: true});
+      };
+      li.addEventListener("click", open);
+      li.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
+      });
+    }
+    return li;
+  });
+  document.getElementById("topology-routes").replaceChildren(...routes);
+  renderCrewSelection();
 }
 
-function renderDetail(event) {
-  const root = document.getElementById("event-detail");
-  if (!event) {
-    root.replaceChildren(element("p", "quiet-copy", "Select an event from the keel rail."));
+function evidenceById(id) {
+  const rows = Array.isArray(state.document?.evidence) ? state.document.evidence : [];
+  return rows.find(row => String(row.id) === id) || null;
+}
+
+function detailFields(record) {
+  const fields = element("dl", "evidence-fields");
+  for (const [key, value] of Object.entries(record || {})) {
+    fields.append(element("dt", "", labelKey(key)), element("dd", "", key === "observed_at" || key === "ts" ? formatTimestamp(value) : present(value)));
+  }
+  return fields;
+}
+
+function renderEvidenceDetail() {
+  const root = document.getElementById("evidence-detail");
+  const row = evidenceById(state.selectedEvidenceId);
+  if (!row) {
+    root.replaceChildren(element("p", "quiet", "Choose “Inspect evidence” from any supplied claim."));
     return;
   }
-  const fields = element("dl", "event-fields");
-  for (const [key, value] of Object.entries(event).sort(([left], [right]) => left.localeCompare(right))) {
-    fields.append(element("dt", "", key), element("dd", "", typeof value === "object" ? JSON.stringify(value) : value));
-  }
-  const paths = Object.entries(event).filter(([key, value]) => knownPathFields.has(key) && typeof value === "string");
-  const pathSection = element("div", "known-paths");
-  if (paths.length) {
-    pathSection.append(element("h4", "", "Known local paths"));
-    const list = document.createElement("ul");
-    for (const [key, value] of paths) {
-      const item = document.createElement("li");
-      item.append(element("span", "quiet-copy", key), element("code", "", value));
-      const copy = element("button", "", "Copy path");
-      copy.type = "button";
-      copy.addEventListener("click", async () => {
-        await navigator.clipboard.writeText(value);
-        copy.textContent = "Copied";
-      });
-      item.append(copy);
-      list.append(item);
-    }
-    pathSection.append(list);
-  }
-  const disclosure = element("details", "raw-evidence");
-  disclosure.append(element("summary", "", "Raw event evidence"), element("pre", "", JSON.stringify(event, null, 2)));
-  root.replaceChildren(fields, pathSection, disclosure);
+  root.replaceChildren(element("p", "card-title", present(row.id)), detailFields(row));
 }
 
-function queryString() {
-  const values = new URLSearchParams();
-  values.set("window", document.getElementById("filter-window").value);
-  for (const name of ["project", "role", "status", "event"]) {
-    const value = document.getElementById(`filter-${name}`).value.trim();
-    if (value) values.set(name, value);
+function renderEvidence() {
+  const rows = Array.isArray(state.document?.evidence) ? state.document.evidence : [];
+  const items = rows.map((row, index) => {
+    const li = document.createElement("li");
+    const button = element("button", "");
+    button.type = "button";
+    button.dataset.evidenceId = present(row.id);
+    button.dataset.order = String(index);
+    button.setAttribute("aria-current", String(String(row.id) === state.selectedEvidenceId));
+    button.append(element("span", "", present(row.id)), element("span", "utility", present(row.kind)));
+    button.addEventListener("click", () => { state.selectedEvidenceId = String(row.id); renderEvidence(); });
+    li.append(button);
+    return li;
+  });
+  document.getElementById("evidence-list").replaceChildren(...items);
+  const coverage = Array.isArray(state.document?.coverage) ? state.document.coverage : [];
+  document.getElementById("coverage-list").replaceChildren(...coverage.map((row, index) => {
+    const li = element("li", "", `${present(row.source)} · ${sourceState(row.state)} · ${present(row.reason)}`);
+    li.dataset.coverageSource = present(row.source);
+    li.dataset.order = String(index);
+    markState(li, row.state);
+    return li;
+  }));
+  renderEvidenceDetail();
+}
+
+function renderRawEvents() {
+  const items = state.rawEvents.map((event, index) => {
+    const li = document.createElement("li");
+    const key = eventKey(event);
+    const button = element("button", "");
+    button.type = "button";
+    button.dataset.rawKey = key;
+    button.dataset.order = String(index);
+    button.setAttribute("aria-current", String(key === state.selectedRawKey));
+    button.append(element("span", "", present(event.event)), element("time", "utility", formatTimestamp(event.ts)));
+    button.addEventListener("click", () => { state.selectedRawKey = key; renderRawEvents(); });
+    li.append(button);
+    return li;
+  });
+  document.getElementById("raw-event-list").replaceChildren(...items);
+  const selected = state.rawEvents.find(event => eventKey(event) === state.selectedRawKey);
+  const detail = document.getElementById("raw-detail");
+  detail.replaceChildren(selected ? detailFields(selected) : element("p", "quiet", "Select a raw event."));
+  document.getElementById("raw-event-count").textContent = `${state.rawEvents.length} raw ${state.rawEvents.length === 1 ? "event" : "events"}`;
+}
+
+function renderStory() {
+  const narrative = state.document?.narrative || {};
+  const beats = Array.isArray(narrative.beats) ? narrative.beats : [];
+  if (state.storyIndex >= beats.length) state.storyIndex = Math.max(0, beats.length - 1);
+  document.getElementById("story-focus").textContent = present(narrative.focus);
+  document.getElementById("story-position").textContent = beats.length ? `${state.storyIndex + 1} / ${beats.length}` : "0 / 0";
+  const card = document.getElementById("story-card");
+  const beat = beats[state.storyIndex];
+  if (!beat) {
+    card.removeAttribute("data-source-state");
+    card.removeAttribute("data-state");
+    card.replaceChildren(element("p", "quiet", "No story beat is supplied."));
+  } else {
+    card.dataset.storyId = present(beat.id);
+    card.dataset.order = String(state.storyIndex);
+    markState(card, beat.state);
+    card.replaceChildren(
+      element("p", "story-heading", present(beat.heading)),
+      element("p", "story-body", present(beat.body)),
+      stateMark(beat.state),
+      evidenceButton(beat.evidence_ids),
+    );
   }
-  values.set("limit", "500");
-  return values.toString();
+  document.getElementById("story-previous").disabled = state.storyIndex <= 0;
+  document.getElementById("story-next").disabled = !beats.length || state.storyIndex >= beats.length - 1;
+}
+
+function renderDocument() {
+  const narrative = state.document?.narrative || {};
+  document.getElementById("loading-state").hidden = true;
+  document.getElementById("error-state").hidden = true;
+  document.getElementById("narrative-heading").textContent = present(narrative.heading);
+  document.getElementById("narrative-subline").textContent = present(narrative.subline);
+  renderOperatorState();
+  renderPromises();
+  renderMetrics();
+  renderAttention();
+  renderCrew();
+  renderEvidence();
+  renderStory();
 }
 
 async function fetchJson(path) {
-  const response = await fetch(path, {headers: {"Accept": "application/json"}});
+  const url = new URL(path, window.location.href);
+  if (url.origin !== window.location.origin) throw new Error("Cross-origin dashboard request blocked");
+  const response = await fetch(url.pathname + url.search, {headers: {Accept: "application/json"}});
   if (!response.ok) throw new Error(`Local API returned ${response.status}`);
   return response.json();
 }
 
-async function refresh({preserve = false, updateOptions = false} = {}) {
+function scheduleUnavailablePoll() {
+  clearTimeout(state.pollTimer);
+  if (state.document?.metadata?.inspection_state !== "unavailable" || state.unavailablePolls >= 3) return;
+  state.unavailablePolls += 1;
+  state.pollTimer = setTimeout(() => refreshOperator({preserve: true}), 1000);
+}
+
+async function refreshOperator({preserve = false} = {}) {
   if (state.refreshing) return;
   state.refreshing = true;
-  const selected = state.selectedKey;
   const scrollTop = window.scrollY;
   try {
-    const windowValue = document.getElementById("filter-window").value;
-    const [health, summary, events] = await Promise.all([
-      fetchJson("/api/health"),
-      fetchJson(`/api/summary?window=${encodeURIComponent(windowValue)}`),
-      fetchJson(`/api/events?${queryString()}`),
-    ]);
-    state.health = health;
-    state.summary = summary;
-    state.events = events.events || [];
-    state.selectedKey = selected;
-    if (updateOptions) {
-      setFilterOptions("filter-project", new Set(state.events.map(item => item.project)), "All projects");
-      setFilterOptions("filter-role", new Set(state.events.map(item => item.role)), "All roles");
-    }
-    renderSummary();
-    renderActionables();
-    renderServices();
-    renderEvents();
+    const windowValue = document.getElementById("window-select").value;
+    const operator = await fetchJson(`/api/operator?window=${encodeURIComponent(windowValue)}`);
+    if (operator?.schema_version !== 1 || operator?.kind !== "shipyard.operator") throw new Error("Unsupported operator document");
+    state.document = operator;
+    renderDocument();
+    scheduleUnavailablePoll();
     if (preserve) requestAnimationFrame(() => window.scrollTo(0, scrollTop));
   } catch (error) {
-    document.querySelector(".connection").classList.add("is-offline");
-    document.getElementById("stream-state").textContent = "Live updates paused; retrying locally.";
+    const notice = document.getElementById("error-state");
+    notice.dataset.state = "error";
+    notice.textContent = "Operator view unavailable. Retrying locally.";
+    notice.hidden = false;
   } finally {
     state.refreshing = false;
   }
+}
+
+async function refreshRawEvents({preserve = false} = {}) {
+  if (state.mode !== "evidence" || state.rawRefreshing) return;
+  state.rawRefreshing = true;
+  const scrollTop = window.scrollY;
+  try {
+    document.getElementById("raw-loading").textContent = "Reading raw evidence…";
+    const windowValue = document.getElementById("window-select").value;
+    const payload = await fetchJson(`/api/events?window=${encodeURIComponent(windowValue)}&limit=500`);
+    state.rawEvents = Array.isArray(payload.events) ? payload.events : [];
+    if (state.selectedRawKey && !state.rawEvents.some(event => eventKey(event) === state.selectedRawKey)) state.selectedRawKey = null;
+    document.getElementById("raw-loading").textContent = state.rawEvents.length ? "Raw event evidence" : "No raw events supplied in this window.";
+    renderRawEvents();
+    if (preserve) requestAnimationFrame(() => window.scrollTo(0, scrollTop));
+  } catch (error) {
+    document.getElementById("raw-loading").textContent = "Raw evidence unavailable; operator evidence remains visible.";
+  } finally {
+    state.rawRefreshing = false;
+  }
+}
+
+function setMode(mode, {focus = false} = {}) {
+  if (!modeNames.includes(mode)) return;
+  state.mode = mode;
+  for (const name of modeNames) {
+    const active = name === mode;
+    const tab = document.getElementById(`tab-${name}`);
+    const panel = document.getElementById(`mode-${name}`);
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+    panel.hidden = !active;
+  }
+  if (mode === "evidence") {
+    renderEvidence();
+    refreshRawEvents();
+  }
+  if (focus) document.getElementById(`mode-${mode}`).focus();
+}
+
+function configureModes() {
+  const tabs = modeNames.map(name => document.getElementById(`tab-${name}`));
+  tabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => setMode(modeNames[index]));
+    tab.addEventListener("keydown", event => {
+      let next = null;
+      if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+      if (event.key === "ArrowLeft") next = (index + tabs.length - 1) % tabs.length;
+      if (event.key === "Home") next = 0;
+      if (event.key === "End") next = tabs.length - 1;
+      if (next !== null) {
+        event.preventDefault();
+        setMode(modeNames[next]);
+        tabs[next].focus();
+      }
+    });
+  });
 }
 
 function connectStream() {
@@ -250,28 +487,32 @@ function connectStream() {
   state.source = source;
   source.addEventListener("open", () => {
     document.querySelector(".connection").classList.remove("is-offline");
-    document.getElementById("stream-state").textContent = "Live updates active.";
+    document.getElementById("stream-state").textContent = "Live";
   });
-  source.addEventListener("shipyard", () => refresh({preserve: true}));
+  source.addEventListener("shipyard", () => {
+    refreshOperator({preserve: true});
+    if (state.mode === "evidence") refreshRawEvents({preserve: true});
+  });
   source.addEventListener("error", () => {
     document.querySelector(".connection").classList.add("is-offline");
-    document.getElementById("stream-state").textContent = "Live updates paused; retrying locally.";
+    document.getElementById("stream-state").textContent = "Updates paused; retrying locally";
   });
 }
 
-function configureResponsiveFilters() {
-  const disclosure = document.getElementById("filter-disclosure");
-  const narrow = window.matchMedia("(max-width: 800px)");
-  const apply = event => { disclosure.open = !event.matches; };
-  apply(narrow);
-  narrow.addEventListener("change", apply);
-}
-
-document.getElementById("filter-form").addEventListener("submit", event => {
-  event.preventDefault();
-  refresh({updateOptions: false});
+document.getElementById("window-select").addEventListener("change", () => {
+  state.unavailablePolls = 0;
+  state.selectedEvidenceId = null;
+  state.selectedRawKey = null;
+  refreshOperator();
+  if (state.mode === "evidence") refreshRawEvents();
 });
-document.getElementById("filter-window").addEventListener("change", () => refresh({updateOptions: true}));
-configureResponsiveFilters();
-refresh({updateOptions: true});
+document.getElementById("story-previous").addEventListener("click", () => { if (state.storyIndex > 0) { state.storyIndex -= 1; renderStory(); } });
+document.getElementById("story-next").addEventListener("click", () => {
+  const beats = Array.isArray(state.document?.narrative?.beats) ? state.document.narrative.beats : [];
+  if (state.storyIndex < beats.length - 1) { state.storyIndex += 1; renderStory(); }
+});
+
+configureModes();
+setMode("outcomes");
+refreshOperator();
 connectStream();

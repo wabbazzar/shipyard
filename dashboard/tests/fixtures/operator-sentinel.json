@@ -1,0 +1,101 @@
+{
+  "unavailable": {
+    "schema_version": 1,
+    "kind": "shipyard.operator",
+    "metadata": {
+      "schema_version": 1,
+      "build_version": "browser-fixture-v1",
+      "rule_version": "operator-sentinel-v1",
+      "window": "24h",
+      "generated_at": "2026-08-01T11:59:00Z",
+      "inspection_state": "unavailable",
+      "refresh_age_seconds": null,
+      "limits": {"attention": 200, "evidence": 500, "story_beats": 8},
+      "limitations": ["sentinel_core_warming"]
+    },
+    "narrative": {
+      "heading": "Waiting for core evidence",
+      "subline": "The supplied state is unavailable",
+      "focus": "Hold the current judgment",
+      "operator_action": "Wait for the bounded refresh",
+      "beats": []
+    },
+    "promises": [],
+    "outcomes": {
+      "chains": [], "lineages": [], "role_contracts": [],
+      "reliability": {"state": "unknown", "limitations": ["sentinel_core_warming"]},
+      "operator_load": {"state": "unknown", "attention_items": null, "limitations": ["sentinel_core_warming"]},
+      "efficiency": {"state": "unknown", "limitations": ["sentinel_core_warming"]},
+      "shoulder": {"state": "unknown", "limitations": ["sentinel_core_warming"]}
+    },
+    "topology": {"nodes": [], "declared_edges": [], "observed_edges": [], "limitations": ["sentinel_core_warming"]},
+    "changes": [], "attention": [], "coverage": [], "evidence": []
+  },
+  "operator": {
+    "schema_version": 1,
+    "kind": "shipyard.operator",
+    "metadata": {
+      "schema_version": 1,
+      "build_version": "browser-fixture-v1",
+      "rule_version": "operator-sentinel-v1",
+      "window": "24h",
+      "generated_at": "2026-08-01T12:00:00Z",
+      "inspection_state": "stale",
+      "refresh_age_seconds": 41,
+      "limits": {"attention": 200, "evidence": 500, "story_beats": 8},
+      "limitations": ["operator_stale_sentinel"]
+    },
+    "narrative": {
+      "heading": "Sentinel promise audit",
+      "subline": "Operator truth beats raw noise",
+      "focus": "Approve the sentinel gate",
+      "operator_action": "Inspect sentinel evidence",
+      "beats": [
+        {"id": "story:zeta", "heading": "Zeta beat first", "body": "Core supplied this beat first", "state": "waiting", "evidence_ids": ["ev:second"]},
+        {"id": "story:alpha", "heading": "Alpha beat second", "body": "<img src=x onerror=window.__hostile=1><script>window.__hostile=1</script>", "state": "clear", "evidence_ids": ["ev:first"]}
+      ]
+    },
+    "promises": [
+      {"id": "promise:zeta", "label": "Zeta promise stays first", "state": "violated", "target": {"operator": "gte", "value": 900, "unit": "ships"}, "observed_value": 7, "evidence_ids": ["ev:first"], "limitations": ["zeta_limit"]},
+      {"id": "promise:alpha", "label": "Alpha promise stays second", "state": "verified", "target": {"operator": "lte", "value": 3, "unit": "gates"}, "observed_value": 2, "evidence_ids": ["ev:second"], "limitations": []}
+    ],
+    "outcomes": {
+      "chains": [{"run_id": "run:sentinel", "state": "incomplete", "role": "build", "started_at": "2026-08-01T10:00:00Z", "ended_at": null, "evidence_ids": ["ev:first"], "limitations": ["terminal_missing"]}],
+      "lineages": [{"id": "lineage:sentinel", "state": "unverified", "work_id": "work:sentinel", "evidence_ids": ["ev:second"], "limitations": ["explicit_link_missing"]}],
+      "role_contracts": [{"role": "build", "state": "partial", "started": 91, "completed": 7, "successful": 3, "failed": 4, "limitations": ["sentinel_partial"]}],
+      "reliability": {"state": "partial", "started": 91, "completed": 7, "successful": 3, "failed": 4, "success_rate": 0.428, "limitations": ["sentinel_partial"]},
+      "operator_load": {"state": "measured", "attention_items": 73, "limitations": []},
+      "efficiency": {"state": "unknown", "runs": null, "tokens_per_completed_run": null, "limitations": ["sentinel_denominator_missing"]},
+      "shoulder": {"state": "measured", "critiques": 19, "deposited": 2, "deferred": 11, "failed": 5, "expired": 1, "limitations": []}
+    },
+    "topology": {
+      "nodes": [
+        {"id": "skill:polish-ticket", "kind": "skill", "label": "Polish", "state": "unknown", "observed_count": null, "last_activity": null, "evidence_ids": [], "limitations": ["skill_unknown_sentinel"]},
+        {"id": "role:human", "kind": "human", "label": "Operator", "state": "declared", "observed_count": null, "last_activity": null, "evidence_ids": [], "limitations": ["human_not_inferred"]},
+        {"id": "role:build", "kind": "role", "label": "Builder", "state": "alarm", "observed_count": 44, "last_activity": "2026-08-01T11:30:00Z", "evidence_ids": ["ev:first"], "limitations": []},
+        {"id": "skill:execute-ticket", "kind": "skill", "label": "Execute", "state": "observed", "observed_count": 12, "last_activity": "2026-08-01T11:45:00Z", "evidence_ids": ["ev:second"], "limitations": []}
+      ],
+      "declared_edges": [
+        {"id": "edge:zeta", "kind": "pipeline", "from": "skill:polish-ticket", "to": "skill:execute-ticket", "state": "declared", "evidence_ids": []},
+        {"id": "edge:alpha", "kind": "membership", "from": "role:build", "to": "skill:execute-ticket", "state": "declared", "evidence_ids": []}
+      ],
+      "observed_edges": [
+        {"id": "edge:observed", "kind": "skill_call", "from": "role:build", "to": "skill:execute-ticket", "state": "observed", "count": 12, "last_activity": "2026-08-01T11:45:00Z", "evidence_ids": ["ev:second"]}
+      ],
+      "limitations": ["topology_sentinel_limit"]
+    },
+    "changes": [{"project_id": "project:sentinel", "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "additions": 12, "deletions": 4, "files_touched": 3, "commits": 2, "buckets": {"product": 1, "test": 1, "docs": 1}, "durability": "unknown", "evidence_ids": ["ev:second"], "limitations": ["durability_not_proven"]}],
+    "attention": [
+      {"id": "attention:zeta", "kind": "owner_gate", "label": "Zeta attention stays first", "priority": 99, "state": "waiting", "detected_at": "2026-08-01T11:00:00Z", "evidence_ids": ["ev:second"], "limitations": []},
+      {"id": "attention:alpha", "kind": "failure", "label": "Alpha attention stays second", "priority": 1, "state": "alarm", "detected_at": "2026-08-01T11:01:00Z", "evidence_ids": ["ev:first"], "limitations": []}
+    ],
+    "coverage": [
+      {"source": "sentinel_zeta", "state": "partial", "reason": "operator_order", "records_total": 99, "limitations": ["coverage_zeta"]},
+      {"source": "sentinel_alpha", "state": "available", "reason": "ok", "records_total": 1, "limitations": []}
+    ],
+    "evidence": [
+      {"id": "ev:second", "source": "operator_fixture", "kind": "sentinel_second", "observed_at": "2026-08-01T11:45:00Z", "fields": {"value": "OPERATOR EVIDENCE SECOND"}, "limitations": []},
+      {"id": "ev:first", "source": "operator_fixture", "kind": "sentinel_first", "observed_at": "2026-08-01T11:30:00Z", "fields": {"value": "<img src=x onerror=window.__hostile=1><script>window.__hostile=1</script>"}, "limitations": ["evidence_sentinel_limit"]}
+    ]
+  }
+}
