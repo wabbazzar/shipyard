@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-01
 - **Owner:** wabbazzar
-- **Status:** ready
+- **Status:** Complete — built and verified 2026-08-01 CDT
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 28 (six phases: 5 · 5 · 5 · 5 · 5 · 3)
@@ -502,7 +502,7 @@ python3 scripts/delegation-report.py --all
 git diff --check
 ```
 
-Repeat the Phase 5 real-browser commands against the installed service. On
+Repeat the Phase 5 real-browser behaviors against the installed service. On
 Linux, the native systemd smoke plus hermetic launchd fixture is the required
 gate. A real Mac launchd smoke is recorded as external confirmation and is not
 faked or made a Linux completion blocker. After local gates, push canonical
@@ -554,54 +554,57 @@ its configured lifecycle folder.
   unavailable/stale states, and same-origin traffic.
 - Installed-service proof runs the platform-native installer/doctor, curls the
   loopback API, renders the real page, and leaves no headless browser or changed
-  event-source bytes.
+  event-source bytes. On a live append-only current-day file, all bytes present
+  before the proof remain byte-identical while concurrent suffix appends are
+  allowed.
 - Full repository gates include Bats, Bash/Python/JavaScript syntax, reader
   benchmark, leak firewall, deck freshness/completeness/render, ticket
   lifecycle, delegation, and `git diff --check`.
 
 ## Acceptance Criteria / Definition of Done
 
-- [ ] `/api/operator` returns one stable schema-v1 document for each supported
+- [x] `/api/operator` returns one stable schema-v1 document for each supported
       window and rejects unsupported, blank, repeated, or unknown parameters.
-- [ ] Existing health, summary, events, stream, loopback, read-only, no-CORS,
+- [x] Existing health, summary, events, stream, loopback, read-only, no-CORS,
       CSP, and performance contracts remain backward compatible.
-- [ ] A deterministic fixture yields exact promise states, outcome chains,
+- [x] A deterministic fixture yields exact promise states, outcome chains,
       topology order, attention order, evidence IDs, limitations, and narrative
       beats; missing lineage remains `unverified`, never zero or green.
-- [ ] Every claim, outcome, node, and observed edge exposes bounded evidence IDs
+- [x] Every claim, outcome, node, and observed edge exposes bounded evidence IDs
       or an explicit limitation explaining why evidence is unavailable.
-- [ ] Content-free caller→callee and skill aggregates preserve declared versus
+- [x] Content-free caller→callee and skill aggregates preserve declared versus
       observed relationships, expose source coverage, and treat unsupported
       Hermes/missing transcripts as unknown rather than zero.
-- [ ] Explicit valid Git ranges produce aggregate additions, deletions, files,
+- [x] Explicit valid Git ranges produce aggregate additions, deletions, files,
       commits, and product/test/docs buckets without filenames; invalid or
       unlinked ranges remain limited/unknown and no durability claim is guessed.
-- [ ] No new telemetry or operator response stores prompts, messages, diffs,
+- [x] No new telemetry or operator response stores prompts, messages, diffs,
       filenames, critique prose, result bodies, or machine-private paths.
-- [ ] With `[telemetry] outcome_lineage` unset or false, runner event behavior is
+- [x] With `[telemetry] outcome_lineage` unset or false, runner event behavior is
       unchanged; with it true, run, work, commit/PR, token-class, and critique
       disposition fields join only through explicit opaque identifiers.
-- [ ] Systemd and launchd inspection fixtures produce the same canonical fleet,
+- [x] Systemd and launchd inspection fixtures produce the same canonical fleet,
       role, coverage, and limitation shapes for equivalent installations.
-- [ ] The installed standalone/macOS dashboard renders `Outcomes`, `Crew`,
+- [x] The installed standalone/macOS dashboard renders `Outcomes`, `Crew`,
       `Evidence`, and `Story` from the operator document and performs no KPI,
       priority, stale, lineage, or narrative derivation in JavaScript.
-- [ ] The UI uses concise aesthetic headings, restrained semantic color,
+- [x] The UI uses concise aesthetic headings, restrained semantic color,
       intuitive proximity/connectors, and no explanatory AI-sounding headers.
-- [ ] Wide and narrow browser proofs pass with complete keyboard access, visible
+- [x] Wide and narrow browser proofs pass with complete keyboard access, visible
       focus, readable contrast, responsive recomposition, reduced-motion
       equivalence, no overflow, no hostile-text execution, and no external
       request origins.
-- [ ] Appended events invalidate the view without losing selection/scroll;
+- [x] Appended events invalidate the view without losing selection/scroll;
       inspection refresh is bounded, single-flight, and serves an explicitly
       stale last-good snapshot on failure.
-- [ ] One committed fixture and compatibility note are sufficient for a later
+- [x] One committed fixture and compatibility note are sufficient for a later
       Ice adapter to render the same ordered semantics without JSONL access or
       Python imports.
-- [ ] Attention/evidence/story payloads obey the locked 200/500/8 bounds and
+- [x] Attention/evidence/story payloads obey the locked 200/500/8 bounds and
       inspection refresh uses the locked 300-second TTL.
-- [ ] Installed service, focused tests, full repository gates, CI, cleanup, and
-      ticket lifecycle checks are green; event history remains byte-identical.
+- [x] Installed service, focused tests, full repository gates, CI, cleanup, and
+      ticket lifecycle checks are green; closed history and the pre-proof prefix
+      of a live current-day file remain byte-identical.
 
 ## Boundaries
 
@@ -680,7 +683,7 @@ its configured lifecycle folder.
 | 2 | Minimal outcome lineage | builder: subagent (1 telemetry agent) | `925b547` | RED: legacy-byte guard passed while five opt-in lineage cases failed. GREEN: 205/205 required runner/shoulder cases, 22/22 spawn cases, and full repository 720/720 in the combined Phase 2–3 tree. Unset/false stays byte-identical; true emits opaque run/work/ticket/critique IDs, explicit domain references, available numeric token classes, and observable delivery disposition. Root review replaced a relative ticket path with `ticket:<sha256>` and preserved the critic's prior malformed-TOML fallback. No sibling config was enabled; the local ignored sample is explicit false. |
 | 3 | Crew/skill relationship evidence | builder: subagent (1 relationship agent) | `ccf6bb4` | RED: five operator-mode cases failed while all 59 legacy cases stayed green. GREEN: focused delegation 66/66, compile/leak/diff clean, legacy goldens byte-identical, and combined full repository 720/720. Real content-free report: Claude 428 call edges/170 skill rows available; Codex 174/35 partial with marker-coverage limitation; Hermes unknown/unsupported. Distinct callees and sessions are opaque hashes; missing roots are unknown, and no prompt, description, argument, result, transcript path, or secret crosses the boundary. |
 | 4 | Operator document/API and Git metrics | builder: inline (root after stalled builder; 1 independent review subagent) | `0a245ba` | RED: the new operator test module failed import before `dashboard/operator.py`; the first real Bats launch then exposed and fixed the module/stdlib name collision. GREEN: 56/56 operator/reader/server unit cases, focused dashboard/inspect 85/85, 300k reader benchmark in 1.362s at 237.4 MiB with checksum unchanged, and full repository 720/720. Independent review found and root closed pure-composer, Git-timeout, 2,000-row truncation, stable-promise, human-node, token-denominator, and global single-flight gaps. Real 24h proof reached fresh schema v1 with 8 stable promises, 40 attention rows, 45 nodes, 21 observed edges, 500 bounded evidence rows, zero dangling references, no private path/content terms, and an honest `explicit_git_range_unavailable` limitation. |
-| 5 | Shared standalone/macOS UI | builder: subagent (1 UI builder + 1 read-only inventory agent) | pending phase commit | RED: the contradictory operator sentinel found the missing Outcomes mode while the retained legacy dashboard still passed syntax. GREEN: root reran 20/20 server and 60/60 operator/reader/server units; Chrome 147 passed 58 desktop and 59 narrow assertions with exact core order/state winning over contradictory raw evidence, all four keyboard modes, hostile text inert, raw events fetched only in Evidence, selected IDs plus window/list scroll preserved over SSE, 3px focus, reduced-motion static activity, same-origin requests only, no mutation controls, and no overflow (0px desktop, -15px narrow). Root inspected `/tmp/shipyard-wide.q7OWne/dashboard-1440x900.png` and `/tmp/shipyard-narrow.d2FruU/dashboard-390x844.png`: restrained dark semantic color/shape, short headings, collapsed outcome collections, and the 390px vertical crew route all match the locked design. The first full run correctly caught one retained HTTP smoke expecting the retired `Fleet operations` h1; its one-line assertion now pins `Shipyard`, focused dashboard is 8/8, and the rerun is full 720/720. Staged leak, Node syntax, diff, deck, and lifecycle checks pass; browser/server processes cleaned. |
-| 6 | Installed proof and Ice contract handoff | — | — | pending |
+| 5 | Shared standalone/macOS UI | builder: subagent (1 UI builder + 1 read-only inventory agent) | `64907fb` | RED: the contradictory operator sentinel found the missing Outcomes mode while the retained legacy dashboard still passed syntax. GREEN: root reran 20/20 server and 60/60 operator/reader/server units; Chrome 147 passed 58 desktop and 59 narrow assertions with exact core order/state winning over contradictory raw evidence, all four keyboard modes, hostile text inert, raw events fetched only in Evidence, selected IDs plus window/list scroll preserved over SSE, 3px focus, reduced-motion static activity, same-origin requests only, no mutation controls, and no overflow (0px desktop, -15px narrow). Root inspected `/tmp/shipyard-wide.q7OWne/dashboard-1440x900.png` and `/tmp/shipyard-narrow.d2FruU/dashboard-390x844.png`: restrained dark semantic color/shape, short headings, collapsed outcome collections, and the 390px vertical crew route all match the locked design. The first full run correctly caught one retained HTTP smoke expecting the retired `Fleet operations` h1; its one-line assertion now pins `Shipyard`, focused dashboard is 8/8, and the rerun is full 720/720. Staged leak, Node syntax, diff, deck, and lifecycle checks pass; browser/server processes cleaned. |
+| 6 | Installed proof and Ice contract handoff | builder: subagent (contract/docs) + inline root installed proof | `9b40e70` | Contract fixture SHA-256 `e7631f3f68ef094479a0690aa8e7ecbe933a837845261d609263a7f9f9902909`; 19/19 fixture/operator contract tests and final 62/62 operator/reader/server units passed. Native systemd install and doctor are clean at `127.0.0.1:8765`; hermetic launchd coverage is green, while a native Mac smoke remains explicit external confirmation. The real retained 30-day fleet index reported 1,054,697 rows and fell from roughly 716–860 MiB before bounding to roughly 456 MiB after a fresh fleet inspection. Installed Chrome 147 exercised all four modes at 1440×900 and 390×844 with 34 assertions, same-origin traffic, 3px focus, zero overflow, no mutation controls, and raw history fetched only in Evidence. Root visual review found one long-limit card escape; `9b40e70` fixes it and the browser contract now checks child containment (59 desktop/60 narrow assertions). All 91 closed daily files and the 5,251,332-byte live-file prefix remained byte-identical. Final gates: Bats 720/720, benchmark 300k rows in 1.368s at 106.6 MiB, syntax/compile/leak/deck/lifecycle/delegation/diff clean. Reinstall now restarts changed systemd code, validates escaped unit paths/log directives, and fingerprints the operator composer. Ice handoff is ticketed in `wabbazzar-ice` at `d77783b`; it consumes only this schema and fixture. Unrelated `docs/styles.css` remains unstaged and untouched. |
 
 Run this ticket with the `execute-ticket` skill.
