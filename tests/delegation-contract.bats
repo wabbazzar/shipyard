@@ -247,3 +247,20 @@ local_gates() {
   f="$QUARTET_ROOT/skills/gates.md.template"
   has "$f" 'never moves the verification|re-runs the phase'
 }
+
+@test "delegation report exposes a bounded operator relationship contract" {
+  f="$QUARTET_ROOT/scripts/delegation-report.py"
+  has "$f" 'operator-json'
+  has "$f" 'MAX_.*AGGREGATES'
+  has "$f" 'unsupported_provider'
+  has "$f" 'transcript_root_missing'
+  has "$f" 'skill_marker_coverage_partial'
+  has "$f" 'opaque_callee'
+}
+
+@test "delegation report skill evidence is exact-marker only" {
+  f="$QUARTET_ROOT/scripts/delegation-report.py"
+  has "$f" 'shipyard-skill:'
+  has "$f" 'tool_use'
+  has "$f" 'name.*Skill|Skill.*name'
+}

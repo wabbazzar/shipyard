@@ -1,0 +1,8 @@
+{"timestamp":"2026-08-01T11:00:00Z","type":"session_meta","payload":{"id":"codex-operator-session","cwd":"/FORBIDDEN/CODEX/PATH","instructions":"FORBIDDEN_CODEX_INSTRUCTIONS"}}
+{"timestamp":"2026-08-01T11:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<!-- shipyard-skill:execute-ticket:v1 -->"}]}}
+{"timestamp":"2026-08-01T11:01:00Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"message\":\"FORBIDDEN_CODEX_MESSAGE\"}","call_id":"spawn-1"}}
+{"timestamp":"2026-08-01T11:01:01Z","type":"response_item","payload":{"type":"function_call_output","call_id":"spawn-1","output":"FORBIDDEN_CODEX_RESULT"}}
+{"timestamp":"2026-08-01T11:02:00Z","type":"response_item","payload":{"type":"function_call","name":"collaboration.spawn_agent","arguments":"{\"message\":\"FORBIDDEN_SECOND_CODEX_MESSAGE\"}","call_id":"spawn-2"}}
+{"timestamp":"2026-08-01T11:02:01Z","type":"response_item","payload":{"type":"function_call_output","call_id":"spawn-2","output":"FORBIDDEN_SECOND_CODEX_RESULT"}}
+{"timestamp":"2026-08-01T11:03:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"please use prose-only-skill"}]}}
+{"timestamp":"2026-08-01T11:04:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<!-- shipyard-skill:coverage-audit:v2 -->"}]}}

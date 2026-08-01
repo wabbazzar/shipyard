@@ -462,3 +462,152 @@ JSONL
   [[ "$output" != *"combined total"* ]]
   [[ "$output" != *"blended total"* ]]
 }
+
+@test "operator mode emits exact content-free Claude and Codex relationships" {
+  local fixture="$FIXTURES/operator"
+  CLAUDE_PROJECTS_DIR="$fixture/claude/projects" \
+    CODEX_SESSIONS_DIR="$fixture/codex/sessions" \
+    run python3 "$REPORT" --operator-json --all
+  [ "$status" -eq 0 ]
+
+  printf '%s\n' "$output" >"$BATS_TEST_TMPDIR/operator.json"
+  python3 - "$BATS_TEST_TMPDIR/operator.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+assert doc["schema_version"] == 1
+assert doc["kind"] == "shipyard.operator.relationships"
+claude = doc["sources"]["claude"]
+codex = doc["sources"]["codex"]
+hermes = doc["sources"]["hermes"]
+assert claude["state"] == "available"
+assert codex["state"] == codex["coverage"]["state"] == "partial"
+assert codex["limitations"] == [{
+    "code": "skill_marker_coverage_partial", "state": "partial"
+}]
+assert hermes["state"] == hermes["coverage"]["state"] == "unknown"
+assert hermes["caller_callee"] is hermes["skill_invocations"] is None
+assert hermes["limitations"] == [{"code": "unsupported_provider", "state": "unknown"}]
+
+assert [row["count"] for row in claude["caller_callee"]] == [1, 1, 1]
+assert claude["caller_callee"][0]["completion"] == "completed"
+assert claude["caller_callee"][1]["completion"] == "completed"
+assert "completion" not in claude["caller_callee"][2]
+assert claude["caller_callee"][0]["caller_id"].startswith("claude-session-")
+assert len({row["caller_id"] for row in claude["caller_callee"]}) == 1
+assert len({row["callee_id"] for row in claude["caller_callee"]}) == 3
+assert all(row["callee_id"].startswith("claude-callee-")
+           for row in claude["caller_callee"])
+assert claude["caller_callee"][0]["first_timestamp"] == "2026-08-01T10:05:00Z"
+assert claude["caller_callee"][1]["first_timestamp"] == "2026-08-01T10:06:00Z"
+assert claude["skill_invocations"] == [{
+    "actor_id": claude["skill_invocations"][0]["actor_id"],
+    "bucket": "2026-08-01", "completion": "completed", "count": 1,
+    "first_timestamp": "2026-08-01T10:00:00Z",
+    "last_timestamp": "2026-08-01T10:00:00Z",
+    "provider": "claude", "skill_id": "execute-ticket",
+}]
+assert [row["count"] for row in codex["caller_callee"]] == [1, 1]
+assert codex["caller_callee"][0]["completion"] == "completed"
+assert codex["caller_callee"][0]["caller_id"].startswith("codex-session-")
+assert len({row["callee_id"] for row in codex["caller_callee"]}) == 2
+assert all(row["callee_id"].startswith("codex-callee-")
+           for row in codex["caller_callee"])
+assert [row["skill_id"] for row in codex["skill_invocations"]] == [
+    "execute-ticket", "coverage-audit"
+]
+assert all("completion" not in row for row in codex["skill_invocations"])
+assert all(row["provider"] == "claude" for row in claude["caller_callee"])
+assert all(row["provider"] == "codex" for row in codex["skill_invocations"])
+PY
+}
+
+@test "operator mode never returns transcript content, paths, arguments, or results" {
+  local fixture="$FIXTURES/operator"
+  CLAUDE_PROJECTS_DIR="$fixture/claude/projects" \
+    CODEX_SESSIONS_DIR="$fixture/codex/sessions" \
+    run python3 "$REPORT" --operator-json --all
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"FORBIDDEN_"* ]]
+  [[ "$output" != *"prose-only-skill"* ]]
+  [[ "$output" != *"$fixture"* ]]
+
+  printf '%s\n' "$output" >"$BATS_TEST_TMPDIR/operator-safe.json"
+  python3 - "$BATS_TEST_TMPDIR/operator-safe.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+forbidden = {"prompt", "description", "message", "arguments", "result", "results",
+             "path", "root", "transcript", "transcript_path"}
+def walk(value):
+    if isinstance(value, dict):
+        assert not (forbidden & set(value)), forbidden & set(value)
+        for child in value.values(): walk(child)
+    elif isinstance(value, list):
+        for child in value: walk(child)
+walk(doc)
+PY
+}
+
+@test "operator mode reports missing roots and unsupported Hermes as unknown" {
+  CLAUDE_PROJECTS_DIR="$BATS_TEST_TMPDIR/missing-claude" \
+    CODEX_SESSIONS_DIR="$BATS_TEST_TMPDIR/missing-codex" \
+    run python3 "$REPORT" --operator-json --all
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" >"$BATS_TEST_TMPDIR/operator-missing.json"
+  python3 - "$BATS_TEST_TMPDIR/operator-missing.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+for provider in ("claude", "codex"):
+    source = doc["sources"][provider]
+    assert source["state"] == source["coverage"]["state"] == "unknown"
+    assert source["caller_callee"] is source["skill_invocations"] is None
+    assert source["limitations"] == [{"code": "transcript_root_missing", "state": "unknown"}]
+assert doc["sources"]["hermes"]["state"] == "unknown"
+PY
+}
+
+@test "operator aggregate output is deterministically bounded" {
+  local claude="$BATS_TEST_TMPDIR/bounded-claude"
+  local codex="$BATS_TEST_TMPDIR/bounded-codex"
+  mkdir -p "$claude/project" "$codex"
+  python3 - "$claude/project/session.jsonl" <<'PY'
+import json, sys
+with open(sys.argv[1], "w", encoding="utf-8") as out:
+    for index in range(600):
+        out.write(json.dumps({
+            "type": "assistant", "sessionId": "bounded-session",
+            "timestamp": f"2026-08-{1 + index // 24:02d}T{index % 24:02d}:00:00Z",
+            "message": {"content": [{"type": "tool_use", "id": f"skill-{index}",
+                                      "name": "Skill", "input": {"skill": f"skill-{index}"}}]},
+        }) + "\n")
+PY
+  CLAUDE_PROJECTS_DIR="$claude" CODEX_SESSIONS_DIR="$codex" \
+    run python3 "$REPORT" --operator-json --all
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" >"$BATS_TEST_TMPDIR/bounded-one.json"
+  CLAUDE_PROJECTS_DIR="$claude" CODEX_SESSIONS_DIR="$codex" \
+    run python3 "$REPORT" --operator-json --all
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" >"$BATS_TEST_TMPDIR/bounded-two.json"
+  cmp -s "$BATS_TEST_TMPDIR/bounded-one.json" "$BATS_TEST_TMPDIR/bounded-two.json"
+  python3 - "$BATS_TEST_TMPDIR/bounded-one.json" <<'PY'
+import json, sys
+source = json.load(open(sys.argv[1], encoding="utf-8"))["sources"]["claude"]
+assert len(source["skill_invocations"]) == 500
+assert source["coverage"]["state"] == "partial"
+assert {item["code"] for item in source["limitations"]} == {"aggregate_truncated"}
+PY
+}
+
+@test "operator mode rejects legacy output selectors instead of ignoring them" {
+  run python3 "$REPORT" --operator-json --all --source claude
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--operator-json cannot be combined with --source"* ]]
+
+  run python3 "$REPORT" --operator-json --all --skill execute-ticket
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--operator-json cannot be combined with --skill"* ]]
+
+  run python3 "$REPORT" --operator-json --all --json
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--operator-json cannot be combined with --json"* ]]
+}

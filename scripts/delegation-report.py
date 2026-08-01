@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
 import os
 import re
@@ -43,6 +44,16 @@ BLOAT_CTX = 300_000
 # A single tool result above this is called out individually.
 BIG_RESULT = 60_000
 CODEX_MARKER = "<!-- shipyard-skill:execute-ticket:v1 -->"
+OPERATOR_RELATIONSHIP_SCHEMA_VERSION = 1
+MAX_RELATIONSHIP_AGGREGATES = 500
+MAX_SKILL_AGGREGATES = 500
+SKILL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,127}$")
+CODEX_SKILL_MARKER_RE = re.compile(
+    r"<!-- shipyard-skill:([a-z0-9][a-z0-9._:-]{0,127}):v[1-9][0-9]* -->"
+)
+CODEX_SPAWN_CALLS = frozenset(
+    {"spawn_agent", "collaboration.spawn_agent", "functions.collaboration.spawn_agent"}
+)
 DELEGATION_CALLS = frozenset(
     {
         "spawn_agent",
@@ -443,6 +454,457 @@ def scan_codex(root: str, cutoff: datetime | None) -> dict:
     return agg
 
 
+def _iso_timestamp(value: object) -> tuple[str, str] | None:
+    """Return one normalized UTC timestamp and its day bucket."""
+    parsed = _parse_timestamp(value)
+    if parsed is None:
+        return None
+    timestamp = parsed.isoformat().replace("+00:00", "Z")
+    return timestamp, timestamp[:10]
+
+
+def _opaque_actor(provider: str, seed: str) -> str:
+    """Make a stable actor id without returning a transcript or machine path."""
+    digest = hashlib.sha256(f"{provider}\0{seed}".encode("utf-8")).hexdigest()[:16]
+    return f"{provider}-session-{digest}"
+
+
+def _opaque_callee(provider: str, caller_id: str, call_id: str) -> str:
+    """Identify one observed callee without returning its tool arguments."""
+    digest = hashlib.sha256(
+        f"{provider}\0{caller_id}\0{call_id}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{provider}-callee-{digest}"
+
+
+def _session_seed(provider: str, path: str, explicit: object) -> str:
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    # Only the digest produced by _opaque_actor crosses the output boundary.
+    # The path seed prevents same-basename sessions from collapsing together.
+    return f"{provider}:{os.path.abspath(path)}"
+
+
+def _completion_from_result(block: dict) -> str:
+    return "failed" if block.get("is_error") is True else "completed"
+
+
+def _add_observation(
+    rows: dict[tuple, dict],
+    key: tuple,
+    row: dict,
+    limit: int,
+) -> bool:
+    """Aggregate one observation, returning False when a new key is bounded out."""
+    current = rows.get(key)
+    if current is not None:
+        current["count"] += 1
+        current["first_timestamp"] = min(
+            current["first_timestamp"], row["first_timestamp"]
+        )
+        current["last_timestamp"] = max(
+            current["last_timestamp"], row["last_timestamp"]
+        )
+        return True
+    if len(rows) >= limit:
+        return False
+    rows[key] = row
+    return True
+
+
+def _relationship_row(
+    provider: str,
+    actor_id: str,
+    call_id: str,
+    timestamp: str,
+    bucket: str,
+    completion: str | None,
+) -> tuple[tuple, dict]:
+    callee_id = _opaque_callee(provider, actor_id, call_id)
+    key = (bucket, actor_id, callee_id, completion or "")
+    row = {
+        "provider": provider,
+        "bucket": bucket,
+        "caller_id": actor_id,
+        "callee_id": callee_id,
+        "first_timestamp": timestamp,
+        "last_timestamp": timestamp,
+        "count": 1,
+    }
+    if completion is not None:
+        row["completion"] = completion
+    return key, row
+
+
+def _skill_row(
+    provider: str,
+    actor_id: str,
+    skill_id: str,
+    timestamp: str,
+    bucket: str,
+    completion: str | None,
+) -> tuple[tuple, dict]:
+    key = (bucket, actor_id, skill_id, completion or "")
+    row = {
+        "provider": provider,
+        "bucket": bucket,
+        "actor_id": actor_id,
+        "skill_id": skill_id,
+        "first_timestamp": timestamp,
+        "last_timestamp": timestamp,
+        "count": 1,
+    }
+    if completion is not None:
+        row["completion"] = completion
+    return key, row
+
+
+def _finalize_operator_source(
+    provider: str,
+    file_count: int,
+    usable_records: int,
+    malformed_records: int,
+    truncated: int,
+    relationships: dict[tuple, dict],
+    skills: dict[tuple, dict],
+) -> dict:
+    limitations = []
+    if malformed_records:
+        limitations.append(
+            {"code": "parse_gaps", "state": "partial", "count": malformed_records}
+        )
+    if truncated:
+        limitations.append(
+            {"code": "aggregate_truncated", "state": "partial", "count": truncated}
+        )
+    if file_count == 0:
+        return {
+            "provider": provider,
+            "state": "unknown",
+            "coverage": {"state": "unknown"},
+            "caller_callee": None,
+            "skill_invocations": None,
+            "limitations": [{"code": "no_transcripts", "state": "unknown"}],
+        }
+    if usable_records == 0:
+        return {
+            "provider": provider,
+            "state": "unknown",
+            "coverage": {
+                "state": "unknown",
+                "files_scanned": file_count,
+                "malformed_records": malformed_records,
+            },
+            "caller_callee": None,
+            "skill_invocations": None,
+            "limitations": limitations
+            or [{"code": "parse_gaps", "state": "unknown"}],
+        }
+    state = "partial" if limitations else "available"
+    coverage_state = "partial" if limitations else "complete"
+    return {
+        "provider": provider,
+        "state": state,
+        "coverage": {
+            "state": coverage_state,
+            "files_scanned": file_count,
+            "malformed_records": malformed_records,
+            "truncated": bool(truncated),
+        },
+        "caller_callee": sorted(
+            relationships.values(),
+            key=lambda row: (
+                row["first_timestamp"],
+                row["caller_id"],
+                row["callee_id"],
+                row.get("completion", ""),
+            ),
+        ),
+        "skill_invocations": sorted(
+            skills.values(),
+            key=lambda row: (
+                row["first_timestamp"],
+                row["actor_id"],
+                row["skill_id"],
+                row.get("completion", ""),
+            ),
+        ),
+        "limitations": limitations,
+    }
+
+
+def scan_operator_claude(root: str, cutoff: datetime | None) -> dict:
+    relationships: dict[tuple, dict] = {}
+    skills: dict[tuple, dict] = {}
+    malformed_records = 0
+    usable_records = 0
+    truncated = 0
+    paths = sorted(glob.glob(os.path.join(root, "*", "*.jsonl")))
+
+    for path in paths:
+        calls: list[dict] = []
+        results: dict[str, str] = {}
+        explicit_session = None
+        try:
+            fh = open(path, errors="ignore")
+        except OSError:
+            malformed_records += 1
+            continue
+        with fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except (TypeError, ValueError):
+                    malformed_records += 1
+                    continue
+                if not isinstance(rec, dict):
+                    malformed_records += 1
+                    continue
+                usable_records += 1
+                if explicit_session is None and isinstance(rec.get("sessionId"), str):
+                    explicit_session = rec["sessionId"]
+                msg = rec.get("message")
+                content = msg.get("content") if isinstance(msg, dict) else None
+                if rec.get("type") == "assistant" and isinstance(content, list):
+                    for block in content:
+                        if not isinstance(block, dict) or block.get("type") != "tool_use":
+                            continue
+                        call_id = block.get("id")
+                        if not isinstance(call_id, str):
+                            malformed_records += 1
+                            continue
+                        timestamp = _iso_timestamp(rec.get("timestamp"))
+                        if timestamp is None:
+                            malformed_records += 1
+                            continue
+                        parsed = _parse_timestamp(rec.get("timestamp"))
+                        if cutoff is not None and parsed is not None and parsed < cutoff:
+                            continue
+                        name = block.get("name")
+                        if name in ("Agent", "Task"):
+                            calls.append(
+                                {"kind": "relationship", "id": call_id, "time": timestamp}
+                            )
+                        elif name == "Skill":
+                            tool_input = block.get("input")
+                            skill_id = (
+                                tool_input.get("skill") if isinstance(tool_input, dict) else None
+                            )
+                            if isinstance(skill_id, str) and SKILL_ID_RE.fullmatch(skill_id):
+                                calls.append(
+                                    {
+                                        "kind": "skill",
+                                        "id": call_id,
+                                        "skill_id": skill_id,
+                                        "time": timestamp,
+                                    }
+                                )
+                            else:
+                                malformed_records += 1
+                elif rec.get("type") == "user" and isinstance(content, list):
+                    for block in content:
+                        if not isinstance(block, dict) or block.get("type") != "tool_result":
+                            continue
+                        call_id = block.get("tool_use_id")
+                        if isinstance(call_id, str):
+                            results[call_id] = _completion_from_result(block)
+                        else:
+                            malformed_records += 1
+
+        actor_id = _opaque_actor(
+            "claude", _session_seed("claude", path, explicit_session)
+        )
+        for call in calls:
+            timestamp, bucket = call["time"]
+            completion = results.get(call["id"])
+            if call["kind"] == "relationship":
+                key, row = _relationship_row(
+                    "claude", actor_id, call["id"], timestamp, bucket, completion
+                )
+                if not _add_observation(
+                    relationships, key, row, MAX_RELATIONSHIP_AGGREGATES
+                ):
+                    truncated += 1
+            else:
+                key, row = _skill_row(
+                    "claude",
+                    actor_id,
+                    call["skill_id"],
+                    timestamp,
+                    bucket,
+                    completion,
+                )
+                if not _add_observation(skills, key, row, MAX_SKILL_AGGREGATES):
+                    truncated += 1
+
+    return _finalize_operator_source(
+        "claude",
+        len(paths),
+        usable_records,
+        malformed_records,
+        truncated,
+        relationships,
+        skills,
+    )
+
+
+def scan_operator_codex(root: str, cutoff: datetime | None) -> dict:
+    relationships: dict[tuple, dict] = {}
+    skills: dict[tuple, dict] = {}
+    malformed_records = 0
+    usable_records = 0
+    truncated = 0
+    paths = sorted(glob.glob(os.path.join(root, "**", "rollout-*.jsonl"), recursive=True))
+
+    for path in paths:
+        calls: list[dict] = []
+        results: set[str] = set()
+        explicit_session = None
+        try:
+            fh = open(path, errors="ignore")
+        except OSError:
+            malformed_records += 1
+            continue
+        with fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except (TypeError, ValueError):
+                    malformed_records += 1
+                    continue
+                if not isinstance(rec, dict):
+                    malformed_records += 1
+                    continue
+                usable_records += 1
+                payload = rec.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                if rec.get("type") == "session_meta" and isinstance(payload.get("id"), str):
+                    explicit_session = payload["id"]
+                    continue
+                if rec.get("type") != "response_item":
+                    continue
+                event_type = payload.get("type")
+                timestamp = _iso_timestamp(rec.get("timestamp"))
+                if timestamp is None:
+                    malformed_records += 1
+                    continue
+                parsed = _parse_timestamp(rec.get("timestamp"))
+                if cutoff is not None and parsed is not None and parsed < cutoff:
+                    continue
+                if event_type in ("function_call", "custom_tool_call"):
+                    name = payload.get("name")
+                    call_id = payload.get("call_id")
+                    if not isinstance(name, str) or not isinstance(call_id, str):
+                        malformed_records += 1
+                        continue
+                    if name in CODEX_SPAWN_CALLS:
+                        calls.append(
+                            {"kind": "relationship", "id": call_id, "time": timestamp}
+                        )
+                elif event_type in ("function_call_output", "custom_tool_call_output"):
+                    call_id = payload.get("call_id")
+                    if isinstance(call_id, str):
+                        results.add(call_id)
+                    else:
+                        malformed_records += 1
+                elif _codex_assistant_message(payload):
+                    content = payload.get("content")
+                    if not isinstance(content, list):
+                        continue
+                    for block in content:
+                        if not isinstance(block, dict) or block.get("type") != "output_text":
+                            continue
+                        text = block.get("text")
+                        if not isinstance(text, str):
+                            continue
+                        for marker in CODEX_SKILL_MARKER_RE.finditer(text):
+                            calls.append(
+                                {
+                                    "kind": "skill",
+                                    "skill_id": marker.group(1),
+                                    "time": timestamp,
+                                }
+                            )
+
+        actor_id = _opaque_actor("codex", _session_seed("codex", path, explicit_session))
+        for call in calls:
+            timestamp, bucket = call["time"]
+            if call["kind"] == "relationship":
+                completion = "completed" if call["id"] in results else None
+                key, row = _relationship_row(
+                    "codex", actor_id, call["id"], timestamp, bucket, completion
+                )
+                if not _add_observation(
+                    relationships, key, row, MAX_RELATIONSHIP_AGGREGATES
+                ):
+                    truncated += 1
+            else:
+                key, row = _skill_row(
+                    "codex", actor_id, call["skill_id"], timestamp, bucket, None
+                )
+                if not _add_observation(skills, key, row, MAX_SKILL_AGGREGATES):
+                    truncated += 1
+
+    source = _finalize_operator_source(
+        "codex",
+        len(paths),
+        usable_records,
+        malformed_records,
+        truncated,
+        relationships,
+        skills,
+    )
+    if source["state"] != "unknown":
+        source["state"] = "partial"
+        source["coverage"]["state"] = "partial"
+        source["limitations"].append(
+            {"code": "skill_marker_coverage_partial", "state": "partial"}
+        )
+    return source
+
+
+def _missing_operator_source(provider: str) -> dict:
+    return {
+        "provider": provider,
+        "state": "unknown",
+        "coverage": {"state": "unknown"},
+        "caller_callee": None,
+        "skill_invocations": None,
+        "limitations": [{"code": "transcript_root_missing", "state": "unknown"}],
+    }
+
+
+def operator_relationship_document(cutoff: datetime | None, window: str) -> dict:
+    sources = {}
+    claude_root = transcript_root()
+    codex_root = codex_transcript_root()
+    sources["claude"] = (
+        scan_operator_claude(claude_root, cutoff)
+        if os.path.isdir(claude_root)
+        else _missing_operator_source("claude")
+    )
+    sources["codex"] = (
+        scan_operator_codex(codex_root, cutoff)
+        if os.path.isdir(codex_root)
+        else _missing_operator_source("codex")
+    )
+    sources["hermes"] = {
+        "provider": "hermes",
+        "state": "unknown",
+        "coverage": {"state": "unknown"},
+        "caller_callee": None,
+        "skill_invocations": None,
+        "limitations": [{"code": "unsupported_provider", "state": "unknown"}],
+    }
+    return {
+        "schema_version": OPERATOR_RELATIONSHIP_SCHEMA_VERSION,
+        "kind": "shipyard.operator.relationships",
+        "window": window,
+        "sources": sources,
+    }
+
+
 def scan_ledgers(ticket_dir: str) -> dict:
     """Count `builder:` lines by kind, inside each ticket's Ledger section only.
 
@@ -619,11 +1081,10 @@ def render_codex(s: dict, skill: str, window: str) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--skill", default="execute-ticket", help="skill to attribute (default: execute-ticket)")
+    ap.add_argument("--skill", help="skill to attribute (default: execute-ticket)")
     ap.add_argument(
         "--source",
         choices=("claude", "codex", "all"),
-        default="claude",
         help="transcript source (default: claude)",
     )
     window = ap.add_mutually_exclusive_group()
@@ -636,22 +1097,44 @@ def main(argv: list[str] | None = None) -> int:
         help="inclusive timezone-aware ISO-8601 cutoff",
     )
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument(
+        "--operator-json",
+        action="store_true",
+        help="bounded content-free Claude/Codex relationship JSON",
+    )
     ap.add_argument("--tickets-dir", default="docs/tickets", help="where to count Ledger builder: lines")
     args = ap.parse_args(argv)
 
-    roots = {}
-    if args.source in ("claude", "all"):
-        roots["claude"] = transcript_root()
-    if args.source in ("codex", "all"):
-        roots["codex"] = codex_transcript_root()
-    for source, root in roots.items():
-        if not os.path.isdir(root):
-            source_label = "" if source == "claude" else f"{source} "
-            print(
-                f"delegation-report: no {source_label}transcript root at {root}",
-                file=sys.stderr,
+    if args.operator_json:
+        incompatible = []
+        if args.source is not None:
+            incompatible.append("--source")
+        if args.skill is not None:
+            incompatible.append("--skill")
+        if args.json:
+            incompatible.append("--json")
+        if incompatible:
+            ap.error(
+                "--operator-json cannot be combined with " + ", ".join(incompatible)
             )
-            return 2
+
+    source_mode = args.source or "claude"
+    skill = args.skill or "execute-ticket"
+
+    roots = {}
+    if source_mode in ("claude", "all"):
+        roots["claude"] = transcript_root()
+    if source_mode in ("codex", "all"):
+        roots["codex"] = codex_transcript_root()
+    if not args.operator_json:
+        for source, root in roots.items():
+            if not os.path.isdir(root):
+                source_label = "" if source == "claude" else f"{source} "
+                print(
+                    f"delegation-report: no {source_label}transcript root at {root}",
+                    file=sys.stderr,
+                )
+                return 2
 
     days = 30 if args.days is None else args.days
     cutoff = None if args.all else args.since or datetime.now(timezone.utc) - timedelta(days=days)
@@ -662,36 +1145,45 @@ def main(argv: list[str] | None = None) -> int:
     else:
         window_label = f"{days}d"
     cutoff_label = cutoff.isoformat().replace("+00:00", "Z") if cutoff else None
+    if args.operator_json:
+        print(
+            json.dumps(
+                operator_relationship_document(cutoff, window_label),
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
     ledgers = scan_ledgers(args.tickets_dir)
     summaries = {}
     if "claude" in roots:
-        summaries["claude"] = summarize(scan(roots["claude"], args.skill, cutoff), ledgers)
+        summaries["claude"] = summarize(scan(roots["claude"], skill, cutoff), ledgers)
     if "codex" in roots:
         summaries["codex"] = summarize_codex(scan_codex(roots["codex"], cutoff), ledgers)
     for summary in summaries.values():
         summary["window"] = window_label
         summary["cutoff"] = cutoff_label
 
-    if args.source == "all":
+    if source_mode == "all":
         if args.json:
             print(json.dumps({"sources": summaries}, indent=2, sort_keys=True))
         else:
             print("source: claude")
-            print(render(summaries["claude"], args.skill, window_label))
+            print(render(summaries["claude"], skill, window_label))
             print("\nsource: codex")
-            print(render_codex(summaries["codex"], args.skill, window_label))
-    elif args.source == "codex":
+            print(render_codex(summaries["codex"], skill, window_label))
+    elif source_mode == "codex":
         summary = summaries["codex"]
         if args.json:
             print(json.dumps(summary, indent=2, sort_keys=True))
         else:
-            print(render_codex(summary, args.skill, window_label))
+            print(render_codex(summary, skill, window_label))
     else:
         summary = summaries["claude"]
         if args.json:
             print(json.dumps(summary, indent=2, sort_keys=True))
         else:
-            print(render(summary, args.skill, window_label))
+            print(render(summary, skill, window_label))
     return 0
 
 
