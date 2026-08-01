@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import plistlib
 import re
 import shlex
 import shutil
@@ -20,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+from xml.parsers.expat import ExpatError
 
 
 ROLE_ORDER = ("design", "build", "release", "medic", "scribe")
@@ -178,12 +180,29 @@ def _on_calendar(service_path: Path) -> str | None:
     return _single_value(lines, "OnCalendar=")
 
 
-def discover_manifests(core_root: str, unit_dir: str) -> list[dict[str, Any]]:
+def _expected_runners(core_root: str) -> dict[str, str]:
     expected_runners: dict[str, str] = {}
     for role in ROLE_ORDER:
         runner = _canonical(Path(core_root) / "agents" / role / "runner.sh", strict=True)
         if runner is not None:
             expected_runners[role] = runner
+    return expected_runners
+
+
+def _sorted_manifests(accepted: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        accepted,
+        key=lambda item: (
+            item["project_path"],
+            ROLE_ORDER.index(item["role"]),
+            item["service_stem"],
+            item["service_path"],
+        ),
+    )
+
+
+def _discover_systemd_manifests(core_root: str, unit_dir: str) -> list[dict[str, Any]]:
+    expected_runners = _expected_runners(core_root)
 
     directory = Path(unit_dir)
     try:
@@ -249,15 +268,155 @@ def discover_manifests(core_root: str, unit_dir: str) -> list[dict[str, Any]]:
                 "on_calendar": _on_calendar(service_path),
             }
         )
-    return sorted(
-        accepted,
-        key=lambda item: (
-            item["project_path"],
-            ROLE_ORDER.index(item["role"]),
-            item["service_stem"],
-            item["service_path"],
-        ),
-    )
+    return _sorted_manifests(accepted)
+
+
+def _launchd_schedule(manifest: dict[str, Any]) -> str | None:
+    calendar = manifest.get("StartCalendarInterval")
+    interval = manifest.get("StartInterval")
+    if (calendar is None) == (interval is None):
+        return None
+    if calendar is not None:
+        if not isinstance(calendar, dict) or set(calendar) != {"Hour", "Minute"}:
+            return None
+        hour, minute = calendar.get("Hour"), calendar.get("Minute")
+        if (
+            isinstance(hour, bool)
+            or isinstance(minute, bool)
+            or not isinstance(hour, int)
+            or not isinstance(minute, int)
+            or not 0 <= hour <= 23
+            or not 0 <= minute <= 59
+        ):
+            return None
+        return f"*-*-* {hour:02d}:{minute:02d}:00"
+    if (
+        isinstance(interval, bool)
+        or not isinstance(interval, int)
+        or interval <= 0
+        or interval % 60 != 0
+    ):
+        return None
+    return f"*-*-* *:0/{interval // 60}:00"
+
+
+def _discover_launchd_manifests(
+    core_root: str, unit_dir: str, limitations: list[str]
+) -> list[dict[str, Any]]:
+    expected_runners = _expected_runners(core_root)
+    directory = Path(unit_dir)
+    try:
+        plist_paths = sorted(directory.glob("*.plist"))
+    except OSError:
+        return []
+
+    accepted: list[dict[str, Any]] = []
+    malformed = foreign = False
+    for plist_path in plist_paths:
+        try:
+            if plist_path.is_symlink() or not plist_path.is_file():
+                malformed = True
+                continue
+            with plist_path.open("rb") as source:
+                manifest = plistlib.load(source)
+        except (OSError, ExpatError, plistlib.InvalidFileException, ValueError):
+            malformed = True
+            continue
+        if not isinstance(manifest, dict):
+            malformed = True
+            continue
+
+        stem = plist_path.stem
+        label = manifest.get("Label")
+        if not isinstance(label, str) or not label.startswith("com.shipyard."):
+            foreign = True
+            continue
+        if label != f"com.shipyard.{stem}":
+            malformed = True
+            continue
+        arguments = manifest.get("ProgramArguments")
+        working_raw = manifest.get("WorkingDirectory")
+        environment = manifest.get("EnvironmentVariables")
+        if (
+            not isinstance(arguments, list)
+            or len(arguments) < 2
+            or not all(isinstance(item, str) for item in arguments)
+            or arguments[0] != "/bin/bash"
+            or not isinstance(working_raw, str)
+            or not isinstance(environment, dict)
+        ):
+            malformed = True
+            continue
+        project_raw = _parse_exec_project(arguments)
+        event_root_raw = environment.get("QUARTET_EVENTS_DIR")
+        schedule = _launchd_schedule(manifest)
+        if (
+            project_raw is None
+            or not isinstance(event_root_raw, str)
+            or schedule is None
+        ):
+            malformed = True
+            continue
+
+        working_directory = _canonical(working_raw, strict=True)
+        project_path = _canonical(project_raw, strict=True)
+        runner = _canonical(arguments[1], strict=True)
+        event_root = _canonical(event_root_raw, strict=False)
+        plist_canonical = _canonical(plist_path, strict=True)
+        if (
+            working_directory is None
+            or project_path is None
+            or event_root is None
+            or plist_canonical is None
+            or working_directory != project_path
+            or not Path(project_path).is_dir()
+        ):
+            malformed = True
+            continue
+        role = next(
+            (
+                candidate
+                for candidate in ROLE_ORDER
+                if expected_runners.get(candidate) == runner
+            ),
+            None,
+        )
+        if role is None:
+            foreign = True
+            continue
+        accepted.append(
+            {
+                "service_path": plist_canonical,
+                "source_service_path": str(plist_path.absolute()),
+                "service_stem": stem,
+                "role": role,
+                "project_path": project_path,
+                "working_directory": working_directory,
+                "runner": runner,
+                "event_root_env": event_root,
+                "on_calendar": schedule,
+            }
+        )
+    if malformed:
+        limitations.append("launchd_malformed_manifests_excluded")
+    if foreign:
+        limitations.append("launchd_foreign_manifests_excluded")
+    return _sorted_manifests(accepted)
+
+
+def discover_manifests(
+    core_root: str,
+    unit_dir: str,
+    scheduler: str = "systemd",
+    limitations: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    if scheduler == "systemd":
+        return _discover_systemd_manifests(core_root, unit_dir)
+    if scheduler == "launchd":
+        return _discover_launchd_manifests(
+            core_root, unit_dir, limitations if limitations is not None else []
+        )
+    raise InspectInvocationError("scheduler must be systemd or launchd")
 
 
 def _canonical_operand_json(fields: dict[str, Any]) -> str:
@@ -649,6 +808,159 @@ def _run_systemctl(unit: str, properties: tuple[str, ...]) -> subprocess.Complet
         capture_output=True,
         check=False,
         env=environment,
+    )
+
+
+def _run_launchctl(label: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment.update({"LC_ALL": "C", "TZ": "UTC"})
+    return subprocess.run(
+        ["launchctl", "print", f"gui/{os.getuid()}/{label}"],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
+    )
+
+
+def _parse_launchctl_output(
+    output: str, label: str
+) -> tuple[str | None, int | None, bool]:
+    header = re.compile(rf"^gui/[0-9]+/{re.escape(label)} = \{{$")
+    state_pattern = re.compile(r"^[ \t]+state = (running|not running)$")
+    exit_pattern = re.compile(r"^[ \t]+last exit code = (-?[0-9]+)$")
+    header_count = 0
+    states: list[str] = []
+    exit_codes: list[int] = []
+    for line in output.splitlines():
+        if header.fullmatch(line):
+            header_count += 1
+        state_match = state_pattern.fullmatch(line)
+        if state_match:
+            states.append(state_match.group(1))
+        exit_match = exit_pattern.fullmatch(line)
+        if exit_match:
+            exit_codes.append(int(exit_match.group(1), 10))
+    valid = header_count == 1 and len(states) == 1 and len(exit_codes) <= 1
+    return (
+        states[0] if len(states) == 1 else None,
+        exit_codes[0] if len(exit_codes) == 1 else None,
+        valid,
+    )
+
+
+def _launchd_property_evidence(
+    project_id: str, role: str, label: str, prop: str, value: Any
+) -> dict[str, Any]:
+    # Schema v1 names its scheduler-runtime slot `systemd`. Preserve that
+    # published enum and mark every normalized launchd fact until a versioned
+    # schema can introduce a scheduler-neutral source name.
+    fields = {"unit": label, "role": role, "property": prop, "value": value}
+    source_ref = f"unit:{label}:property:{prop}"
+    limitation = "launchd_runtime_normalized_to_systemd_schema_v1"
+    return {
+        "id": _evidence_id("systemd", source_ref, fields),
+        "project_id": project_id,
+        "source": "systemd",
+        "claim_kind": "fact",
+        "kind": "unit_property",
+        "observed_at": None,
+        "source_ref": source_ref,
+        "recurrence_key": None,
+        "fields": fields,
+        "limitations": [limitation],
+    }
+
+
+def _launchd_adapter(
+    project: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    evidence: list[dict[str, Any]] = []
+    fault_ids: list[str] = []
+    total = valid = invalid = 0
+    command_failed = False
+    limitation = "launchd_runtime_normalized_to_systemd_schema_v1"
+
+    for unit_record in project["units"]:
+        label = f"com.shipyard.{unit_record['service_unit'][:-len('.service')]}"
+        total += 1
+        try:
+            result = _run_launchctl(label)
+        except FileNotFoundError:
+            return (
+                _coverage(
+                    project["project_id"],
+                    "systemd",
+                    "unavailable",
+                    "missing_dependency",
+                    total=total,
+                    valid=valid,
+                    invalid=invalid,
+                    limitations=[limitation],
+                ),
+                evidence,
+                fault_ids,
+            )
+        if result.returncode != 0:
+            command_failed = True
+            invalid += 1
+            continue
+        state, last_exit, parsed = _parse_launchctl_output(result.stdout, label)
+        if not parsed or state is None:
+            invalid += 1
+            continue
+        valid += 1
+        unit_record.update(
+            {
+                "unit_file_state": "enabled",
+                "timer_load_state": "loaded",
+                "timer_active_state": "active",
+                "timer_sub_state": "waiting",
+                "timer_stale_state": "unknown",
+                "service_load_state": "loaded",
+                "service_active_state": "active" if state == "running" else "inactive",
+                "service_sub_state": "running" if state == "running" else "dead",
+            }
+        )
+        state_item = _launchd_property_evidence(
+            project["project_id"], unit_record["role"], label, "State", state
+        )
+        evidence.append(state_item)
+        unit_record["evidence_ids"].append(state_item["id"])
+        if last_exit is not None:
+            unit_record["exec_main_status"] = last_exit
+            unit_record["service_result"] = "success" if last_exit == 0 else "failed"
+            exit_item = _launchd_property_evidence(
+                project["project_id"],
+                unit_record["role"],
+                label,
+                "LastExitStatus",
+                last_exit,
+            )
+            evidence.append(exit_item)
+            unit_record["evidence_ids"].append(exit_item["id"])
+            if last_exit != 0:
+                fault_ids.append(exit_item["id"])
+
+    if command_failed and valid == 0:
+        state, reason = "unavailable", "command_failed"
+    elif invalid:
+        state, reason = "partial", "malformed" if not command_failed else "mixed"
+    else:
+        state, reason = "available", "ok"
+    return (
+        _coverage(
+            project["project_id"],
+            "systemd",
+            state,
+            reason,
+            total=total,
+            valid=valid,
+            invalid=invalid,
+            limitations=[limitation],
+        ),
+        evidence,
+        sorted(set(fault_ids)),
     )
 
 
@@ -4205,10 +4517,22 @@ def _derive_priorities(document: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def build_document(
-    *, core_root: str, unit_dir: str, started_at: datetime, days: int
+    *,
+    core_root: str,
+    unit_dir: str,
+    started_at: datetime,
+    days: int,
+    scheduler: str = "systemd",
 ) -> dict[str, Any] | None:
     window_start_at = started_at - timedelta(days=days)
-    manifests = discover_manifests(core_root, unit_dir)
+    discovery_limitations = list(DISCOVERY_LIMITATIONS)
+    if scheduler == "launchd":
+        discovery_limitations.append(
+            "launchd_runtime_normalized_to_systemd_schema_v1"
+        )
+    manifests = discover_manifests(
+        core_root, unit_dir, scheduler=scheduler, limitations=discovery_limitations
+    )
     if not manifests:
         return None
     delegation_executor, delegation_futures = _start_delegation_reporters(
@@ -4285,9 +4609,14 @@ def build_document(
         if config_evidence is not None:
             evidence.append(config_evidence)
 
-        systemd_coverage, systemd_evidence, systemd_faults = _systemd_adapter(
-            project, config, started_at
-        )
+        if scheduler == "systemd":
+            systemd_coverage, systemd_evidence, systemd_faults = _systemd_adapter(
+                project, config, started_at
+            )
+        else:
+            systemd_coverage, systemd_evidence, systemd_faults = _launchd_adapter(
+                project
+            )
         coverage_by_key[(project["project_id"], "systemd")] = systemd_coverage
         evidence.extend(systemd_evidence)
         direct_fault_ids[project["project_id"]].extend(systemd_faults)
@@ -4648,7 +4977,7 @@ def build_document(
             "rule_version": "shipyard-inspect-v1",
             "project_count": len(fleet),
             "role_count": role_count,
-            "discovery_limitations": DISCOVERY_LIMITATIONS,
+            "discovery_limitations": discovery_limitations,
         },
         "coverage": coverage,
         "evidence": evidence,
@@ -4935,6 +5264,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="shipyard inspect")
     parser.add_argument("--core-root", required=True)
     parser.add_argument("--unit-dir", required=True)
+    parser.add_argument("--scheduler", choices=("systemd", "launchd"), default="systemd")
     parser.add_argument("--days", default="7")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
@@ -4957,6 +5287,7 @@ def main(argv: list[str] | None = None) -> int:
             unit_dir=unit_dir,
             started_at=started_at,
             days=days,
+            scheduler=args.scheduler,
         )
     except (InspectInvocationError, OverflowError) as exc:
         print(f"shipyard inspect: {exc}", file=sys.stderr)

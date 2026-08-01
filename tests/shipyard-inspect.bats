@@ -46,6 +46,33 @@ OnCalendar=$calendar
 EOF
 }
 
+write_launchd_job() {
+  local stem="$1" role="$2" project="$3" event_root="$4"
+  local core="${5:-$QUARTET_ROOT}" hour="${6:-6}" minute="${7:-0}"
+  local launchd_dir="$HOME/Library/LaunchAgents"
+  mkdir -p "$launchd_dir"
+  cat >"$launchd_dir/$stem.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.shipyard.$stem</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$core/agents/$role/runner.sh</string>
+    <string>--project</string><string>$project</string>
+    <string>--mode</string><string>fixture</string>
+  </array>
+  <key>WorkingDirectory</key><string>$project</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>QUARTET_EVENTS_DIR</key><string>$event_root</string></dict>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>$hour</integer><key>Minute</key><integer>$minute</integer></dict>
+</dict>
+</plist>
+EOF
+}
+
 make_strict_show_stub() {
   make_stub_script systemctl '
 printf "%s|%s\n" "${LC_ALL:-}" "${TZ:-}" >>"$SHIM_LOG/systemctl.env"
@@ -78,6 +105,33 @@ ActiveState=inactive
 SubState=dead
 Result=success
 ExecMainStatus=0
+EOF
+}
+
+make_strict_launchctl_stub() {
+  make_stub_script launchctl '
+if [ "${1:-}" != "print" ] || [ "$#" -ne 2 ]; then
+  printf "%s\n" "$*" >>"$SHIM_LOG/launchctl.rejected"
+  exit 97
+fi
+target="${2:-}"
+label="${target##*/}"
+[ -f "$SHIM_LOG/$label.stdout" ] && cat "$SHIM_LOG/$label.stdout"
+[ -f "$SHIM_LOG/$label.stderr" ] && cat "$SHIM_LOG/$label.stderr" >&2
+rc=0
+[ -f "$SHIM_LOG/$label.rc" ] && rc="$(cat "$SHIM_LOG/$label.rc")"
+exit "$rc"
+'
+}
+
+seed_launchctl_output() {
+  local stem="$1" state="${2:-not running}" exit_code="${3:-0}"
+  local label="com.shipyard.$stem"
+  cat >"$SHIM_LOG/$label.stdout" <<EOF
+gui/$(id -u)/$label = {
+  state = $state
+  last exit code = $exit_code
+}
 EOF
 }
 
@@ -364,6 +418,159 @@ print(hashlib.sha256(("manifest\0" + e["source_ref"] + "\0" + operand)
     bash "$QUARTET_ROOT/skills/shipyard/shipyard.sh" inspect --days 7
   [ "$status" -eq 0 ]
   [[ "$output" == *"fleet: 2 project(s), 3 role(s)"* ]]
+}
+
+@test "inspect: launchd discovery matches systemd fleet role and coverage shape" {
+  project="$BATS_TEST_TMPDIR/projects/parity"
+  event_root="$BATS_TEST_TMPDIR/events-parity"
+  mkdir -p "$project" "$event_root"
+  write_service parity-release release "$project"
+  write_timer parity-release "*-*-* 06:00:00"
+  seed_show_output parity-release
+
+  run run_inspect
+  [ "$status" -eq 0 ]
+  systemd_shape="$(jq -c '{schema_version,
+    meta:{project_count:.meta.project_count,role_count:.meta.role_count},
+    fleet:[.fleet[]|{project_id,project_name,roles,
+      units:[.units[]|{role,display,on_calendar}]}],
+    manifest:[.coverage[]|select(.source=="manifest")|
+      {state,reason,records_total,records_valid,records_invalid}]}' <<<"$output")"
+
+  rm "$UNIT_DIR/parity-release.service" "$UNIT_DIR/parity-release.timer"
+  write_launchd_job parity-release release "$project" "$event_root"
+  make_strict_launchctl_stub
+  seed_launchctl_output parity-release
+  systemctl_calls="$(stub_calls systemctl)"
+  export SHIPYARD_SCHEDULER=launchd
+  run run_inspect
+  [ "$status" -eq 0 ]
+  echo "$output"
+  jq -e '
+    ([.coverage[] | select(.source=="systemd")][0]
+      | .state=="available" and .reason=="ok" and .records_valid==1)
+    and (.fleet[0].units[0]
+      | .unit_file_state=="enabled" and .timer_load_state=="loaded"
+        and .service_active_state=="inactive"
+        and .service_result=="success" and .exec_main_status==0)
+    and ([.evidence[] | select(.source=="systemd")]
+      | map(.source_ref) | sort)
+      == ["unit:com.shipyard.parity-release:property:LastExitStatus",
+          "unit:com.shipyard.parity-release:property:State"]
+  ' <<<"$output"
+  launchd_shape="$(jq -c '{schema_version,
+    meta:{project_count:.meta.project_count,role_count:.meta.role_count},
+    fleet:[.fleet[]|{project_id,project_name,roles,
+      units:[.units[]|{role,display,on_calendar}]}],
+    manifest:[.coverage[]|select(.source=="manifest")|
+      {state,reason,records_total,records_valid,records_invalid}]}' <<<"$output")"
+  [ "$launchd_shape" = "$systemd_shape" ]
+  [ "$(stub_calls systemctl)" = "$systemctl_calls" ]
+  [ "$(stub_calls launchctl)" -eq 1 ]
+  grep -Fxq "print gui/$(id -u)/com.shipyard.parity-release" \
+    "$SHIM_LOG/launchctl.argv"
+  [ ! -s "$SHIM_LOG/launchctl.rejected" ]
+}
+
+@test "inspect: launchd excludes malformed and foreign plists with limitations" {
+  project="$BATS_TEST_TMPDIR/projects/launch-safe"
+  event_root="$BATS_TEST_TMPDIR/events-launch-safe"
+  other_core="$BATS_TEST_TMPDIR/other-core"
+  mkdir -p "$project" "$event_root" "$other_core/agents/release"
+  printf '#!/usr/bin/env bash\n' >"$other_core/agents/release/runner.sh"
+  chmod +x "$other_core/agents/release/runner.sh"
+  write_launchd_job launch-safe-release release "$project" "$event_root"
+  write_launchd_job launch-foreign-release release "$project" "$event_root" \
+    "$other_core"
+  printf '<plist><dict><key>broken</key>\n' \
+    >"$HOME/Library/LaunchAgents/launch-malformed-release.plist"
+  write_launchd_job launch-empty-events release "$project" ""
+  write_launchd_job launch-bad-schedule release "$project" "$event_root" \
+    "$QUARTET_ROOT" 24 0
+  make_strict_launchctl_stub
+  seed_launchctl_output launch-safe-release
+
+  export SHIPYARD_SCHEDULER=launchd
+  run run_inspect
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    .schema_version == 1
+    and .meta.project_count == 1
+    and .meta.role_count == 1
+    and .fleet[0].roles == ["release"]
+    and ([.evidence[] | select(.kind=="manifest_identity")] | length) == 1
+    and (.meta.discovery_limitations
+      | index("launchd_malformed_manifests_excluded") != null)
+    and (.meta.discovery_limitations
+      | index("launchd_foreign_manifests_excluded") != null)
+  ' <<<"$output"
+}
+
+@test "inspect: launchd runtime reports unavailable and malformed without systemctl" {
+  project="$BATS_TEST_TMPDIR/projects/launch-runtime"
+  event_root="$BATS_TEST_TMPDIR/events-launch-runtime"
+  mkdir -p "$project" "$event_root"
+  write_launchd_job launch-runtime-release release "$project" "$event_root"
+  make_strict_launchctl_stub
+  label="com.shipyard.launch-runtime-release"
+  printf 'launchctl unavailable\n' >"$SHIM_LOG/$label.stderr"
+  printf '1\n' >"$SHIM_LOG/$label.rc"
+  export SHIPYARD_SCHEDULER=launchd
+
+  run run_inspect
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.coverage[] | select(.source=="systemd")][0]
+      | .state=="unavailable" and .reason=="command_failed"
+        and (.limitations
+          | index("launchd_runtime_normalized_to_systemd_schema_v1") != null))
+    and .fleet[0].state=="degraded_observed"
+    and .fleet[0].units[0].service_active_state==null
+  ' <<<"$output"
+  [ "$(stub_calls systemctl)" -eq 0 ]
+
+  rm "$SHIM_LOG/$label.stderr" "$SHIM_LOG/$label.rc"
+  printf 'not a launchctl print document\n' >"$SHIM_LOG/$label.stdout"
+  run run_inspect
+  [ "$status" -eq 0 ]
+  jq -e '
+    [.coverage[] | select(.source=="systemd")][0]
+      | .state=="partial" and .reason=="malformed"
+        and .records_valid==0 and .records_invalid==1
+  ' <<<"$output"
+  [ "$(stub_calls systemctl)" -eq 0 ]
+  [ ! -s "$SHIM_LOG/launchctl.rejected" ]
+
+  seed_launchctl_output launch-runtime-release "not running" 9
+  run run_inspect
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.coverage[] | select(.source=="systemd")][0].state=="available")
+    and .fleet[0].state=="fault_observed"
+    and (.fleet[0].units[0]
+      | .service_active_state=="inactive" and .service_result=="failed"
+        and .exec_main_status==9)
+    and ([.evidence[] | select(.source=="systemd"
+      and .fields.property=="LastExitStatus")][0].fields.value==9)
+  ' <<<"$output"
+  [ "$(stub_calls systemctl)" -eq 0 ]
+
+  python_bin="$(command -v python3)"
+  empty_path="$BATS_TEST_TMPDIR/empty-path"
+  mkdir -p "$empty_path"
+  run env PATH="$empty_path" SHIPYARD_INSPECT_NOW=2026-07-29T12:00:00Z \
+    CLAUDE_PROJECTS_DIR="$CLAUDE_PROJECTS_DIR" \
+    CODEX_SESSIONS_DIR="$CODEX_SESSIONS_DIR" \
+    "$python_bin" "$QUARTET_ROOT/skills/shipyard/inspect.py" \
+      --core-root "$QUARTET_ROOT" \
+      --unit-dir "$HOME/Library/LaunchAgents" --scheduler launchd --days 7 --json
+  [ "$status" -eq 0 ]
+  jq -e '
+    [.coverage[] | select(.source=="systemd")][0]
+      | .state=="unavailable" and .reason=="missing_dependency"
+        and .records_valid==0
+  ' <<<"$output"
 }
 
 @test "inspect: inactive successful oneshot is no fault" {

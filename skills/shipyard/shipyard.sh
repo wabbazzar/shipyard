@@ -321,10 +321,20 @@ cmd_inspect() {
     echo "shipyard inspect: unexpected positional argument '${ARGS[0]}'" >&2
     return 2
   }
+  local scheduler unit_dir
+  scheduler="$(_scheduler)" || {
+    echo "shipyard inspect: unsupported scheduler" >&2
+    return 2
+  }
+  case "$scheduler" in
+    systemd) unit_dir="${SHIPYARD_SYSTEMD_DIR:-$HOME/.config/systemd/user}" ;;
+    launchd) unit_dir="${SHIPYARD_LAUNCHD_DIR:-$HOME/Library/LaunchAgents}" ;;
+  esac
   local cmd=(
     python3 "$QUARTET_DIR/skills/shipyard/inspect.py"
     --core-root "$QUARTET_DIR"
-    --unit-dir "$HOME/.config/systemd/user"
+    --unit-dir "$unit_dir"
+    --scheduler "$scheduler"
     --days "$OPT_DAYS"
   )
   [ "$OPT_JSON" -eq 1 ] && cmd+=(--json)
