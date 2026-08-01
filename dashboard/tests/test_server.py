@@ -178,6 +178,78 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(events["events"][0]["event"], "job.end")
         self.assertEqual(events["events"][0]["status"], "ok")
 
+    def test_operator_endpoint_is_versioned_background_and_window_only(self) -> None:
+        release = threading.Event()
+        entered = threading.Event()
+
+        def loader(window: str) -> dict[str, object]:
+            entered.set()
+            self.assertTrue(release.wait(2))
+            return {
+                "inspection": {
+                    "schema_version": 1,
+                    "meta": {"rule_version": "shipyard-inspect-v1", "core_root": "/private/SECRET"},
+                    "summary": {},
+                    "fleet": [],
+                    "effectiveness": [],
+                    "priorities": [],
+                    "attention": [],
+                    "coverage": [],
+                    "evidence": [],
+                },
+                "relationships": {
+                    "schema_version": 1,
+                    "kind": "shipyard.operator.relationships",
+                    "window": window,
+                    "sources": {},
+                },
+            }
+
+        replacement = RunningServer(
+            self.root,
+            poll_interval=0.01,
+            heartbeat_interval=0.04,
+            operator_loader=loader,
+        )
+        previous = self.running
+        self.running = replacement
+        previous.close()
+        try:
+            status, _, cold = self.json_request("GET", "/api/operator?window=24h")
+            self.assertEqual(status, 200)
+            self.assertEqual(cold["schema_version"], 1)
+            self.assertEqual(cold["kind"], "shipyard.operator")
+            self.assertEqual(cold["metadata"]["window"], "24h")
+            self.assertEqual(cold["metadata"]["inspection_state"], "unavailable")
+            self.assertTrue(entered.wait(1))
+            self.assertNotIn("/private/", json.dumps(cold))
+            release.set()
+            for _ in range(100):
+                status, _, fresh = self.json_request("GET", "/api/operator?window=24h")
+                if fresh["metadata"]["inspection_state"] == "fresh":
+                    break
+                time.sleep(0.01)
+            self.assertEqual(status, 200)
+            self.assertEqual(fresh["metadata"]["inspection_state"], "fresh")
+            self.assertNotIn("/private/", json.dumps(fresh))
+        finally:
+            release.set()
+
+        cases = {
+            "/api/operator": "missing_query_key",
+            "/api/operator?window=1h": "invalid_window",
+            "/api/operator?window=7d&window=24h": "repeated_query_key",
+            "/api/operator?window=": "invalid_query_value",
+            "/api/operator?role=build": "unknown_query_key",
+            "/api/operator?limit=1": "unknown_query_key",
+            "/api/operator?wat=1": "unknown_query_key",
+        }
+        for path, code in cases.items():
+            with self.subTest(path=path):
+                status, _, payload = self.json_request("GET", path)
+                self.assertEqual(status, 400)
+                self.assertEqual(payload["error"]["code"], code)
+
     def test_event_details_are_lazily_read_and_limit_is_enforced(self) -> None:
         with mock.patch.object(EventReader, "read_event", wraps=self.running.server.reader.read_event) as read:
             status, _, payload = self.json_request("GET", "/api/events?window=24h&limit=1")

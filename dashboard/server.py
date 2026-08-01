@@ -2,6 +2,19 @@
 
 from __future__ import annotations
 
+import sys
+
+# `python dashboard/server.py` otherwise leaves dashboard/ first on sys.path,
+# where operator.py can shadow Python's stdlib operator module during argparse's
+# import chain. Establish the package root before importing the stdlib surface.
+if __package__ in {None, ""}:
+    _script_directory = __file__.rpartition("/")[0]
+    _package_root = _script_directory.rpartition("/")[0] or "."
+    if sys.path and sys.path[0] == _script_directory:
+        sys.path.pop(0)
+    if _package_root not in sys.path:
+        sys.path.insert(0, _package_root)
+
 import argparse
 import json
 import os
@@ -9,7 +22,6 @@ import re
 import select
 import socket
 import stat
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -20,10 +32,15 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import parse_qsl, urlsplit
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from dashboard.reader import DEFAULT_LIMIT, MAX_LIMIT, EventReader, StaleReferenceError
+from dashboard.operator import (
+    InspectionCache,
+    OperatorDataError,
+    collect_change_metrics,
+    compose_operator_document,
+    load_presentation_topology,
+    make_expensive_loader,
+)
 
 
 SCHEMA_VERSION = 1
@@ -136,6 +153,16 @@ def _parse_query(raw_query: str) -> dict[str, str]:
     return values
 
 
+def _parse_operator_query(raw_query: str) -> str:
+    values = _parse_query(raw_query)
+    supplied = {key for key, _value in parse_qsl(raw_query, keep_blank_values=True)}
+    if supplied - {"window"}:
+        raise RequestError(400, "unknown_query_key", "operator accepts only window")
+    if "window" not in supplied:
+        raise RequestError(400, "missing_query_key", "operator requires window")
+    return values["window"]
+
+
 def _reference_location(reader: EventReader, reference: Any) -> dict[str, Any]:
     return {"file": reader.filename(reference), "byte_offset": reference.byte_offset}
 
@@ -213,6 +240,8 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         max_stream_clients: int = DEFAULT_MAX_STREAM_CLIENTS,
         monotonic: Callable[[], float] = time.monotonic,
         utc_now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        operator_loader: Optional[Callable[[str], dict[str, Any]]] = None,
+        operator_topology_path: Optional[Path] = None,
     ):
         host, port = address
         validate_bind_host(host)
@@ -234,6 +263,16 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.max_stream_clients = max_stream_clients
         self.monotonic = monotonic
         self.utc_now = utc_now
+        self.repo_root = Path(__file__).resolve().parents[1]
+        topology_path = operator_topology_path or self.repo_root / "docs" / "shipyard-data.json"
+        try:
+            self.operator_topology = load_presentation_topology(topology_path)
+        except OperatorDataError:
+            self.operator_topology = {"roles": [], "skills": [], "edges": []}
+        self.operator_cache = InspectionCache(
+            operator_loader or make_expensive_loader(self.repo_root),
+            monotonic=monotonic,
+        )
         self.stream_slots = threading.BoundedSemaphore(max_stream_clients)
         self.stop_event = threading.Event()
         super().__init__((host, port), DashboardRequestHandler)
@@ -352,6 +391,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._summary(query["window"])
             elif parsed.path == "/api/events":
                 self._events(_parse_query(parsed.query))
+            elif parsed.path == "/api/operator":
+                self._operator(_parse_operator_query(parsed.query))
             elif parsed.path == "/api/stream":
                 if parsed.query:
                     raise RequestError(400, "invalid_query", "stream does not accept query parameters")
@@ -410,6 +451,34 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             200,
             {"window": query["window"], "limit": int(query["limit"]), "count": len(events), "events": events},
         )
+
+    def _operator(self, window: str) -> None:
+        self.dashboard.refresh_index_if_changed()
+        with self.dashboard.reader_lock:
+            summary = _summary_payload(self.dashboard.reader, window)
+            refs = self.dashboard.reader.query_refs(window=window, limit=MAX_LIMIT)
+            events = [self.dashboard.reader.read_event(ref) for ref in refs]
+            event_stream_truncated = len(refs) == MAX_LIMIT
+        snapshot = self.dashboard.operator_cache.get(window)
+        cached = snapshot.data or {}
+        inspection = cached.get("inspection")
+        changes, change_limitations = collect_change_metrics(events, inspection)
+        payload = compose_operator_document(
+            window=window,
+            generated_at=self.dashboard.utc_now(),
+            summary=summary,
+            events=events,
+            inspection=inspection,
+            relationships=cached.get("relationships"),
+            topology=self.dashboard.operator_topology,
+            inspection_state=snapshot.state,
+            refresh_age_seconds=snapshot.age_seconds,
+            refresh_limitation=snapshot.limitation,
+            event_stream_truncated=event_stream_truncated,
+            changes=changes,
+            change_limitations=change_limitations,
+        )
+        self._json(200, payload)
 
     def _static(self, request_path: str) -> None:
         name, content_type = STATIC_FILES[request_path]

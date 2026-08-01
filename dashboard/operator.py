@@ -1,0 +1,1448 @@
+"""Shipyard-owned operator semantics for dashboard adapters.
+
+The browser and downstream dashboards render this document; they do not infer
+promise state, priority, topology, or narrative from raw events.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+
+OPERATOR_VIEW_SCHEMA_VERSION = 1
+OPERATOR_BUILD_VERSION = "0.1.0"
+OPERATOR_RULE_VERSION = "operator-outcomes-v1"
+INSPECTION_TTL_SECONDS = 300
+MAX_ATTENTION = 200
+MAX_EVIDENCE = 500
+MAX_STORY_BEATS = 8
+MAX_RELATIONSHIP_EDGES = 500
+MAX_OUTCOME_CHAINS = 500
+MAX_CHANGE_RANGES = 50
+WINDOW_DAYS = {"24h": 1, "7d": 7, "30d": 30}
+PROMISE_DEFINITIONS = (
+    ("bugs_caught_and_fixed", "Bugs caught and fixed"),
+    ("usage_assessed_projects", "Projects assessed"),
+    ("features_shipped_end_to_end", "Features shipped end to end"),
+    ("consequential_decisions_surfaced", "Decisions surfaced"),
+    ("critique_actionability", "Critiques acted on"),
+    ("execute_ticket_delegation_claude", "Claude delegation"),
+    ("execute_ticket_delegation_codex", "Codex delegation"),
+    ("execute_ticket_delegation_hermes", "Hermes delegation"),
+)
+
+_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
+_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,127}$")
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_STATE_RANK = {"violated": 0, "unverified": 1, "verified": 2, "not_applicable": 3}
+_ROLE_STATE_RANK = {"failed": 0, "stale": 1, "running": 2, "healthy": 3, "unknown": 4}
+_TOKEN_FIELDS = (
+    "input_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+)
+
+
+class OperatorDataError(ValueError):
+    """Raised when a core data source does not satisfy its public contract."""
+
+
+@dataclass(frozen=True)
+class CacheResult:
+    data: Optional[dict[str, Any]]
+    state: str
+    age_seconds: Optional[int]
+    limitation: Optional[str]
+
+
+@dataclass
+class _CacheEntry:
+    data: dict[str, Any]
+    loaded_at: float
+
+
+class InspectionCache:
+    """Bounded-TTL, per-window, single-flight background snapshot cache."""
+
+    def __init__(
+        self,
+        loader: Callable[[str], dict[str, Any]],
+        *,
+        ttl_seconds: int = INSPECTION_TTL_SECONDS,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if ttl_seconds <= 0:
+            raise ValueError("inspection TTL must be positive")
+        self.loader = loader
+        self.ttl_seconds = ttl_seconds
+        self.monotonic = monotonic
+        self._lock = threading.Lock()
+        self._entries: dict[str, _CacheEntry] = {}
+        self._in_flight: Optional[str] = None
+        self._errors: set[str] = set()
+        self._last_attempt: dict[str, float] = {}
+
+    def get(self, window: str) -> CacheResult:
+        if window not in WINDOW_DAYS:
+            raise ValueError("unsupported operator window")
+        now = self.monotonic()
+        with self._lock:
+            entry = self._entries.get(window)
+            age = max(0, int(now - entry.loaded_at)) if entry is not None else None
+            fresh = entry is not None and age is not None and age < self.ttl_seconds
+            if fresh:
+                return CacheResult(entry.data, "fresh", age, None)
+            failed = window in self._errors
+            retry_due = not failed or now - self._last_attempt.get(window, now) >= self.ttl_seconds
+            if self._in_flight is None and retry_due:
+                self._in_flight = window
+                self._last_attempt[window] = now
+                worker = threading.Thread(
+                    target=self._refresh,
+                    args=(window,),
+                    name=f"shipyard-operator-{window}",
+                    daemon=True,
+                )
+                worker.start()
+            if entry is not None:
+                return CacheResult(
+                    entry.data,
+                    "stale",
+                    age,
+                    "inspection_refresh_failed" if failed else "inspection_refreshing",
+                )
+            return CacheResult(
+                None,
+                "unavailable",
+                None,
+                "inspection_refresh_failed" if failed else "inspection_refreshing",
+            )
+
+    def _refresh(self, window: str) -> None:
+        try:
+            loaded = self.loader(window)
+            if not isinstance(loaded, dict):
+                raise OperatorDataError("inspection loader returned a non-object")
+        except Exception:  # The public cache result intentionally redacts source errors.
+            with self._lock:
+                self._errors.add(window)
+                if self._in_flight == window:
+                    self._in_flight = None
+            return
+        loaded_at = self.monotonic()
+        with self._lock:
+            self._entries[window] = _CacheEntry(loaded, loaded_at)
+            self._errors.discard(window)
+            if self._in_flight == window:
+                self._in_flight = None
+
+
+def _object(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _array(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _safe_id(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and _ID_RE.fullmatch(value) else None
+
+
+def _safe_code(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and _CODE_RE.fullmatch(value) else None
+
+
+def _safe_timestamp(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _safe_number(value: Any) -> Optional[int | float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value != value or value in {float("inf"), float("-inf")}:
+        return None
+    return value
+
+
+def _safe_limitations(values: Any) -> list[str]:
+    limitations: list[str] = []
+    redacted = False
+    for value in _array(values):
+        candidate = value.get("code") if isinstance(value, dict) else value
+        code = _safe_code(candidate)
+        if code is not None:
+            limitations.append(code)
+        elif candidate is not None:
+            redacted = True
+    if redacted:
+        limitations.append("redacted_source_detail")
+    return sorted(set(limitations))[:50]
+
+
+def _safe_ids(values: Any, *, limit: int = 50) -> list[str]:
+    result = []
+    for value in _array(values):
+        safe = _safe_id(value)
+        if safe is not None and safe not in result:
+            result.append(safe)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _event_evidence_id(event: dict[str, Any]) -> str:
+    safe = {
+        key: event.get(key)
+        for key in (
+            "ts",
+            "event",
+            "role",
+            "status",
+            "outcome",
+            "disposition",
+            "run_id",
+            "work_id",
+            "proposal_id",
+            "incident_id",
+            "critique_id",
+            "project_id",
+            "project",
+            "svc",
+        )
+        if isinstance(event.get(key), (str, int, float))
+    }
+    digest = hashlib.sha256(
+        json.dumps(safe, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:20]
+    return f"event:{digest}"
+
+
+def _safe_event_evidence(event: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for key in (
+        "event",
+        "role",
+        "status",
+        "outcome",
+        "disposition",
+        "run_id",
+        "work_id",
+        "proposal_id",
+        "incident_id",
+        "critique_id",
+    ):
+        value = event.get(key)
+        safe = _safe_id(value)
+        if safe is not None:
+            fields[key] = safe
+    for key in _TOKEN_FIELDS + ("duration_s",):
+        value = _safe_number(event.get(key))
+        if value is not None and value >= 0:
+            fields[key] = value
+    return {
+        "id": _event_evidence_id(event),
+        "source": "events",
+        "kind": "event",
+        "observed_at": _safe_timestamp(event.get("ts")),
+        "fields": fields,
+        "limitations": [],
+    }
+
+
+def load_presentation_topology(path: Path) -> dict[str, Any]:
+    """Load only the generated presentation's declared graph contract."""
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OperatorDataError("presentation topology is unavailable") from exc
+    graph = _object(_object(document).get("graph"))
+    roles = _array(graph.get("roles"))
+    skills = _array(graph.get("skills"))
+    edges = _array(graph.get("edges"))
+    if not roles or not skills:
+        raise OperatorDataError("presentation topology is incomplete")
+
+    safe_roles = []
+    role_ids: set[str] = set()
+    for raw in roles:
+        row = _object(raw)
+        role_id = _safe_code(row.get("id"))
+        name = row.get("name")
+        loop = _safe_code(row.get("loop"))
+        if role_id is None or not isinstance(name, str) or not name or len(name) > 80 or loop is None:
+            raise OperatorDataError("presentation role is malformed")
+        if role_id in role_ids:
+            raise OperatorDataError("presentation role IDs are not unique")
+        role_ids.add(role_id)
+        safe_roles.append({"id": role_id, "name": name, "loop": loop})
+
+    safe_skills = []
+    skill_ids: set[str] = set()
+    for raw in skills:
+        row = _object(raw)
+        skill_id = _safe_code(row.get("id"))
+        label = row.get("label")
+        kind = _safe_code(row.get("kind"))
+        memberships = row.get("roles")
+        if (
+            skill_id is None
+            or not isinstance(label, str)
+            or not label
+            or len(label) > 80
+            or kind is None
+            or not isinstance(memberships, list)
+            or any(role not in role_ids for role in memberships)
+        ):
+            raise OperatorDataError("presentation skill is malformed")
+        if skill_id in skill_ids:
+            raise OperatorDataError("presentation skill IDs are not unique")
+        skill_ids.add(skill_id)
+        safe_skills.append(
+            {"id": skill_id, "label": label, "kind": kind, "roles": list(memberships)}
+        )
+
+    safe_edges = []
+    for raw in edges:
+        row = _object(raw)
+        source = _safe_code(row.get("from"))
+        target = _safe_code(row.get("to"))
+        if source not in skill_ids or target not in skill_ids:
+            raise OperatorDataError("presentation pipeline edge is malformed")
+        safe_edges.append({"from": source, "to": target})
+    return {"roles": safe_roles, "skills": safe_skills, "edges": safe_edges}
+
+
+def _promise_rows(inspection: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
+    measured = {
+        key: item
+        for raw in _array(_object(inspection).get("effectiveness"))
+        if (item := _object(raw))
+        and (key := _safe_code(item.get("key"))) is not None
+    }
+    rows = []
+    for key, label in PROMISE_DEFINITIONS:
+        item = measured.get(key)
+        if item is None:
+            rows.append(
+                {
+                    "id": f"promise:{key}",
+                    "label": label,
+                    "state": "unverified",
+                    "target": {"operator": None, "value": None, "unit": None},
+                    "observed_value": None,
+                    "evidence_ids": [],
+                    "limitations": ["inspection_unavailable" if inspection is None else "promise_evidence_missing"],
+                }
+            )
+            continue
+        source_state = _safe_code(item.get("state")) or "unmeasured"
+        observed = _safe_number(item.get("value"))
+        target_value = _safe_number(item.get("target_value"))
+        operator = item.get("target_operator") if item.get("target_operator") in {"gte", "lte", "eq"} else None
+        if source_state == "not_applicable":
+            state = "not_applicable"
+        elif source_state != "measured" or observed is None or target_value is None or operator is None:
+            state = "unverified"
+        else:
+            met = {
+                "gte": observed >= target_value,
+                "lte": observed <= target_value,
+                "eq": observed == target_value,
+            }[operator]
+            state = "verified" if met else "violated"
+        unit = _safe_code(item.get("unit"))
+        rows.append(
+            {
+                "id": f"promise:{key}",
+                "label": label,
+                "state": state,
+                "target": {"operator": operator, "value": target_value, "unit": unit},
+                "observed_value": observed,
+                "evidence_ids": _safe_ids(item.get("evidence_ids")),
+                "limitations": _safe_limitations(item.get("limitations")),
+            }
+        )
+    return sorted(rows, key=lambda row: (_STATE_RANK[row["state"]], row["id"]))
+
+
+def _attention_rows(inspection: Optional[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    if inspection is None:
+        return [], False
+    rows: list[dict[str, Any]] = []
+    for raw in _array(inspection.get("priorities")):
+        item = _object(raw)
+        item_id = _safe_id(item.get("id"))
+        rank = _safe_number(item.get("rank"))
+        category = _safe_code(item.get("category"))
+        if item_id is None or not isinstance(rank, int) or category is None:
+            continue
+        rule_id = _safe_code(item.get("rule_id"))
+        safe_title = {
+            "budget_gate_root_mismatch_v1": "Align budget roots",
+            "budget_gate_scope_mismatch_v1": "Scope budget gates",
+            "cross_project_coverage_gap_v1": "Close repeated coverage gaps",
+            "historical_benchmark_gap_v1": "Close outcome linkage",
+        }.get(rule_id, category.replace("_", " ").title())
+        rows.append(
+            {
+                "id": item_id,
+                "kind": "next_pr",
+                "label": safe_title,
+                "rule_id": rule_id,
+                "priority": rank,
+                "state": "waiting",
+                "evidence_ids": _safe_ids(item.get("evidence_ids")),
+                "limitations": _safe_limitations(item.get("limitations")),
+            }
+        )
+    priority_offset = len(rows) + 1
+    for index, raw in enumerate(_array(inspection.get("attention"))):
+        item = _object(raw)
+        item_id = _safe_id(item.get("id"))
+        kind = _safe_code(item.get("kind"))
+        if item_id is None or kind is None:
+            continue
+        severity = item.get("severity_advisory")
+        state = "alarm" if severity in {"high", "critical"} else "waiting"
+        rows.append(
+            {
+                "id": item_id,
+                "kind": kind,
+                "label": kind.replace("_", " ").title(),
+                "priority": priority_offset + index,
+                "state": state,
+                "detected_at": _safe_timestamp(item.get("detected_at")),
+                "evidence_ids": _safe_ids(item.get("evidence_ids")),
+                "limitations": _safe_limitations(item.get("limitations")),
+            }
+        )
+    rows.sort(key=lambda row: (row["priority"], row["id"]))
+    return rows[:MAX_ATTENTION], len(rows) > MAX_ATTENTION
+
+
+def _inspection_evidence(inspection: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
+    if inspection is None:
+        return []
+    rows = []
+    for raw in _array(inspection.get("evidence")):
+        item = _object(raw)
+        item_id = _safe_id(item.get("id"))
+        source = _safe_code(item.get("source"))
+        kind = _safe_code(item.get("kind"))
+        if item_id is None or source is None or kind is None:
+            continue
+        row = {
+            "id": item_id,
+            "source": source,
+            "kind": kind,
+            "observed_at": _safe_timestamp(item.get("observed_at")),
+            "limitations": _safe_limitations(item.get("limitations")),
+        }
+        project_id = _safe_id(item.get("project_id"))
+        if project_id is not None:
+            row["project_id"] = project_id
+        rows.append(row)
+    return rows
+
+
+def _evidence_references(value: Any) -> list[str]:
+    references: list[str] = []
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if key == "evidence_ids" and isinstance(child, list):
+                    for candidate in child:
+                        if isinstance(candidate, str) and candidate not in references:
+                            references.append(candidate)
+                else:
+                    visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return references
+
+
+def _bound_evidence(
+    evidence: list[dict[str, Any]], consumers: list[Any]
+) -> tuple[list[dict[str, Any]], set[str], set[str], bool]:
+    by_id = {row["id"]: row for row in evidence}
+    ordered_ids = []
+    for consumer in consumers:
+        for evidence_id in _evidence_references(consumer):
+            if evidence_id in by_id and evidence_id not in ordered_ids:
+                ordered_ids.append(evidence_id)
+    for row in evidence:
+        if row["id"] not in ordered_ids:
+            ordered_ids.append(row["id"])
+    selected_ids = set(ordered_ids[:MAX_EVIDENCE])
+    missing_ids = {
+        evidence_id
+        for consumer in consumers
+        for evidence_id in _evidence_references(consumer)
+        if evidence_id not in by_id
+    }
+    rows = [by_id[evidence_id] for evidence_id in ordered_ids[:MAX_EVIDENCE]]
+    return rows, selected_ids, missing_ids, len(ordered_ids) > MAX_EVIDENCE
+
+
+def _constrain_evidence_links(
+    value: Any,
+    selected_ids: set[str],
+    missing_ids: set[str],
+) -> None:
+    if isinstance(value, dict):
+        for key, child in list(value.items()):
+            if key != "evidence_ids":
+                _constrain_evidence_links(child, selected_ids, missing_ids)
+                continue
+            if not isinstance(child, list):
+                value[key] = []
+                value.setdefault("limitations", []).append("evidence_unavailable")
+                continue
+            retained = [item for item in child if item in selected_ids]
+            absent = any(item in missing_ids for item in child)
+            truncated = any(item not in selected_ids and item not in missing_ids for item in child)
+            value[key] = retained
+            limitations = value.setdefault("limitations", [])
+            if absent and "evidence_unavailable" not in limitations:
+                limitations.append("evidence_unavailable")
+            if truncated and "evidence_truncated" not in limitations:
+                limitations.append("evidence_truncated")
+        return
+    if isinstance(value, list):
+        for child in value:
+            _constrain_evidence_links(child, selected_ids, missing_ids)
+
+
+def _relationship_sources(relationships: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
+    if relationships is None:
+        return []
+    sources = _object(relationships.get("sources"))
+    rows = []
+    for provider in ("claude", "codex", "hermes"):
+        source = _object(sources.get(provider))
+        state = source.get("state") if source.get("state") in {"available", "partial", "unknown"} else "unknown"
+        coverage = _object(source.get("coverage"))
+        row: dict[str, Any] = {
+            "provider": provider,
+            "state": state,
+            "coverage_state": coverage.get("state") if coverage.get("state") in {"complete", "partial", "unknown"} else "unknown",
+            "limitations": _safe_limitations(source.get("limitations")),
+        }
+        for key in ("files_scanned", "malformed_records"):
+            number = _safe_number(coverage.get(key))
+            if isinstance(number, int) and number >= 0:
+                row[key] = number
+        rows.append(row)
+    return rows
+
+
+def _topology_document(
+    declared: dict[str, Any],
+    summary: dict[str, Any],
+    events: list[dict[str, Any]],
+    relationships: Optional[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    evidence: list[dict[str, Any]] = []
+    events_by_role: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        role = _safe_code(event.get("role"))
+        if role is not None:
+            events_by_role.setdefault(role, []).append(event)
+    services_by_role: dict[str, list[dict[str, Any]]] = {}
+    for raw in _array(summary.get("services")):
+        service = _object(raw)
+        role = _safe_code(service.get("role"))
+        if role is not None:
+            services_by_role.setdefault(role, []).append(service)
+
+    nodes: list[dict[str, Any]] = []
+    for role in declared["roles"]:
+        role_id = role["id"]
+        if role_id == "human":
+            nodes.append(
+                {
+                    "id": "role:human",
+                    "kind": "human",
+                    "label": role["name"],
+                    "loop": role["loop"],
+                    "state": "declared",
+                    "observed_count": None,
+                    "last_activity": None,
+                    "evidence_ids": [],
+                    "limitations": ["human_activity_not_inferred"],
+                }
+            )
+            continue
+        services = services_by_role.get(role_id, [])
+        states = [item.get("state") for item in services if item.get("state") in _ROLE_STATE_RANK]
+        state = min(states, key=lambda value: _ROLE_STATE_RANK[value]) if states else "unknown"
+        role_events = events_by_role.get(role_id, [])
+        ids = [_event_evidence_id(item) for item in role_events[:10]]
+        activity = [timestamp for item in role_events if (timestamp := _safe_timestamp(item.get("ts"))) is not None]
+        nodes.append(
+            {
+                "id": f"role:{role_id}",
+                "kind": "role",
+                "label": role["name"],
+                "loop": role["loop"],
+                "state": state,
+                "observed_count": len(role_events),
+                "last_activity": max(activity, default=None),
+                "evidence_ids": ids,
+                "limitations": [] if services else ["role_runtime_unobserved"],
+            }
+        )
+
+    skill_counts: dict[str, int] = {}
+    skill_last: dict[str, str] = {}
+    skill_evidence: dict[str, list[str]] = {}
+    observed_edges: list[dict[str, Any]] = []
+    actor_nodes: dict[str, dict[str, Any]] = {}
+    sources = _object(_object(relationships).get("sources")) if relationships else {}
+    declared_skill_ids = {skill["id"] for skill in declared["skills"]}
+    observed_only_skills: set[str] = set()
+    for provider in ("claude", "codex", "hermes"):
+        source = _object(sources.get(provider))
+        for raw in _array(source.get("caller_callee")):
+            item = _object(raw)
+            caller = _safe_id(item.get("caller_id"))
+            callee = _safe_id(item.get("callee_id"))
+            count = _safe_number(item.get("count"))
+            if caller is None or callee is None or not isinstance(count, int) or count < 1:
+                continue
+            caller_node = f"agent:{provider}:{caller}"
+            callee_node = f"agent:{provider}:{callee}"
+            actor_nodes.setdefault(caller_node, {"id": caller_node, "kind": "agent", "label": f"{provider.title()} caller", "provider": provider, "state": "observed", "evidence_ids": []})
+            actor_nodes.setdefault(callee_node, {"id": callee_node, "kind": "agent", "label": f"{provider.title()} callee", "provider": provider, "state": "observed", "evidence_ids": []})
+            evidence_id = "relationship:" + hashlib.sha256(
+                f"{provider}\0{caller}\0{callee}\0{item.get('bucket')}\0{item.get('completion')}\0{item.get('first_timestamp')}\0{item.get('last_timestamp')}".encode()
+            ).hexdigest()[:20]
+            relationship_evidence = {
+                "id": evidence_id,
+                "source": "relationships",
+                "kind": "caller_callee",
+                "observed_at": _safe_timestamp(item.get("last_timestamp")),
+                "fields": {"provider": provider, "count": count},
+                "limitations": [],
+            }
+            evidence.append(relationship_evidence)
+            actor_nodes[caller_node]["evidence_ids"].append(evidence_id)
+            actor_nodes[callee_node]["evidence_ids"].append(evidence_id)
+            edge = {
+                "id": f"observed:{evidence_id}",
+                "kind": "call",
+                "from": caller_node,
+                "to": callee_node,
+                "state": "observed",
+                "count": count,
+                "last_activity": _safe_timestamp(item.get("last_timestamp")),
+                "evidence_ids": [evidence_id],
+            }
+            completion = _safe_code(item.get("completion"))
+            if completion is not None:
+                edge["completion"] = completion
+            observed_edges.append(edge)
+        for raw in _array(source.get("skill_invocations")):
+            item = _object(raw)
+            actor = _safe_id(item.get("actor_id"))
+            skill = _safe_code(item.get("skill_id"))
+            count = _safe_number(item.get("count"))
+            if actor is None or skill is None or not isinstance(count, int) or count < 1:
+                continue
+            actor_node = f"agent:{provider}:{actor}"
+            actor_nodes.setdefault(actor_node, {"id": actor_node, "kind": "agent", "label": f"{provider.title()} caller", "provider": provider, "state": "observed", "evidence_ids": []})
+            evidence_id = "skill-call:" + hashlib.sha256(
+                f"{provider}\0{actor}\0{skill}\0{item.get('bucket')}\0{item.get('completion')}\0{item.get('first_timestamp')}\0{item.get('last_timestamp')}".encode()
+            ).hexdigest()[:20]
+            evidence.append(
+                {
+                    "id": evidence_id,
+                    "source": "relationships",
+                    "kind": "skill_invocation",
+                    "observed_at": _safe_timestamp(item.get("last_timestamp")),
+                    "fields": {"provider": provider, "skill_id": skill, "count": count},
+                    "limitations": [],
+                }
+            )
+            actor_nodes[actor_node]["evidence_ids"].append(evidence_id)
+            skill_counts[skill] = skill_counts.get(skill, 0) + count
+            if skill not in declared_skill_ids:
+                observed_only_skills.add(skill)
+            timestamp = _safe_timestamp(item.get("last_timestamp"))
+            if timestamp and timestamp > skill_last.get(skill, ""):
+                skill_last[skill] = timestamp
+            skill_evidence.setdefault(skill, []).append(evidence_id)
+            observed_edges.append(
+                {
+                    "id": f"observed:{evidence_id}",
+                    "kind": "skill_call",
+                    "from": actor_node,
+                    "to": f"skill:{skill}",
+                    "state": "observed",
+                    "count": count,
+                    "last_activity": timestamp,
+                    "evidence_ids": [evidence_id],
+                }
+            )
+
+    for skill in declared["skills"]:
+        skill_id = skill["id"]
+        observed_count = skill_counts.get(skill_id, 0)
+        nodes.append(
+            {
+                "id": f"skill:{skill_id}",
+                "kind": "skill",
+                "label": skill["label"],
+                "skill_kind": skill["kind"],
+                "state": "observed" if observed_count else "unknown",
+                "observed_count": observed_count if observed_count else None,
+                "last_activity": skill_last.get(skill_id),
+                "evidence_ids": skill_evidence.get(skill_id, [])[:20],
+                "limitations": [] if observed_count else ["skill_invocation_unobserved"],
+            }
+        )
+    for skill_id in sorted(observed_only_skills):
+        nodes.append(
+            {
+                "id": f"skill:{skill_id}",
+                "kind": "skill",
+                "label": skill_id,
+                "skill_kind": "observed",
+                "state": "observed",
+                "observed_count": skill_counts[skill_id],
+                "last_activity": skill_last.get(skill_id),
+                "evidence_ids": skill_evidence.get(skill_id, [])[:20],
+                "limitations": ["skill_not_in_declared_topology"],
+            }
+        )
+    nodes.extend(actor_nodes[key] for key in sorted(actor_nodes))
+
+    declared_edges = []
+    for skill in declared["skills"]:
+        for role in skill["roles"]:
+            declared_edges.append(
+                {
+                    "id": f"membership:{role}:{skill['id']}",
+                    "kind": "membership",
+                    "from": f"role:{role}",
+                    "to": f"skill:{skill['id']}",
+                    "state": "declared",
+                    "evidence_ids": [],
+                }
+            )
+    for edge in declared["edges"]:
+        declared_edges.append(
+            {
+                "id": f"pipeline:{edge['from']}:{edge['to']}",
+                "kind": "pipeline",
+                "from": f"skill:{edge['from']}",
+                "to": f"skill:{edge['to']}",
+                "state": "declared",
+                "evidence_ids": [],
+            }
+        )
+    return (
+        {
+            "nodes": nodes,
+            "declared_edges": declared_edges,
+            "observed_edges": observed_edges[:MAX_RELATIONSHIP_EDGES],
+            "limitations": ["relationship_edges_truncated"] if len(observed_edges) > MAX_RELATIONSHIP_EDGES else [],
+        },
+        evidence,
+    )
+
+
+def _outcome_document(
+    events: list[dict[str, Any]],
+    attention_count: Optional[int],
+    *,
+    event_stream_truncated: bool,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    event_evidence = [_safe_event_evidence(event) for event in events]
+    evidence_id_by_object = {id(event): row["id"] for event, row in zip(events, event_evidence)}
+    by_run: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        run_id = _safe_id(event.get("run_id"))
+        if run_id is not None:
+            by_run.setdefault(run_id, []).append(event)
+    chains = []
+    for run_id in sorted(by_run):
+        rows = sorted(by_run[run_id], key=lambda row: (_safe_timestamp(row.get("ts")) or "", str(row.get("event", ""))))
+        starts = [row for row in rows if row.get("event") == "job.start"]
+        ends = [row for row in rows if row.get("event") == "job.end"]
+        domain = [row for row in rows if row.get("event") not in {"job.start", "job.end"}]
+        state = "complete" if starts and ends else "incomplete"
+        role = next((_safe_code(row.get("role")) for row in rows if _safe_code(row.get("role"))), None)
+        chain = {
+            "run_id": run_id,
+            "role": role,
+            "state": state,
+            "status": _safe_code(ends[-1].get("status")) if ends else None,
+            "started_at": _safe_timestamp(starts[0].get("ts")) if starts else None,
+            "ended_at": _safe_timestamp(ends[-1].get("ts")) if ends else None,
+            "work_ids": sorted({safe for row in domain if (safe := _safe_id(row.get("work_id"))) is not None}),
+            "proposal_ids": sorted({safe for row in rows if (safe := _safe_id(row.get("proposal_id"))) is not None}),
+            "incident_ids": sorted({safe for row in rows if (safe := _safe_id(row.get("incident_id"))) is not None}),
+            "evidence_ids": [evidence_id_by_object[id(row)] for row in rows[:50]],
+            "limitations": [] if state == "complete" else ["run_terminal_evidence_missing"],
+        }
+        chains.append(chain)
+    chains = chains[:MAX_OUTCOME_CHAINS]
+
+    parents: dict[str, str] = {}
+
+    def find(item: str) -> str:
+        parents.setdefault(item, item)
+        while parents[item] != item:
+            parents[item] = parents[parents[item]]
+            item = parents[item]
+        return item
+
+    def union(left: str, right: str) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parents[max(left_root, right_root)] = min(left_root, right_root)
+
+    event_ids: list[tuple[dict[str, Any], list[str]]] = []
+    for event in events:
+        identifiers = []
+        for key in ("proposal_id", "incident_id", "work_id", "upstream_work_id"):
+            value = _safe_id(event.get(key))
+            if value is not None and value not in identifiers:
+                identifiers.append(value)
+        if not identifiers:
+            continue
+        for value in identifiers:
+            find(value)
+        for value in identifiers[1:]:
+            union(identifiers[0], value)
+        event_ids.append((event, identifiers))
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    group_identifiers: dict[str, set[str]] = {}
+    for event, identifiers in event_ids:
+        root = find(identifiers[0])
+        grouped.setdefault(root, []).append(event)
+        group_identifiers.setdefault(root, set()).update(identifiers)
+    lineages = []
+    successful_work_outcomes = {"pr_opened", "ok"}
+    for root in sorted(grouped):
+        rows = sorted(grouped[root], key=lambda row: (_safe_timestamp(row.get("ts")) or "", str(row.get("event", ""))))
+        has_incident = any(_safe_id(row.get("incident_id")) is not None for row in rows)
+        explicit_types = {
+            row.get("type") for row in rows if row.get("type") in {"feature", "bug"}
+        }
+        kind = "bugfix" if has_incident or "bug" in explicit_types else ("feature" if "feature" in explicit_types else "work")
+        work_rows = [row for row in rows if row.get("event") in {"build.work.outcome", "build.ticket.outcome"}]
+        succeeded = any(row.get("outcome") in successful_work_outcomes for row in work_rows)
+        upstream = any(_safe_id(row.get("upstream_work_id")) is not None for row in rows)
+        state = "complete" if succeeded and (upstream or has_incident or explicit_types) else "unverified"
+        lineages.append(
+            {
+                "id": "lineage:" + hashlib.sha256("\0".join(sorted(group_identifiers[root])).encode()).hexdigest()[:20],
+                "kind": kind,
+                "state": state,
+                "identifiers": sorted(group_identifiers[root])[:20],
+                "outcome": next((_safe_code(row.get("outcome")) for row in reversed(rows) if _safe_code(row.get("outcome"))), None),
+                "started_at": _safe_timestamp(rows[0].get("ts")),
+                "ended_at": _safe_timestamp(rows[-1].get("ts")),
+                "evidence_ids": [evidence_id_by_object[id(row)] for row in rows[:50]],
+                "limitations": [] if state == "complete" else ["end_to_end_lineage_incomplete"],
+            }
+        )
+    lineages = lineages[:MAX_OUTCOME_CHAINS]
+
+    terminal = [event for event in events if event.get("event") == "job.end"]
+    successful = sum(1 for event in terminal if event.get("status") == "ok")
+    reliability = {
+        "state": "partial" if terminal and event_stream_truncated else ("measured" if terminal else "unknown"),
+        "completed": len(terminal) if terminal else None,
+        "successful": successful if terminal else None,
+        "rate": successful / len(terminal) if terminal else None,
+        "limitations": ["event_window_truncated"] if terminal and event_stream_truncated else ([] if terminal else ["job_terminal_denominator_missing"]),
+    }
+    roles = sorted({_safe_code(event.get("role")) for event in events if _safe_code(event.get("role"))})
+    role_contracts = []
+    for role in roles:
+        started = sum(1 for event in events if event.get("role") == role and event.get("event") == "job.start")
+        completed = sum(1 for event in events if event.get("role") == role and event.get("event") == "job.end")
+        ok = sum(1 for event in events if event.get("role") == role and event.get("event") == "job.end" and event.get("status") == "ok")
+        role_contracts.append(
+            {
+                "role": role,
+                "state": "partial" if started and event_stream_truncated else ("measured" if started else "unknown"),
+                "started": started if started else None,
+                "completed": completed if started else None,
+                "successful": ok if started else None,
+                "completion_rate": completed / started if started else None,
+                "limitations": ["event_window_truncated"] if started and event_stream_truncated else ([] if started else ["role_start_denominator_missing"]),
+            }
+        )
+    token_totals = {key: 0 for key in _TOKEN_FIELDS}
+    token_coverage = {key: 0 for key in _TOKEN_FIELDS}
+    legacy_total = 0
+    legacy_coverage = 0
+    for event in terminal:
+        total = _safe_number(event.get("tokens"))
+        if isinstance(total, int) and total >= 0:
+            legacy_total += total
+            legacy_coverage += 1
+        for key in _TOKEN_FIELDS:
+            value = _safe_number(event.get(key))
+            if isinstance(value, int) and value >= 0:
+                token_totals[key] += value
+                token_coverage[key] += 1
+    any_token_observed = legacy_coverage > 0 or any(token_coverage.values())
+    complete_total_coverage = bool(terminal) and legacy_coverage == len(terminal)
+    efficiency: dict[str, Any] = {
+        "state": "measured" if complete_total_coverage and not event_stream_truncated else ("partial" if any_token_observed else "unknown"),
+        "completed_runs": len(terminal) if terminal else None,
+        "total_tokens": legacy_total if legacy_coverage else None,
+        "total_token_coverage_runs": legacy_coverage if terminal else None,
+        "limitations": ["event_window_truncated"] if any_token_observed and event_stream_truncated else ([] if complete_total_coverage else (["token_coverage_partial"] if any_token_observed else ["token_class_denominator_missing"])),
+    }
+    for key, value in token_totals.items():
+        efficiency[key] = value if token_coverage[key] else None
+        efficiency[f"{key}_coverage_runs"] = token_coverage[key] if terminal else None
+    efficiency["tokens_per_completed_run"] = (
+        legacy_total / len(terminal) if complete_total_coverage else None
+    )
+
+    critiques = {
+        _safe_id(event.get("critique_id"))
+        for event in events
+        if _safe_id(event.get("critique_id")) is not None
+    }
+    dispositions = {name: 0 for name in ("deposited", "deferred", "failed", "expired")}
+    for event in events:
+        disposition = event.get("disposition")
+        if disposition in dispositions and _safe_id(event.get("critique_id")) is not None:
+            dispositions[disposition] += 1
+    shoulder = {
+        "state": "partial" if critiques and event_stream_truncated else ("measured" if critiques else "unknown"),
+        "critiques": len(critiques) if critiques else None,
+        **{key: value if critiques else None for key, value in dispositions.items()},
+        "limitations": ["event_window_truncated"] if critiques and event_stream_truncated else ([] if critiques else ["critique_lineage_missing"]),
+    }
+    operator_load = {
+        "state": "measured" if attention_count is not None else "unknown",
+        "attention_items": attention_count,
+        "limitations": [] if attention_count is not None else ["operator_attention_unavailable"],
+    }
+    return {
+        "chains": chains,
+        "lineages": lineages,
+        "role_contracts": role_contracts,
+        "reliability": reliability,
+        "operator_load": operator_load,
+        "efficiency": efficiency,
+        "shoulder": shoulder,
+    }, event_evidence
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+
+def _change_bucket(path: str) -> str:
+    lowered = path.lower()
+    components = lowered.split("/")
+    name = components[-1]
+    if components[0] in {"docs", "doc"} or name.endswith((".md", ".rst")):
+        return "docs"
+    if any(component in {"test", "tests", "__tests__", "spec", "specs"} for component in components[:-1]) or name.startswith(("test_", "spec_")) or ".test." in name or ".spec." in name:
+        return "test"
+    return "product"
+
+
+def _git_range_metrics(repo: Path, base: str, head: str) -> Optional[dict[str, Any]]:
+    try:
+        if not repo.is_dir() or not _SHA_RE.fullmatch(base) or not _SHA_RE.fullmatch(head):
+            return None
+        resolved = []
+        for value in (base, head):
+            result = _git(repo, "rev-parse", "--verify", f"{value}^{{commit}}")
+            if result.returncode != 0 or not _SHA_RE.fullmatch(result.stdout.strip()):
+                return None
+            resolved.append(result.stdout.strip())
+        base, head = resolved
+        if _git(repo, "merge-base", "--is-ancestor", base, head).returncode != 0:
+            return None
+        current = _git(repo, "rev-parse", "--verify", "HEAD^{commit}")
+        contains = _git(repo, "for-each-ref", "--format=%(refname)", f"--contains={head}")
+        if current.returncode != 0 or (current.stdout.strip() != head and not contains.stdout.strip()):
+            return None
+        commit_result = _git(repo, "rev-list", "--count", f"{base}..{head}")
+        diff_result = _git(repo, "diff", "--numstat", "--no-renames", base, head)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if commit_result.returncode != 0 or diff_result.returncode != 0:
+        return None
+    try:
+        commits = int(commit_result.stdout.strip())
+    except ValueError:
+        return None
+    additions = 0
+    deletions = 0
+    files = 0
+    buckets = {"product": 0, "test": 0, "docs": 0}
+    for line in diff_result.stdout.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            return None
+        added, removed, path = parts
+        if added != "-":
+            try:
+                additions += int(added)
+                deletions += int(removed)
+            except ValueError:
+                return None
+        files += 1
+        buckets[_change_bucket(path)] += 1
+    return {
+        "base_sha": base,
+        "head_sha": head,
+        "additions": additions,
+        "deletions": deletions,
+        "files_touched": files,
+        "commits": commits,
+        "buckets": buckets,
+        "durability": "unknown",
+        "limitations": ["durability_not_proven"],
+    }
+
+
+def collect_change_metrics(
+    events: list[dict[str, Any]], inspection: Optional[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    project_paths: dict[str, Path] = {}
+    project_names: dict[str, list[str]] = {}
+    if inspection is not None:
+        for raw in _array(inspection.get("fleet")):
+            item = _object(raw)
+            project_id = _safe_id(item.get("project_id"))
+            project_name = _safe_id(item.get("project_name"))
+            project_path = item.get("project_path")
+            if project_id is not None and isinstance(project_path, str):
+                project_paths[project_id] = Path(project_path)
+                if project_name is not None:
+                    project_names.setdefault(project_name, []).append(project_id)
+    requested = False
+    invalid = False
+    truncated = False
+    results = []
+    seen: set[tuple[str, str, str]] = set()
+    for event in events:
+        project_id = _safe_id(event.get("project_id"))
+        if project_id is None:
+            project = _safe_id(event.get("project"))
+            matches = project_names.get(project or "", [])
+            project_id = matches[0] if len(matches) == 1 else None
+        base = event.get("base_sha")
+        head = event.get("head_sha")
+        if base is None and head is None:
+            continue
+        requested = True
+        if project_id is None or project_id not in project_paths or not isinstance(base, str) or not isinstance(head, str):
+            invalid = True
+            continue
+        key = (project_id, base, head)
+        if key in seen:
+            continue
+        if len(seen) >= MAX_CHANGE_RANGES:
+            truncated = True
+            break
+        seen.add(key)
+        metrics = _git_range_metrics(project_paths[project_id], base, head)
+        if metrics is None:
+            invalid = True
+            continue
+        metrics["project_id"] = project_id
+        metrics["evidence_ids"] = [_event_evidence_id(event)]
+        results.append(metrics)
+    results.sort(key=lambda row: (row["project_id"], row["base_sha"], row["head_sha"]))
+    limitations = []
+    if not requested:
+        limitations.append("explicit_git_range_unavailable")
+    if invalid:
+        limitations.append("invalid_git_range")
+    if truncated:
+        limitations.append("git_ranges_truncated")
+    return results, limitations
+
+
+def _safe_change_rows(changes: Optional[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    rows = []
+    for raw in changes or []:
+        item = _object(raw)
+        project_id = _safe_id(item.get("project_id"))
+        base = item.get("base_sha")
+        head = item.get("head_sha")
+        if project_id is None or not isinstance(base, str) or not _SHA_RE.fullmatch(base) or not isinstance(head, str) or not _SHA_RE.fullmatch(head):
+            continue
+        numbers = {}
+        valid = True
+        for key in ("additions", "deletions", "files_touched", "commits"):
+            value = item.get(key)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                valid = False
+                break
+            numbers[key] = value
+        buckets = _object(item.get("buckets"))
+        if not valid or any(not isinstance(buckets.get(key), int) or isinstance(buckets.get(key), bool) or buckets[key] < 0 for key in ("product", "test", "docs")):
+            continue
+        rows.append(
+            {
+                "project_id": project_id,
+                "base_sha": base,
+                "head_sha": head,
+                **numbers,
+                "buckets": {key: buckets[key] for key in ("product", "test", "docs")},
+                "durability": "unknown",
+                "evidence_ids": _safe_ids(item.get("evidence_ids")),
+                "limitations": sorted(set(_safe_limitations(item.get("limitations")) + ["durability_not_proven"])),
+            }
+        )
+    return sorted(rows, key=lambda row: (row["project_id"], row["base_sha"], row["head_sha"]))
+
+
+def _coverage_rows(
+    inspection: Optional[dict[str, Any]],
+    relationships: Optional[dict[str, Any]],
+    topology_available: bool,
+    *,
+    attention_truncated: bool,
+    evidence_truncated: bool,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if inspection is not None:
+        for raw in _array(inspection.get("coverage")):
+            item = _object(raw)
+            source = _safe_code(item.get("source"))
+            state = item.get("state") if item.get("state") in {"available", "partial", "unavailable", "unknown"} else "unknown"
+            if source is None:
+                continue
+            row: dict[str, Any] = {
+                "source": source,
+                "state": state,
+                "reason": _safe_code(item.get("reason")),
+                "limitations": _safe_limitations(item.get("limitations")),
+            }
+            project_id = _safe_id(item.get("project_id"))
+            if project_id is not None:
+                row["project_id"] = project_id
+            for key in ("records_total", "records_valid", "records_invalid", "records_out_of_window", "records_unattributed", "records_ambiguous"):
+                number = _safe_number(item.get(key))
+                if isinstance(number, int) and number >= 0:
+                    row[key] = number
+            rows.append(row)
+    rows.extend(
+        {
+            "source": f"relationships_{row['provider']}",
+            "state": row["state"],
+            "reason": row["coverage_state"],
+            "limitations": row["limitations"],
+            **({"records_total": row["files_scanned"]} if "files_scanned" in row else {}),
+            **({"records_invalid": row["malformed_records"]} if "malformed_records" in row else {}),
+        }
+        for row in _relationship_sources(relationships)
+    )
+    rows.append(
+        {
+            "source": "presentation_topology",
+            "state": "available" if topology_available else "unavailable",
+            "reason": "ok" if topology_available else "topology_invalid",
+            "limitations": [],
+        }
+    )
+    rows.append(
+        {
+            "source": "operator_bounds",
+            "state": "partial" if attention_truncated or evidence_truncated else "available",
+            "reason": "truncated" if attention_truncated or evidence_truncated else "ok",
+            "limitations": [
+                code
+                for code, present in (
+                    ("attention_truncated", attention_truncated),
+                    ("evidence_truncated", evidence_truncated),
+                )
+                if present
+            ],
+        }
+    )
+    return rows
+
+
+def _narrative_document(
+    promises: list[dict[str, Any]],
+    attention: list[dict[str, Any]],
+    outcomes: dict[str, Any],
+    topology: dict[str, Any],
+    changes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    counts = {state: sum(1 for item in promises if item["state"] == state) for state in _STATE_RANK}
+    focus = attention[0]["label"] if attention else "No operator action is currently evidenced"
+    beats = [
+        {
+            "id": "story:promises",
+            "heading": "Outcomes",
+            "body": f"{counts['verified']} verified · {counts['violated']} violated · {counts['unverified']} unverified",
+            "state": "alarm" if counts["violated"] else ("waiting" if counts["unverified"] else "clear"),
+            "evidence_ids": [evidence_id for item in promises for evidence_id in item["evidence_ids"]][:20],
+        },
+        {
+            "id": "story:attention",
+            "heading": "Needs you",
+            "body": focus,
+            "state": attention[0]["state"] if attention else "clear",
+            "evidence_ids": attention[0]["evidence_ids"] if attention else [],
+        },
+    ]
+    reliability = outcomes["reliability"]
+    if reliability["state"] == "measured":
+        beats.append(
+            {
+                "id": "story:reliability",
+                "heading": "Runs",
+                "body": f"{reliability['successful']} of {reliability['completed']} completed successfully",
+                "state": "clear" if reliability["successful"] == reliability["completed"] else "alarm",
+                "evidence_ids": [evidence_id for chain in outcomes["chains"] for evidence_id in chain["evidence_ids"]][:20],
+            }
+        )
+    observed_calls = sum(edge["count"] for edge in topology["observed_edges"] if edge["kind"] == "call")
+    observed_skills = sum(edge["count"] for edge in topology["observed_edges"] if edge["kind"] == "skill_call")
+    beats.append(
+        {
+            "id": "story:crew",
+            "heading": "Crew",
+            "body": f"{observed_calls} observed calls · {observed_skills} skill invocations",
+            "state": "signal" if observed_calls or observed_skills else "unknown",
+            "evidence_ids": [evidence_id for edge in topology["observed_edges"] for evidence_id in edge["evidence_ids"]][:20],
+        }
+    )
+    efficiency = outcomes["efficiency"]
+    if efficiency["state"] == "measured":
+        beats.append(
+            {
+                "id": "story:tokens",
+                "heading": "Tokens",
+                "body": f"{int(efficiency['tokens_per_completed_run'])} classified tokens per completed run",
+                "state": "signal",
+                "evidence_ids": [],
+            }
+        )
+    if changes:
+        beats.append(
+            {
+                "id": "story:changes",
+                "heading": "Changes",
+                "body": f"{sum(item['additions'] for item in changes)} added · {sum(item['deletions'] for item in changes)} removed",
+                "state": "signal",
+                "evidence_ids": [evidence_id for item in changes for evidence_id in item["evidence_ids"]][:20],
+            }
+        )
+    return {
+        "heading": "Fleet promises",
+        "subline": "What changed, what held, and where evidence stops",
+        "focus": focus,
+        "operator_action": f"Inspect evidence for {focus}" if attention else "Keep watching the evidence stream",
+        "beats": beats[:MAX_STORY_BEATS],
+    }
+
+
+def compose_operator_document(
+    *,
+    window: str,
+    generated_at: datetime,
+    summary: dict[str, Any],
+    events: list[dict[str, Any]],
+    inspection: Optional[dict[str, Any]],
+    relationships: Optional[dict[str, Any]],
+    topology: dict[str, Any],
+    inspection_state: str,
+    refresh_age_seconds: Optional[int],
+    refresh_limitation: Optional[str] = None,
+    event_stream_truncated: bool = False,
+    changes: Optional[list[dict[str, Any]]] = None,
+    change_limitations: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """Compose one deterministic, content-minimizing operator document."""
+    if window not in WINDOW_DAYS:
+        raise OperatorDataError("unsupported operator window")
+    if generated_at.tzinfo is None or generated_at.utcoffset() is None:
+        raise OperatorDataError("generated_at must be timezone-aware")
+    if inspection_state not in {"fresh", "stale", "unavailable"}:
+        raise OperatorDataError("invalid inspection state")
+    safe_events = [event for event in events if isinstance(event, dict)]
+    promises = _promise_rows(inspection)
+    attention, attention_truncated = _attention_rows(inspection)
+    inspection_attention_count = _safe_number(
+        _object(_object(inspection).get("summary")).get("attention_count")
+    ) if inspection is not None else None
+    if not isinstance(inspection_attention_count, int) or inspection_attention_count < 0:
+        inspection_attention_count = len(attention) if inspection is not None else None
+    outcomes, event_evidence = _outcome_document(
+        safe_events,
+        inspection_attention_count,
+        event_stream_truncated=event_stream_truncated,
+    )
+    topology_document, relationship_evidence = _topology_document(
+        topology, summary, safe_events, relationships
+    )
+    changes = _safe_change_rows(changes)
+    safe_change_limitations = _safe_limitations(
+        change_limitations if change_limitations is not None else ["explicit_git_range_unavailable"]
+    )
+    evidence = _inspection_evidence(inspection) + event_evidence + relationship_evidence
+    unique_evidence: list[dict[str, Any]] = []
+    seen_evidence: set[str] = set()
+    for row in evidence:
+        if row["id"] not in seen_evidence:
+            unique_evidence.append(row)
+            seen_evidence.add(row["id"])
+    consumers = [promises, attention, outcomes, topology_document, changes]
+    unique_evidence, selected_evidence_ids, missing_evidence_ids, evidence_truncated = _bound_evidence(
+        unique_evidence, consumers
+    )
+    for consumer in consumers:
+        _constrain_evidence_links(consumer, selected_evidence_ids, missing_evidence_ids)
+    limitations = list(safe_change_limitations)
+    if inspection_state == "unavailable":
+        limitations.append("inspection_unavailable")
+    elif inspection_state == "stale":
+        limitations.append("inspection_stale")
+    if inspection is None:
+        limitations.append("inspection_snapshot_missing")
+    if relationships is None:
+        limitations.append("relationship_snapshot_missing")
+    if event_stream_truncated:
+        limitations.append("event_window_truncated")
+    if refresh_limitation is not None:
+        safe_refresh_limitation = _safe_code(refresh_limitation)
+        if safe_refresh_limitation is not None:
+            limitations.append(safe_refresh_limitation)
+    limitations.extend(_safe_limitations(topology_document.get("limitations")))
+    metadata = {
+        "schema_version": OPERATOR_VIEW_SCHEMA_VERSION,
+        "build_version": OPERATOR_BUILD_VERSION,
+        "rule_version": OPERATOR_RULE_VERSION,
+        "inspection_rule_version": _safe_code(_object(_object(inspection).get("meta")).get("rule_version")) if inspection else None,
+        "window": window,
+        "generated_at": generated_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "inspection_state": inspection_state,
+        "refresh_age_seconds": refresh_age_seconds,
+        "limits": {"attention": MAX_ATTENTION, "evidence": MAX_EVIDENCE, "story_beats": MAX_STORY_BEATS},
+        "limitations": sorted(set(limitations)),
+    }
+    topology_available = bool(topology.get("roles")) and bool(topology.get("skills"))
+    if not topology_available:
+        metadata["limitations"].append("presentation_topology_unavailable")
+        metadata["limitations"] = sorted(set(metadata["limitations"]))
+    coverage = _coverage_rows(
+        inspection,
+        relationships,
+        topology_available,
+        attention_truncated=attention_truncated,
+        evidence_truncated=evidence_truncated,
+    )
+    coverage.append(
+        {
+            "source": "operator_events",
+            "state": "partial" if event_stream_truncated else "available",
+            "reason": "bounded_at_maximum" if event_stream_truncated else "ok",
+            "records_total": len(safe_events),
+            "limitations": ["event_window_truncated"] if event_stream_truncated else [],
+        }
+    )
+    narrative = _narrative_document(
+        promises, attention, outcomes, topology_document, changes
+    )
+    return {
+        "schema_version": OPERATOR_VIEW_SCHEMA_VERSION,
+        "kind": "shipyard.operator",
+        "metadata": metadata,
+        "narrative": narrative,
+        "promises": promises,
+        "outcomes": outcomes,
+        "topology": topology_document,
+        "changes": changes,
+        "attention": attention,
+        "coverage": coverage,
+        "evidence": unique_evidence,
+    }
+
+
+def make_expensive_loader(repo_root: Path) -> Callable[[str], dict[str, Any]]:
+    repo_root = repo_root.resolve(strict=True)
+
+    def load(window: str) -> dict[str, Any]:
+        days = WINDOW_DAYS[window]
+        inspect_result = subprocess.run(
+            ["bash", str(repo_root / "skills" / "shipyard" / "shipyard.sh"), "inspect", "--json", "--days", str(days)],
+            cwd=repo_root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if inspect_result.returncode == 3:
+            inspection = None
+        elif inspect_result.returncode == 0:
+            inspection = json.loads(inspect_result.stdout)
+            if not isinstance(inspection, dict):
+                raise OperatorDataError("inspection output is not an object")
+        else:
+            raise OperatorDataError("inspection command failed")
+        relationship_result = subprocess.run(
+            [sys.executable, str(repo_root / "scripts" / "delegation-report.py"), "--operator-json", "--days", str(days)],
+            cwd=repo_root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if relationship_result.returncode != 0:
+            raise OperatorDataError("relationship command failed")
+        relationships = json.loads(relationship_result.stdout)
+        if not isinstance(relationships, dict):
+            raise OperatorDataError("relationship output is not an object")
+        return {"inspection": inspection, "relationships": relationships}
+
+    return load

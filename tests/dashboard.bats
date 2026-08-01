@@ -202,6 +202,23 @@ install_dashboard_fixture() {
     "http://127.0.0.1:$DASH_PORT/api/events?window=24h&project=fixture&role=release&event=dashboard&limit=10"
   [ "$status" -eq 0 ]
   printf '%s' "$output" | jq -e '.count == 1 and .events[0].event == "dashboard.fixture"' >/dev/null
+  run curl --fail --silent --show-error "http://127.0.0.1:$DASH_PORT/api/operator?window=24h"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e '
+    .schema_version == 1 and .kind == "shipyard.operator" and
+    .metadata.window == "24h" and
+    (.metadata.inspection_state == "fresh" or
+     .metadata.inspection_state == "stale" or
+     .metadata.inspection_state == "unavailable") and
+    (.promises | length == 8) and
+    (.topology.nodes | length > 0) and
+    ((tostring | contains("project_path") or contains("source_ref") or
+      contains("/home/") or contains("/Users/") or contains(".jsonl")) | not)
+  ' >/dev/null
+  run curl --silent --show-error -o /dev/null -w '%{http_code}' \
+    "http://127.0.0.1:$DASH_PORT/api/operator"
+  [ "$status" -eq 0 ]
+  [ "$output" = "400" ]
   run curl --fail --silent --show-error "http://127.0.0.1:$DASH_PORT/"
   [ "$status" -eq 0 ]
   [[ "$output" == *"<h1>Fleet operations</h1>"* ]]
