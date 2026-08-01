@@ -1,0 +1,442 @@
+# Operator outcomes dashboard
+
+- **Created:** 2026-08-01
+- **Owner:** wabbazzar
+- **Status:** draft
+- **Priority:** high
+- **Type:** feature
+- **Estimated Points:** 23 (five phases: 5 · 5 · 5 · 5 · 3)
+- **Refs:** `dashboard/reader.py`, `dashboard/server.py`,
+  `dashboard/static/index.html`, `dashboard/static/app.js`,
+  `dashboard/static/styles.css`, `dashboard/tests/`,
+  `skills/shipyard/inspect.py`, `skills/shipyard/shipyard.sh`,
+  `agents/lib/log_event.sh`, `agents/lib/post-run.sh`,
+  `agents/*/runner.sh`, `agents/release/critic-watch.sh`,
+  `docs/shipyard-data.json`, `scripts/install-dashboard.sh`
+
+## Summary
+
+Turn the local Shipyard dashboard into an outcome-first promise audit backed by
+one versioned, content-minimizing operator document. Shipyard owns telemetry,
+lineage, KPI semantics, narrative order, and crew/skill topology; the existing
+standalone dashboard used on macOS and Linux becomes a thin presentation of
+that document, and a later Ice ticket consumes the same contract without
+reimplementing it.
+
+## Objective
+
+For any supported 24-hour, 7-day, or 30-day window, `GET /api/operator` returns
+one deterministic schema-versioned document that tells the human operator
+which Shipyard promises are verified, violated, unverified, or not applicable;
+what needs attention; how work moved through agents and skills; and which raw
+evidence supports every claim. The installed standalone/macOS dashboard renders
+that document as `Outcomes`, `Crew`, `Evidence`, and `Story` modes at
+`1440×900` and `390×844`, while preserving unknowns and never deriving KPI
+meaning in the browser.
+
+## Problem / Background
+
+The shipped dashboard is a trustworthy activity and health surface, but it
+does not answer the larger operator question: “Is the fleet doing what
+Shipyard says it does?”
+
+- `EventReader.summarize()` in `dashboard/reader.py:434` derives lifecycle
+  health and unresolved actionables.
+- `_summary_payload()` in `dashboard/server.py:143` exposes counts, services,
+  actionables, and parse errors, but no promise, outcome, topology, or narrative
+  model.
+- `build_document()` in `skills/shipyard/inspect.py:4207` already owns fleet,
+  attention, effectiveness, evidence, limitations, and next-PR priorities.
+  `_benchmark_effectiveness()` deliberately leaves values unset when feature,
+  bug-fix, decision, or critique lineage is missing.
+- The standalone client currently recomputes stale display state and derives
+  actionable labels in `dashboard/static/app.js:54-94`; that is the beginning
+  of adapter-owned semantics and must not spread.
+- Shipyard inspection discovers only systemd `*.service` manifests in
+  `skills/shipyard/inspect.py:190`, while the same dashboard is installed under
+  macOS launchd by `scripts/install-dashboard.sh:339-374`. macOS must receive a
+  scheduler adapter in core rather than a second dashboard implementation.
+- The presentation already defines the declared crew/skill graph in
+  `docs/shipyard-data.json`; the operator view should reuse that generated
+  topology and overlay observed state instead of creating a competing diagram.
+
+Current events expose enough activity to start, but not enough immutable
+lineage to prove complete outcomes. There is no unique run ID; `episode` in
+`agents/lib/post-run.sh:31-40` intentionally deduplicates equivalent outcomes
+and therefore cannot identify one invocation. Build result files may contain
+PR, branch, and item outcome fields, but `job.end` currently retains only
+status, duration, exit, and tokens. Shoulder critique events retain counts and
+token use but do not durably record successful delivery or a shared critique
+identity.
+
+## Confirmed Product Decisions
+
+| Decision | State | Rationale |
+|---|---|---|
+| The dashboard is an outcome-first promise audit | locked | Activity, token use, and lines changed explain outcomes; they are not outcomes themselves. |
+| Shipyard owns meaning; Ice and macOS/Linux are thin adapters | locked | KPI formulas, priority, topology, and narrative must not drift by platform. |
+| Update the existing standalone dashboard for macOS | locked | WorkMac shipped one platform-neutral browser UI plus launchd/systemd shells, not a separate Mac frontend. |
+| New telemetry is content-minimizing | locked | Store only opaque identifiers, timestamps, enums, counters, token classes, hashes, and commit/PR references—never prompts, messages, diffs, filenames, critique prose, or result bodies. |
+| Missing evidence stays visible | locked | Unknown must never be collapsed into healthy, successful, or zero. |
+| Use the presentation’s tree as operational anatomy | locked | Declared topology remains stable; observed invocations, outcomes, and attention become overlays. |
+| Narrative mode is deterministic | locked | Story copy and ordering come from the operator document; no dashboard model call or adapter interpretation. |
+| Visual design uses restrained semantic color and gestalt | locked | Short aesthetic headings, intuitive grouping, and connected evidence replace explanatory prose. No new light theme is required. |
+| Standalone navigation uses in-page modes | locked default | The current server exposes one static shell; modes avoid adding a routing framework solely for navigation. |
+
+There are no open user-decision-class items.
+
+## UI Direction
+
+### Subject, audience, and job
+
+- **Subject:** whether a fleet of agents is producing verified outcomes through
+  the declared Shipyard loops.
+- **Audience:** the human owner deciding where to intervene and where the next
+  Shipyard PR should focus.
+- **Job:** establish in under ten seconds what worked, what is uncertain, what
+  needs the operator, and which evidence supports the conclusion.
+
+**Design thesis:** A living map of the fleet: calm structure first, restrained
+color for meaning, and visible evidence flowing from work to outcome.
+
+### Information hierarchy
+
+1. `Outcomes`: promise states, verified outcome chains, reliability, operator
+   load, and bounded efficiency.
+2. `Needs you`: the highest-priority operator actions, oldest gate, stale
+   chains, failures, and evidence gaps.
+3. `Crew`: declared human/role/skill topology with observed activity, handoffs,
+   outcome state, token pressure, and last evidence overlaid.
+4. `Evidence`: the existing safe event/detail surface plus bounded source
+   references and explicit limitations for a selected promise, node, edge, or
+   outcome.
+5. `Story`: a keyboard-operable narrative sequence over the exact same ordered
+   facts; no separate analysis or generated copy.
+
+The primary action is **Inspect evidence**. Secondary actions select the time
+window, move through the story, or focus a crew/skill node. There are no
+mutation controls.
+
+### Visual system
+
+Preserve the dashboard’s current dark instrument-panel foundation and add only
+the distinctions the new information requires:
+
+| Token | Value | Role |
+|---|---|---|
+| Hull | `#0B1118` | page surface |
+| Chalk | `#E7EEF7` | primary text |
+| Signal | `#5BC0EB` | focus, links, observed flow |
+| Clear | `#3DDC97` | verified outcome |
+| Waiting | `#F2C14E` | operator decision or uncertainty |
+| Alarm | `#FF6B6B` | violated promise or active failure |
+
+Unknown/unmeasured state uses the existing muted neutral treatment, not a new
+decorative color. Role identity may reuse the presentation’s role colors, but
+state must also be carried by text, shape, border, and accessible labels.
+
+- Display and body type remain system UI; evidence, timestamps, identifiers,
+  and counts remain monospace.
+- Headers are short nouns or noun phrases: `Shipyard`, `Outcomes`, `Needs you`,
+  `Crew`, `Skills`, `Evidence`, `Story`. Avoid explanatory or AI-sounding
+  headings.
+- Use proximity to bind a claim to its outcome and evidence; use connectors to
+  express lineage; use whitespace to separate operator action from passive
+  telemetry.
+- The signature element is the living crew/skill map. Declared membership and
+  pipeline edges remain visually stable; activity pulses represent real,
+  evidence-linked observations only. Reduced-motion mode retains the same state
+  through static marks.
+- At `390×844`, grids recompose to ordered cards and the graph becomes an
+  accessible vertical route/tree rather than a squeezed desktop SVG.
+
+## Technical Requirements
+
+### 1. Platform-neutral inspection
+
+- Refactor manifest discovery in `skills/shipyard/inspect.py` behind an
+  explicit scheduler adapter while preserving the current systemd behavior and
+  schema-v1 output.
+- Add launchd discovery for Shipyard-owned `com.shipyard.*.plist` manifests,
+  accepting only canonical runners rooted in this Shipyard checkout and
+  validating project path, role, baked event root, schedule, and source plist.
+- `skills/shipyard/shipyard.sh inspect` selects systemd or launchd using its
+  existing scheduler detection instead of hardcoding
+  `$HOME/.config/systemd/user` at `skills/shipyard/shipyard.sh:327`.
+- Unsupported or malformed platform evidence remains explicit coverage data;
+  it is never silently omitted or guessed from display names.
+
+### 2. Minimal outcome lineage
+
+- Add one `[telemetry] outcome_lineage` boolean. Unset/false preserves the
+  current event bytes and behavior exactly; true enables only the additive
+  fields/events below. Malformed values are configuration errors, not truthy.
+- Generate one opaque unique `run_id` at each scheduled runner invocation and
+  copy it to its `job.start`, in-run domain events, and `job.end`. Preserve
+  `episode` unchanged for notification deduplication.
+- Reuse explicit domain identifiers already present: `proposal_id`,
+  `incident_id`, `merge_sha`, and persisted decision IDs. Never join work by
+  title or timestamp proximity.
+- Emit compact build item outcomes after validated result parsing with
+  `run_id`, stable `work_id`, enum outcome, and optional PR/branch/commit
+  references. Do not emit result prose.
+- Ticket mode emits a stable relative ticket ID and accepts an explicit
+  upstream work/proposal ID; it never guesses lineage from title text.
+- Shoulder events share one opaque `critique_id` derived from the reviewed
+  snapshot and durably record `deposited`, `deferred`, `failed`, or `expired`
+  delivery disposition. They do not claim a downstream code effect without a
+  future explicit work link.
+- Keep single-total tokens for backward compatibility and add provider, model,
+  and available input/cache/output/reasoning token classes only when already
+  supplied by the harness result. No price or dollar estimate is emitted.
+
+### 3. Shipyard-owned operator document
+
+- Add `dashboard/operator.py` with an independent
+  `OPERATOR_VIEW_SCHEMA_VERSION = 1`, a pure deterministic composer, and a
+  bounded single-flight cache for expensive inspection data.
+- Add `GET /api/operator?window=24h|7d|30d`; reject every other or repeated
+  query exactly like existing endpoints. Keep `/api/health`, `/api/summary`,
+  `/api/events`, and `/api/stream` backward compatible.
+- The response contains:
+  - metadata: schema/build/rule versions, window, generated time, refresh age,
+    and `fresh|stale|unavailable` inspection state;
+  - `narrative`: short heading/subline, focus statement, ordered story beats,
+    and operator-action copy;
+  - `promises`: stable IDs, `verified|violated|unverified|not_applicable`,
+    target, observed value, evidence IDs, and limitations;
+  - `outcomes`: complete feature/bug chains, role-contract completion,
+    reliability, operator load, and efficiency only where denominators exist;
+  - `topology`: stable human/role/skill nodes, declared membership/pipeline
+    edges, observed overlays, live state, last activity, and evidence IDs;
+  - `attention`, `coverage`, and bounded redacted evidence objects.
+- The composer selects and redacts from `build_document()`; it never exposes
+  machine paths, prompt/message/result bodies, filenames, diffs, or critique
+  prose.
+- Load declared roles, skills, membership, and pipeline edges from the
+  generated presentation graph in `docs/shipyard-data.json`; validate it and
+  report unavailable topology rather than inventing nodes.
+- Promise/KPI states, thresholds, sorting, severity, wording, and limitations
+  live only in core. Adapters may format dates and map semantic tokens to CSS.
+- Never hold `DashboardHTTPServer.reader_lock` while running inspection. Serve
+  the last good inspection snapshot on refresh failure and mark it stale.
+- The operator request must not execute inspection synchronously per page
+  request; use a bounded TTL and one in-flight refresh.
+
+### 4. Standalone/macOS thin adapter
+
+- Replace browser-side state derivation with one operator-document fetch.
+  Existing raw events may still be fetched only inside the Evidence mode.
+- Render `Outcomes`, `Crew`, `Evidence`, and `Story` as in-page modes over the
+  supplied document. Preserve the existing health/event evidence surface where
+  it remains useful.
+- The crew/skill graph renders the supplied node/edge order and supplied state
+  exactly. It must not infer caller, priority, outcome, stale state, or
+  actionability from raw events.
+- Use safe DOM text APIs for every field. Preserve selection and scroll across
+  SSE invalidation; expose unavailable/stale/parse states with a direct next
+  step.
+- Preserve keyboard operation, visible focus, semantic structure, contrast,
+  hostile-text safety, reduced-motion equivalence, and same-origin-only
+  requests.
+- Browser tests inject sentinel promise/KPI/topology/narrative values that
+  intentionally conflict with raw events and prove the DOM follows the core
+  document, catching duplicated adapter derivation.
+
+### 5. Stable adapter contract for Ice
+
+- Document the versioned operator payload and compatibility rules in the
+  existing dashboard/operator documentation; do not add a parallel product
+  explainer.
+- Provide fixture JSON and a contract test that the later Ice server adapter
+  can consume without importing Python or rereading JSONL.
+- Keep the server loopback-only, no-CORS, read-only, and non-embeddable. Ice
+  will fetch it server-side in its own linked ticket.
+
+## Implementation Plan
+
+### Phase 1 — Launchd inspection parity (5 pts)
+
+Introduce the scheduler-neutral manifest boundary, preserve systemd output
+byte-for-byte for existing fixtures, add hermetic launchd fixtures, and route
+the CLI through platform detection. Prove macOS manifests produce the same
+canonical fleet/project/role evidence shape.
+
+Delegation: subagent — implement scheduler-neutral inspection discovery and
+launchd parity with focused Python/Bats coverage; return exact files, RED/GREEN
+tests, schema comparison, and blockers.
+
+### Phase 2 — Content-minimizing lineage (5 pts)
+
+Add the default-off telemetry gate, run IDs, explicit build/ticket lineage,
+token classes, and shoulder critique disposition. Prove false/unset event bytes
+remain unchanged and true produces only the allowed structured fields.
+
+Delegation: subagent — implement the gated lineage slice across shared runner
+helpers and focused emitters, with pre-change RED and post-change hermetic Bats
+evidence; return exact event lines and no content-bearing fields.
+
+### Phase 3 — Operator document and cached API (5 pts)
+
+Implement the pure composer, presentation-topology loader, inspection cache,
+redaction boundary, and `/api/operator` endpoint. Preserve every existing API
+contract and benchmark bound.
+
+Delegation: subagent — own `dashboard/operator.py`, its focused tests, and the
+minimal server integration; return schema keys, cache/concurrency evidence,
+redaction assertions, compatibility results, and blockers.
+
+### Phase 4 — Outcomes, crew map, evidence, and story (5 pts)
+
+Recompose the standalone UI as a thin client of the operator document, using
+short headers, restrained state color, a responsive crew/skill tree, and a
+deterministic narrative mode. Strengthen the browser harness with contradictory
+sentinel data so adapter-owned semantics cannot regress.
+
+Delegation: subagent — implement the standalone HTML/CSS/JS and real-browser
+coverage at both viewports; return files, screenshots, assertion counts,
+keyboard/reduced-motion/overflow/network evidence, and blockers.
+
+### Phase 5 — Installed Mac/Linux proof and contract handoff (3 pts)
+
+Reinstall/restart the intended local dashboard service without disturbing any
+other loopback listener, verify the operator payload and rendered modes on the
+real event store, update canonical docs, publish the fixture/compatibility
+contract, and hand the shipped schema/commit to the dependent Ice ticket.
+
+Delegation: subagent — audit installer/docs/contract completeness and run the
+platform-appropriate installed-service proof; return doctor status, host/port,
+schema version, screenshots, fixture checksum, and blockers.
+
+## Testing Strategy
+
+- Focused Python unit tests cover deterministic composition, scheduler
+  discovery, redaction, cache TTL/single-flight/failure, endpoint validation,
+  legacy rows, and source immutability.
+- Focused hermetic Bats prove the default-off telemetry path first, then exact
+  run/outcome/critique event fields under opt-in without network or model use.
+- Existing dashboard reader/server tests remain green; health schema, summary,
+  events, SSE, host validation, mutation rejection, and resource bounds do not
+  change.
+- Real Chromium proof at `1440×900` and `390×844` covers every mode, supplied
+  state ordering, tree semantics and text equivalent, hostile text, keyboard,
+  focus, contrast, overflow, reduced motion, selection/scroll preservation,
+  unavailable/stale states, and same-origin traffic.
+- Installed-service proof runs the platform-native installer/doctor, curls the
+  loopback API, renders the real page, and leaves no headless browser or changed
+  event-source bytes.
+- Full repository gates include Bats, Bash/Python/JavaScript syntax, reader
+  benchmark, leak firewall, deck freshness/completeness/render, ticket
+  lifecycle, delegation, and `git diff --check`.
+
+## Acceptance Criteria / Definition of Done
+
+- [ ] `/api/operator` returns one stable schema-v1 document for each supported
+      window and rejects unsupported, blank, repeated, or unknown parameters.
+- [ ] Existing health, summary, events, stream, loopback, read-only, no-CORS,
+      CSP, and performance contracts remain backward compatible.
+- [ ] A deterministic fixture yields exact promise states, outcome chains,
+      topology order, attention order, evidence IDs, limitations, and narrative
+      beats; missing lineage remains `unverified`, never zero or green.
+- [ ] Every claim, outcome, node, and observed edge exposes bounded evidence IDs
+      or an explicit limitation explaining why evidence is unavailable.
+- [ ] No new telemetry or operator response stores prompts, messages, diffs,
+      filenames, critique prose, result bodies, or machine-private paths.
+- [ ] With `[telemetry] outcome_lineage` unset or false, runner event behavior is
+      unchanged; with it true, run, work, commit/PR, token-class, and critique
+      disposition fields join only through explicit opaque identifiers.
+- [ ] Systemd and launchd inspection fixtures produce the same canonical fleet,
+      role, coverage, and limitation shapes for equivalent installations.
+- [ ] The installed standalone/macOS dashboard renders `Outcomes`, `Crew`,
+      `Evidence`, and `Story` from the operator document and performs no KPI,
+      priority, stale, lineage, or narrative derivation in JavaScript.
+- [ ] The UI uses concise aesthetic headings, restrained semantic color,
+      intuitive proximity/connectors, and no explanatory AI-sounding headers.
+- [ ] Wide and narrow browser proofs pass with complete keyboard access, visible
+      focus, readable contrast, responsive recomposition, reduced-motion
+      equivalence, no overflow, no hostile-text execution, and no external
+      request origins.
+- [ ] Appended events invalidate the view without losing selection/scroll;
+      inspection refresh is bounded, single-flight, and serves an explicitly
+      stale last-good snapshot on failure.
+- [ ] One committed fixture and compatibility note are sufficient for a later
+      Ice adapter to render the same ordered semantics without JSONL access or
+      Python imports.
+- [ ] Installed service, focused tests, full repository gates, CI, cleanup, and
+      ticket lifecycle checks are green; event history remains byte-identical.
+
+## Boundaries
+
+### Always
+
+- Keep the service machine-local, loopback-only, read-only, no-CORS, and
+  non-embeddable.
+- Keep canonical raw history append-only and derive operator meaning in
+  Shipyard core.
+- Preserve unknown, partial, stale, unsupported, and unavailable states as
+  first-class output with evidence limitations.
+- Keep every telemetry addition structured, bounded, opt-in, and
+  content-minimizing.
+
+### Ask first
+
+- Any breaking schema change after operator-view v1 is committed.
+- Any proposal to enable outcome telemetry across project configs outside this
+  repository or rebake/restart their live crew units.
+- Any change that exposes the service beyond loopback, adds a remote transport,
+  or introduces model/dollar-cost lookup.
+- Any migration, deletion, or rewrite of existing event history.
+
+### Never
+
+- Never duplicate KPI, priority, promise, narrative, topology, or lineage
+  semantics in the standalone/Mac or Ice adapters.
+- Never parse raw Shipyard JSONL in the later Ice adapter or embed the
+  standalone dashboard in an iframe.
+- Never store prompts, messages, source diffs, filenames, critique prose,
+  result bodies, or machine-private paths in the new telemetry/document.
+- Never add a database, UI framework, graph-physics library, analytics service,
+  or other top-level runtime dependency for this feature.
+- Never claim that a critique “prevented a bug”; report only the observable
+  finding, delivery, disposition, linked edit/test, and merge evidence.
+- Never make raw tokens, LOC, commit count, invocation count, or critique count
+  a success KPI without a verified outcome denominator.
+
+## Dependencies
+
+- The completed local operations dashboard and dashboard service identity work
+  now merged into `main`.
+- The dependent Ice adapter ticket is blocked on the committed operator-view
+  schema and fixture from Phase 5.
+- External services: none.
+
+## Risks & Mitigations
+
+| Risk | Mitigation |
+|---|---|
+| Outcome joins imply causality that the evidence does not prove | Join only explicit IDs; expose limitations and leave the promise unverified. |
+| Inspect work makes each HTTP request slow or blocks event reads | Single-flight TTL cache outside `reader_lock`; serve the last good snapshot as stale. |
+| Launchd parsing accepts unrelated or malicious plists | Accept only canonical Shipyard runners rooted in the configured core and validate every path/role field. |
+| Default-off telemetry leaves historical or unconfigured projects incomplete | Show honest unverified states; never backfill or infer; document explicit later opt-in. |
+| UI adapters slowly reacquire business logic | Contract fixtures intentionally contradict raw events and assert exact supplied DOM values/order. |
+| A visually rich graph becomes inaccessible or decorative | Provide semantic text/tree equivalence, keyboard focus, reduced-motion state, and evidence links for every observed overlay. |
+| Fleet-live runner edits break other projects | Gate every emitter change behind one false/unset switch and run the complete hermetic suite before each commit. |
+
+## Out of Scope
+
+- Implementing the Ice `/shipyard` adapter; that is a linked ticket after this
+  schema ships.
+- Enabling `[telemetry] outcome_lineage` in sibling project configs or rebaking
+  their live units.
+- Making the public presentation consume private live fleet data.
+- Remote dashboard exposure, authentication, mutation controls, or owner
+  notifications.
+- Dollar-cost accounting, billing integrations, or inferred model prices.
+- Counterfactual claims about defects that might have occurred.
+
+## Ledger
+
+| Phase | Plan | Builder | Commit | Evidence / notes |
+|---|---|---|---|---|
+
+Run this ticket with the `execute-ticket` skill.
