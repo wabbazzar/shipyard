@@ -202,6 +202,54 @@ printf '%s' '$(usage_envelope)'"
   last_job_end | jq -e '.tokens==1200' >/dev/null
 }
 
+@test "outcome lineage: build emits compact work outcome and available token classes" {
+  p="$(make_fixture_project toklineage absent-keys.toml)"
+  fix_trunk "$p"
+  printf '\n[telemetry]\noutcome_lineage = true\n' >>"$p/.agents/config.toml"
+  git -C "$p" add -A && git -C "$p" commit -qm "fixture: pin lineage"
+  make_stub_script claude \
+    "printf '%s' '{\"pass\":true,\"items\":[{\"id\":\"fyi_opaque_1\",\"classification\":\"ATTEMPT\",\"outcome\":\"pr_opened\",\"pr_url\":\"https://example.invalid/pull/7\",\"branch\":\"build/fyi_opaque_1\",\"commit_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"files_planned\":[\"PRIVATE_FILE\"],\"reason\":\"PRIVATE_RESULT_BODY\"}]}' >'$p/tmp/toklineage-build-result.json'
+printf '%s' '{\"result\":\"PRIVATE_MESSAGE\",\"usage\":{\"input_tokens\":1000,\"cache_read_input_tokens\":300,\"cache_creation_input_tokens\":40,\"output_tokens\":200,\"reasoning_output_tokens\":20}}'"
+  make_stub gh 0
+
+  run run_runner build "$p" --mode live
+  [ "$status" -eq 0 ]
+  work="$(events_json | jq -c 'select(.event=="build.work.outcome")')"
+  jq -e '
+    .work_id=="fyi_opaque_1" and .classification=="ATTEMPT"
+    and .outcome=="pr_opened" and .pr_url=="https://example.invalid/pull/7"
+    and .branch=="build/fyi_opaque_1"
+    and .commit_sha=="0123456789abcdef0123456789abcdef01234567"
+    and ([keys[]] | any(.=="prompt" or .=="message" or .=="diff" or
+      .=="filename" or .=="files_planned" or .=="reason" or .=="result")) | not
+  ' <<<"$work" >/dev/null
+  last_job_end | jq -e '
+    .provider=="claude" and .model=="sonnet"
+    and .input_tokens==1000 and .cache_read_tokens==300
+    and .cache_write_tokens==40 and .output_tokens==200
+    and .reasoning_tokens==20 and .tokens==1200
+  ' >/dev/null
+}
+
+@test "outcome lineage: malformed token classes are omitted rather than stringified" {
+  p="$(make_fixture_project tokbadclass absent-keys.toml)"
+  fix_trunk "$p"
+  printf '\n[telemetry]\noutcome_lineage = true\n' >>"$p/.agents/config.toml"
+  git -C "$p" add -A && git -C "$p" commit -qm "fixture: pin lineage"
+  make_stub_script claude \
+    "printf '%s' '{\"pass\":true,\"items\":[]}' >'$p/tmp/tokbadclass-build-result.json'
+printf '%s' '{\"result\":\"done\",\"usage\":{\"input_tokens\":7,\"cache_read_input_tokens\":\"PRIVATE_TOKEN\",\"output_tokens\":5}}'"
+  make_stub gh 0
+
+  run run_runner build "$p" --mode live
+  [ "$status" -eq 0 ]
+  last_job_end | jq -e '
+    .tokens==12 and .input_tokens==7 and .output_tokens==5
+    and has("cache_read_tokens") == false
+  ' >/dev/null
+  ! events_json | grep -q 'PRIVATE_TOKEN'
+}
+
 @test "tokens: release job.end carries real usage" {
   p="$(make_fixture_project tokrel absent-keys.toml)"
   fix_trunk "$p"

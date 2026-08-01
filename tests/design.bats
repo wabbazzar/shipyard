@@ -194,6 +194,23 @@ JSON
   [ "$(opened_events | jq -s '[.[].tokens] | add')" = "1200" ]
 }
 
+@test "outcome lineage: proposal events retain explicit IDs and the invocation run ID" {
+  P="$(make_fixture_project mentlineage names-spacetime.toml)"
+  printf '\n[design]\nmax_open_proposals = 3\n[telemetry]\noutcome_lineage = true\n' \
+    >>"$P/.agents/config.toml"
+  plant_telemetry "$P"
+  make_stub claude 0 "$(canned_claude_json "$CANNED_PROPOSALS")"
+
+  run run_design "$P" --mode design
+  [ "$status" -eq 0 ]
+  RUN_ID="$(events_json | jq -r 'select(.event=="job.start" and .role=="design") | .run_id')"
+  [[ "$RUN_ID" =~ ^[0-9a-f]{32}$ ]]
+  [ "$(opened_events | jq -s --arg id "$RUN_ID" \
+    'length == 2 and all(.run_id == $id and (.proposal_id | type == "string"))')" = "true" ]
+  events_json | jq -s -e --arg id "$RUN_ID" \
+    'any(.[]; .event=="job.end" and .run_id==$id)' >/dev/null
+}
+
 # ---------------------------------------------------------------------------
 # (d) open-proposal cap (<=3): 3 undecided pre-seeded -> skip + logged
 # ---------------------------------------------------------------------------

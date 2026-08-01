@@ -36,6 +36,17 @@ _prompt_byte_count() {
   LC_ALL=C printf '%s' "$1" | wc -c | tr -d ' '
 }
 
+_normalize_outcome_usage() {
+  local name value
+  for name in SPAWN_INPUT_TOKENS SPAWN_CACHE_READ_TOKENS \
+      SPAWN_CACHE_WRITE_TOKENS SPAWN_OUTPUT_TOKENS SPAWN_REASONING_TOKENS; do
+    value="${!name:-}"
+    [[ "$value" =~ ^[0-9]+$ ]] || printf -v "$name" '%s' ""
+  done
+  [[ "$SPAWN_PROVIDER" =~ ^[A-Za-z0-9._:@/-]{1,128}$ ]] || SPAWN_PROVIDER=""
+  [[ "$SPAWN_MODEL" =~ ^[A-Za-z0-9._:@/-]{1,256}$ ]] || SPAWN_MODEL=""
+}
+
 # _run_harness <stdin_mode> <cmd...>
 #   stdin_mode "null" feeds the command </dev/null;
 #   stdin_mode "file:<path>" feeds it from that private file;
@@ -101,6 +112,12 @@ spawn_model() {
   done
 
   SPAWN_RAW=""; SPAWN_RC=0; SPAWN_TEXT=""; SPAWN_TOKENS=0
+  SPAWN_PROVIDER=""; SPAWN_MODEL=""; SPAWN_INPUT_TOKENS=""
+  SPAWN_CACHE_READ_TOKENS=""; SPAWN_CACHE_WRITE_TOKENS=""
+  SPAWN_OUTPUT_TOKENS=""; SPAWN_REASONING_TOKENS=""
+  export SPAWN_PROVIDER SPAWN_MODEL SPAWN_INPUT_TOKENS
+  export SPAWN_CACHE_READ_TOKENS SPAWN_CACHE_WRITE_TOKENS
+  export SPAWN_OUTPUT_TOKENS SPAWN_REASONING_TOKENS
   SPAWN_TOKEN_SOURCE="$harness"
 
   # The runners' historical model default is the claude alias "sonnet" (baked as
@@ -111,6 +128,8 @@ spawn_model() {
   if [ "$harness" != "claude" ]; then
     case "$model" in sonnet|opus|haiku|claude*) model="" ;; esac
   fi
+  SPAWN_PROVIDER="${provider:-$harness}"
+  SPAWN_MODEL="$model"
 
   case "$harness" in
     claude) _spawn_claude ;;
@@ -118,6 +137,7 @@ spawn_model() {
     hermes) _spawn_hermes ;;
     *) echo "spawn_model: unknown harness '$harness'" >&2; SPAWN_RC=2; return 2 ;;
   esac
+  _normalize_outcome_usage
 }
 
 # --- claude (Claude Code) ----------------------------------------------------
@@ -158,6 +178,17 @@ _spawn_claude() {
   SPAWN_TOKENS="$(jq -r '((.usage.input_tokens // 0) + (.usage.output_tokens // 0))' \
     <<<"$SPAWN_RAW" 2>/dev/null || echo 0)"
   [[ "$SPAWN_TOKENS" =~ ^[0-9]+$ ]] || SPAWN_TOKENS=0
+  SPAWN_INPUT_TOKENS="$(jq -r '.usage.input_tokens // empty' \
+    <<<"$SPAWN_RAW" 2>/dev/null || true)"
+  SPAWN_CACHE_READ_TOKENS="$(jq -r '.usage.cache_read_input_tokens // empty' \
+    <<<"$SPAWN_RAW" 2>/dev/null || true)"
+  SPAWN_CACHE_WRITE_TOKENS="$(jq -r '.usage.cache_creation_input_tokens // empty' \
+    <<<"$SPAWN_RAW" 2>/dev/null || true)"
+  SPAWN_OUTPUT_TOKENS="$(jq -r '.usage.output_tokens // empty' \
+    <<<"$SPAWN_RAW" 2>/dev/null || true)"
+  SPAWN_REASONING_TOKENS="$(jq -r \
+    '.usage.reasoning_output_tokens // .usage.reasoning_tokens // empty' \
+    <<<"$SPAWN_RAW" 2>/dev/null || true)"
   SPAWN_TOKEN_SOURCE="claude"
 }
 
@@ -208,6 +239,14 @@ _spawn_codex() {
     | (.usage.input_tokens // 0) + (.usage.output_tokens // 0)' \
     <<<"$SPAWN_RAW" 2>/dev/null || echo 0)"
   [[ "$SPAWN_TOKENS" =~ ^[0-9]+$ ]] || SPAWN_TOKENS=0
+  SPAWN_INPUT_TOKENS="$(jq -rs 'map(select(.type=="turn.completed")) | last
+    | .usage.input_tokens // empty' <<<"$SPAWN_RAW" 2>/dev/null || true)"
+  SPAWN_CACHE_READ_TOKENS="$(jq -rs 'map(select(.type=="turn.completed")) | last
+    | .usage.cached_input_tokens // empty' <<<"$SPAWN_RAW" 2>/dev/null || true)"
+  SPAWN_OUTPUT_TOKENS="$(jq -rs 'map(select(.type=="turn.completed")) | last
+    | .usage.output_tokens // empty' <<<"$SPAWN_RAW" 2>/dev/null || true)"
+  SPAWN_REASONING_TOKENS="$(jq -rs 'map(select(.type=="turn.completed")) | last
+    | .usage.reasoning_output_tokens // empty' <<<"$SPAWN_RAW" 2>/dev/null || true)"
   SPAWN_TOKEN_SOURCE="codex"
 }
 
@@ -246,15 +285,20 @@ _spawn_hermes() {
   SPAWN_TEXT="$SPAWN_RAW"
   # _run_harness already appended stderr (incl. the session_id line) to $logfile.
 
-  local sid
+  local sid usage_json=""
   sid="$(printf '%s' "$_SPAWN_STDERR" \
     | grep -oE 'session_id:[[:space:]]*[A-Za-z0-9._-]+' 2>/dev/null \
     | tail -1 | grep -oE '[A-Za-z0-9._-]+$' || true)"
   SPAWN_TOKENS=0
   if [ -n "$sid" ]; then
-    SPAWN_TOKENS="$(hermes sessions export - --session-id "$sid" 2>/dev/null \
-      | jq -r '(.input_tokens // 0) + (.output_tokens // 0)' 2>/dev/null || echo 0)"
+    usage_json="$(hermes sessions export - --session-id "$sid" 2>/dev/null || true)"
+    SPAWN_TOKENS="$(jq -r '(.input_tokens // 0) + (.output_tokens // 0)' \
+      <<<"$usage_json" 2>/dev/null || echo 0)"
     [[ "$SPAWN_TOKENS" =~ ^[0-9]+$ ]] || SPAWN_TOKENS=0
+    SPAWN_INPUT_TOKENS="$(jq -r '.input_tokens // empty' \
+      <<<"$usage_json" 2>/dev/null || true)"
+    SPAWN_OUTPUT_TOKENS="$(jq -r '.output_tokens // empty' \
+      <<<"$usage_json" 2>/dev/null || true)"
   fi
   SPAWN_TOKEN_SOURCE="hermes-session"
 }

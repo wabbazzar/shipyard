@@ -202,6 +202,7 @@ configuration, and it is YOUR job:
 | spend / scope caps | six independently enforced daily consumers: `design_runner`, `build_runner`, `release_runner`, `release_shoulder_critic`, `medic_runner`, and `scribe_runner`. Inspect reports current-UTC-day attributed use and the gate operand each consumer actually enforces; release runner and shoulder critic remain separate consumers. Per-invocation `wall_clock_sec`, `[design] max_open_proposals`, and `[medic] daily_escalation_cap` are additional guards. | 1M tokens/consumer/day |
 | stall self-heal | `[release] stall_retries` — a mid-stream model stall (no `result.json` written) is retried in-process before the job fails, so a one-off stall self-heals instead of forcing a medic retry. A written verdict (pass **or** fail) is never retried. Each retry is one extra model run. | **0** (off) |
 | false-green guard | `[release] verify_gate` — in hook/daily mode the proctor *self-reports* its verdict; with this set the runner re-runs the real `typecheck` + `test_cmd` and overrides a claimed `pass` to **fail** if either really fails, so a hallucinated green can't reach medic or the dispatch. Costs one real gate run. post-merge already runs the gate deterministically. | **false** (trust the model) |
+| outcome lineage | `[telemetry] outcome_lineage` — adds only opaque run/work/critique IDs, explicit domain references, available token classes, and critique delivery dispositions; malformed non-booleans fail config validation | **false/unset** (legacy event bytes) |
 | off switch | Linux: `systemctl --user disable --now <project>-<display>.timer`; macOS: `launchctl bootout gui/$(id -u)/com.shipyard.<project>-<display>` | — |
 | hands-off repo | `autonomous = true` (top-level) — a private, disposable dogfood repo with no human in the loop: it never appears in the hub's approval wire, and the ticket auto-gate proceeds without stopping even for a user-decision. Pair with `[medic] can_merge = true`. **Only ever set this on a throwaway private repo.** | **unset** (human-in-the-loop) |
 | inspect first | `install.sh --dry-run` prints every unit and crontab change before writing | — |
@@ -486,6 +487,11 @@ frozen, `repair_proposed`, resolved), `release.critique` +
 `release.critique.skipped`. Every event carries the canonical `role:` field
 (`design`/`build`/`release`/`medic`/`scribe`) alongside the display-named
 `svc`.
+
+Set `[telemetry] outcome_lineage = true` to add the tabled content-free lineage
+fields. It never emits prompts, messages, diffs, filenames, critique prose,
+result bodies, or private filesystem paths; unset/false is byte-compatible with
+the legacy stream.
 
 The optional **private operations dashboard** is the built-in read-only view
 of that stream. It runs as one native user service, binds only

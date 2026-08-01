@@ -109,6 +109,11 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
   exit 0
 fi
 
+outcome_lineage_start_run "$CFG_JSON" || {
+  echo "failed to initialize outcome lineage" >&2
+  exit 2
+}
+
 RESULT_DIR="$PROJECT_DIR/$RESULT_DIR_REL"
 mkdir -p "$RESULT_DIR"
 RESULT_FILE="$RESULT_DIR/$SVC-result.json"

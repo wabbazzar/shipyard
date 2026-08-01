@@ -261,6 +261,10 @@ if [ "$MODE" != "design" ]; then
   echo "bad --mode: $MODE (only 'design')" >&2; exit 2
 fi
 [ -f "$ROLE_FILE" ] || { echo "role.md not found: $ROLE_FILE" >&2; exit 2; }
+outcome_lineage_start_run "$CFG_JSON" || {
+  echo "failed to initialize outcome lineage" >&2
+  exit 2
+}
 
 RESULT_DIR="$PROJECT_DIR/$RESULT_DIR_REL"
 mkdir -p "$RESULT_DIR"

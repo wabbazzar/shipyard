@@ -306,3 +306,51 @@ esac'
   [ "$(jq -r '.status' <<<"$line")" = "fail" ]
   [[ "$(jq -r '.reason' <<<"$line")" == *"vitest_failed"* ]]
 }
+
+@test "outcome lineage: unset and false preserve exact legacy event bytes" {
+  make_stub_script date '
+case "$*" in
+  "-u +%Y-%m-%d") printf "2026-08-01\n" ;;
+  "-u +%Y-%m-%dT%H:%M:%SZ") printf "2026-08-01T12:34:56Z\n" ;;
+  *) exit 2 ;;
+esac'
+  event_file="$EVENTS_DIR/2026-08-01.jsonl"
+
+  run env -u QUARTET_OUTCOME_LINEAGE -u QUARTET_RUN_ID \
+    QUARTET_DIR="$QUARTET_ROOT" QUARTET_EVENTS_DIR="$EVENTS_DIR" \
+    bash "$QUARTET_ROOT/agents/lib/log_event.sh" demo job.start mode=daily
+  [ "$status" -eq 0 ]
+  legacy="$(cat "$event_file")"
+  : >"$event_file"
+
+  run env QUARTET_OUTCOME_LINEAGE=false QUARTET_RUN_ID=must-not-appear \
+    QUARTET_DIR="$QUARTET_ROOT" QUARTET_EVENTS_DIR="$EVENTS_DIR" \
+    bash "$QUARTET_ROOT/agents/lib/log_event.sh" demo job.start mode=daily
+  [ "$status" -eq 0 ]
+  [ "$(cat "$event_file")" = "$legacy" ]
+  [ "$legacy" = '{"ts":"2026-08-01T12:34:56Z","svc":"demo","event":"job.start","mode":"daily"}' ]
+}
+
+@test "outcome lineage: malformed boolean fails before events" {
+  proj="$(make_fixture_project badlineage branch-present.toml)"
+  printf '\n[telemetry]\noutcome_lineage = "yes"\n' >>"$proj/.agents/config.toml"
+
+  run run_runner release "$proj" --check-config
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"telemetry.outcome_lineage must be boolean"* ]]
+  [ ! -f "$(events_file)" ]
+}
+
+@test "outcome lineage: opted-in invocation joins start domain and end by opaque run id" {
+  proj="$(make_fixture_project lineagerun branch-present.toml)"
+  printf '\n[telemetry]\noutcome_lineage = true\n' >>"$proj/.agents/config.toml"
+  head_sha="$(git -C "$proj" rev-parse HEAD)"
+
+  run run_runner release "$proj" --mode post-merge --merge-sha "$head_sha"
+  [ "$status" -eq 0 ]
+  run_id="$(events_json | jq -r 'select(.event=="job.start") | .run_id')"
+  [[ "$run_id" =~ ^[0-9a-f]{32}$ ]]
+  [ "$(events_json | jq -sr --arg id "$run_id" 'all(.[]; .run_id == $id)')" = "true" ]
+  events_json | jq -e --arg sha "$head_sha" \
+    'select(.event=="job.end") | .merge_sha == $sha' >/dev/null
+}

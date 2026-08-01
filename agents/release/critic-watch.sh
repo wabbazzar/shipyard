@@ -69,8 +69,19 @@ source "$QUARTET_DIR/agents/lib/spawn.sh"
 source "$SCRIPT_DIR/critic-queue-lib.sh"
 CFG_JSON="{}"
 if [ -f "$PROJECT_DIR/.agents/config.toml" ]; then
-  CFG_JSON="$(load_config_json "$PROJECT_DIR/.agents/config.toml")" || CFG_JSON="{}"
+  if parsed_cfg="$(load_config_json "$PROJECT_DIR/.agents/config.toml")"; then
+    CFG_JSON="$parsed_cfg"
+  else
+    config_rc=$?
+    if [ "$config_rc" -eq 2 ]; then
+      echo "critic-watch: failed to validate project config" >&2
+      exit 2
+    fi
+    # Preserve shoulder mode's legacy tolerance of generally malformed TOML.
+    CFG_JSON="{}"
+  fi
 fi
+outcome_lineage_configure "$CFG_JSON" || exit 2
 PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON")"
 [ -n "$PROJECT_NAME" ] || PROJECT_NAME="$(basename "$PROJECT_DIR")"
 BUDGET_TOKENS="$(jq -r '.release.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
@@ -284,8 +295,42 @@ consume_queue() {
 }
 
 # ---------- delivery (separate so retries can reuse a cached critique) ------
+critique_delivery_summary() {
+  local findings_file="$1" n_files="$2" findings n_block n_warn n_note summary
+  findings="$(cat "$findings_file" 2>/dev/null || true)"
+  n_block="$(grep -c '^block|' <<<"$findings" || true)"
+  n_warn="$(grep -c '^warn|' <<<"$findings" || true)"
+  n_note="$(grep -c '^note|' <<<"$findings" || true)"
+  summary="$(role_display "$ROLE" "$CFG_JSON") critic: $n_block block, $n_warn warn, $n_note note across $n_files files"
+  if [ -n "$findings" ]; then
+    summary="$summary
+$(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
+  fi
+  printf '%s\n' "$summary"
+}
+
+critique_identity() {
+  local reviewed_snapshot="$1" findings_file="$2" summary="$3"
+  {
+    printf 'shipyard-codex-feedback-v1\0'
+    cat "$reviewed_snapshot" 2>/dev/null || true
+    printf '\0'
+    cat "$findings_file" 2>/dev/null || true
+    printf '\0%s' "$summary"
+  } | checked_sha256
+}
+
+emit_delivery_disposition() {
+  local critique_id="$1" disposition="$2"
+  outcome_lineage_enabled || return 0
+  case "$disposition" in deposited|deferred|failed|expired) ;; *) return 2 ;; esac
+  emit_event release.critique.delivery source=shoulder \
+    critique_id="$critique_id" disposition="$disposition"
+}
+
 deliver_findings() {
   local queue="$1" session="$2" findings_file="$3" n_files="$4"
+  local supplied_id="${5:-}"
   local findings n_block n_warn n_note
   DELIVERY_STATUS=delivery
   findings="$(cat "$findings_file" 2>/dev/null || true)"
@@ -296,20 +341,18 @@ deliver_findings() {
   if [ -z "${CLAUDE_NOTE_CMD:-}" ]; then
     if [ "${CRITIC_NOTE_HARNESS:-claude}" = "codex" ]; then
       log "CLAUDE_NOTE_CMD unset for Codex; queue kept for retry"
+      [ -z "$supplied_id" ] || emit_delivery_disposition "$supplied_id" deferred
       write_required_status "$session" delivery || true
       return 0
     fi
     log "CLAUDE_NOTE_CMD unset; skipping delivery"
     consume_queue "$queue" "$session"
+    [ -z "$supplied_id" ] || emit_delivery_disposition "$supplied_id" expired
     return 0
   fi
 
   local summary
-  summary="$(role_display "$ROLE" "$CFG_JSON") critic: $n_block block, $n_warn warn, $n_note note across $n_files files"
-  if [ -n "$findings" ]; then
-    summary="$summary
-$(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
-  fi
+  summary="$(critique_delivery_summary "$findings_file" "$n_files")"
 
   # Stable across retries: bind the immutable feedback item to the exact
   # reviewed queue snapshot, complete findings, and deposited summary.
@@ -319,15 +362,14 @@ $(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
   local live_queue_id
   reviewed_snapshot="$QUEUE_DIR/critic-snapshot-$session"
   [ -f "$reviewed_snapshot" ] || reviewed_snapshot="$queue"
-  if ! note_id="$(
-    {
-      printf 'shipyard-codex-feedback-v1\0'
-      cat "$reviewed_snapshot" 2>/dev/null || true
-      printf '\0'
-      cat "$findings_file" 2>/dev/null || true
-      printf '\0%s' "$summary"
-    } | checked_sha256
-  )"; then
+  note_id="$supplied_id"
+  if [ -z "$note_id" ]; then
+    note_id="$(critique_identity "$reviewed_snapshot" "$findings_file" "$summary")" || {
+      log "feedback ID hashing failed; queue kept for retry"
+      return 0
+    }
+  fi
+  if ! [[ "$note_id" =~ ^[0-9a-f]{64}$ ]]; then
     log "feedback ID hashing failed; queue kept for retry"
     return 0
   fi
@@ -359,8 +401,10 @@ $(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
       rm -f "$attempts_file"
       if consume_queue "$queue" "$session"; then
         DELIVERY_STATUS=deposited
+        emit_delivery_disposition "$note_id" deposited
         write_required_status "$session" deposited || true
       else
+        emit_delivery_disposition "$note_id" deferred
         write_required_status "$session" delivery || true
       fi ;;
     2|3)
@@ -368,11 +412,13 @@ $(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
       # note was NOT delivered but the condition is session-state that a
       # later pass can find cleared. Keep the queue; no attempt cap.
       log "claude-note exit $note_rc; queue kept for retry"
+      emit_delivery_disposition "$note_id" deferred
       write_required_status "$session" delivery || true ;;
     75)
       # Built-in Codex mailbox deposit failed before its atomic rename.
       # Never acknowledge the reviewed queue until durable persistence exists.
       log "critic-note deposit unavailable; queue kept for retry"
+      emit_delivery_disposition "$note_id" deferred
       write_required_status "$session" delivery || true ;;
     *)
       # Any other nonzero (1 crash, 127 command-not-found, ...) means the
@@ -385,8 +431,11 @@ $(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
       attempts=$((attempts + 1))
       if [ "$attempts" -ge 3 ]; then
         log "claude-note exit $note_rc after $attempts attempts; giving up — findings kept at $findings_file"
+        local failed_lineage=()
+        outcome_lineage_enabled && failed_lineage+=("critique_id=$note_id")
         emit_event release.critique.delivery_failed source=shoulder \
-          rc="$note_rc" attempts="$attempts"
+          rc="$note_rc" attempts="$attempts" "${failed_lineage[@]}"
+        emit_delivery_disposition "$note_id" failed
         if [ "$REQUIRE_FEEDBACK" = true ]; then
           write_retry_state "$attempts_file" "$attempts" \
             "$delivery_generation" || true
@@ -398,6 +447,7 @@ $(grep -E '^(block|warn)\|' <<<"$findings" | head -10)"
       else
         write_retry_state "$attempts_file" "$attempts" \
           "$delivery_generation" || true
+        emit_delivery_disposition "$note_id" deferred
         log "claude-note exit $note_rc; queue kept for retry ($attempts/3)"
       fi
       write_required_status "$session" delivery || true ;;
@@ -684,12 +734,23 @@ $diff"
   printf '%s\n' "$findings" >"$findings_file"
   printf '%s\n' "$n_files" >"$findings_files_count"
 
+  local critique_id="" critique_lineage=() summary
+  if outcome_lineage_enabled; then
+    summary="$(critique_delivery_summary "$findings_file" "$n_files")"
+    critique_id="$(critique_identity "$reviewed_queue" "$findings_file" "$summary")" || {
+      log "feedback ID hashing failed; queue kept for retry"
+      return 0
+    }
+    outcome_lineage_token_fields
+    critique_lineage=("critique_id=$critique_id" "${OUTCOME_TOKEN_FIELDS[@]}")
+  fi
   emit_event release.critique source=shoulder files="$n_files" \
-    block="$n_block" warn="$n_warn" note="$n_note" tokens="$tokens"
+    block="$n_block" warn="$n_warn" note="$n_note" tokens="$tokens" \
+    "${critique_lineage[@]}"
   log "critique: $n_block block, $n_warn warn, $n_note note across $n_files files (tokens=$tokens)"
 
   # ---- deliver to the dev session -------------------------------------------
-  deliver_findings "$queue" "$session" "$findings_file" "$n_files"
+  deliver_findings "$queue" "$session" "$findings_file" "$n_files" "$critique_id"
   return 0
 }
 

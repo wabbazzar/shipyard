@@ -120,6 +120,27 @@ run_medic_scan() {
   [ "$(stub_calls build-runner)" = "0" ]
 }
 
+@test "outcome lineage: medic incident and rerouted proposal retain explicit IDs in one run" {
+  make_fake_quartet
+  p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
+  install_agents "$p" branch-present.toml rrlineageincident
+  printf '\n[telemetry]\noutcome_lineage = true\n' >>"$p/.agents/config.toml"
+  topo_commit_all "$p"
+  prep_regression "$p" rrlineageincident
+
+  run_medic_scan "$p"
+  [ "$status" -eq 0 ]
+  run_id="$(events_json | jq -r 'select(.event=="job.start") | .run_id')"
+  [[ "$run_id" =~ ^[0-9a-f]{32}$ ]]
+  events_json | jq -s -e --arg run "$run_id" --arg iid "$IID" '
+    all(.[]; .run_id==$run) and
+    any(.[]; (.event | startswith("medic.incident")) and .incident_id==$iid) and
+    any(.[]; .event=="design.proposal.opened" and
+      (.proposal_id | type=="string" and length>0)) and
+    any(.[]; .event=="job.end")
+  ' >/dev/null
+}
+
 # ---------------------------------------------------------------------------
 # B. Mitigation stays UNGATED: a restart-class incident still restarts
 # ---------------------------------------------------------------------------
@@ -230,4 +251,33 @@ esac'
   run stub_argv claude
   [[ "$output" == *"execute-ticket"* ]]
   [[ "$output" == *"$p/docs-ticket.md"* ]]
+}
+
+@test "outcome lineage: ticket mode emits opaque ticket and explicit upstream IDs" {
+  p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
+  install_agents "$p" branch-present.toml rrlineage
+  fixture_replace_in_place "$p/.agents/config.toml" '^\[build\]$' \
+    $'[build]\nticket_mode = true'
+  printf '\n[telemetry]\noutcome_lineage = true\n' >>"$p/.agents/config.toml"
+  mkdir -p "$p/docs/tickets"
+  printf '# private ticket\n' >"$p/docs/tickets/secret-ticket-name.md"
+  topo_commit_all "$p"
+  make_stub claude 0 '{"result":"done","usage":{"input_tokens":3,"output_tokens":2}}'
+
+  run run_runner build "$p" --mode ticket \
+    --ticket-file "$p/docs/tickets/secret-ticket-name.md" \
+    --upstream-work-id 'proposal:opaque-1'
+  [ "$status" -eq 0 ]
+  run_id="$(events_json | jq -r 'select(.event=="job.start") | .run_id')"
+  [[ "$run_id" =~ ^[0-9a-f]{32}$ ]]
+  ticket_id="$(events_json | jq -r 'select(.event=="job.start") | .ticket_id')"
+  [[ "$ticket_id" =~ ^ticket:[0-9a-f]{64}$ ]]
+  events_json | jq -s -e --arg id "$run_id" --arg ticket "$ticket_id" '
+    length == 3 and all(.[];
+      .run_id==$id and .ticket_id==$ticket and
+      .upstream_work_id=="proposal:opaque-1") and
+    any(.[]; .event=="build.ticket.outcome" and
+      .work_id==$ticket and .outcome=="ok")
+  ' >/dev/null
+  ! events_json | grep -qE 'docs/tickets|secret-ticket-name|\.md|prompt|message|diff|filename|result|/tmp/'
 }

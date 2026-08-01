@@ -34,11 +34,18 @@ PY
 )" || return 1
   [ -n "$raw" ] || return 1
 
+  outcome_lineage_validate "$raw" || return 2
+
   # Canonical shape only: [build]/[release] sections and medic.can_merge.
   # (The legacy section/merge-key normalization from the old display names is retired;
   # configs were migrated fleet-wide 2026-07-22.)
   printf '%s\n' "$raw"
 }
+
+# Make the validated opt-in helpers available to every caller that sources the
+# config loader, without requiring five runner-specific implementations.
+# shellcheck source=agents/lib/outcome-lineage.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/outcome-lineage.sh"
 
 # quartet_notify <title> <body>
 # quartet_notify --class <routine|actionable|urgent>

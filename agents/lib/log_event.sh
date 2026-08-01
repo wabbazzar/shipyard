@@ -89,9 +89,48 @@ if [ -n "${QUARTET_ROLE:-}" ]; then
     JQ_FILTER="$JQ_FILTER + {\"role\": \$v_role}"
 fi
 
+# Outcome lineage is additive and default-off. The opaque ID is generated once
+# by the runner and inherited by every event process in that invocation.
+if [ "${QUARTET_OUTCOME_LINEAGE:-false}" = "true" ] &&
+   [[ "${QUARTET_RUN_ID:-}" =~ ^[0-9a-f]{32}$ ]]; then
+    JQ_ARGS+=(--arg v_run_id "$QUARTET_RUN_ID")
+    JQ_FILTER="$JQ_FILTER + {\"run_id\": \$v_run_id}"
+fi
+
+# Token detail is copied only onto job.end and only when the harness supplied
+# that class. The historical single `tokens` field remains caller-owned.
+if [ "${QUARTET_OUTCOME_LINEAGE:-false}" = "true" ] && [ "$EVENT" = "job.end" ]; then
+    for token_kv in \
+        "provider=${SPAWN_PROVIDER:-}" "model=${SPAWN_MODEL:-}" \
+        "input_tokens=${SPAWN_INPUT_TOKENS:-}" \
+        "cache_read_tokens=${SPAWN_CACHE_READ_TOKENS:-}" \
+        "cache_write_tokens=${SPAWN_CACHE_WRITE_TOKENS:-}" \
+        "output_tokens=${SPAWN_OUTPUT_TOKENS:-}" \
+        "reasoning_tokens=${SPAWN_REASONING_TOKENS:-}"; do
+        token_key="${token_kv%%=*}"
+        token_val="${token_kv#*=}"
+        [ -n "$token_val" ] || continue
+        if [ "$token_key" = "provider" ] || [ "$token_key" = "model" ]; then
+            JQ_ARGS+=(--arg "v_$token_key" "$token_val")
+            JQ_FILTER="$JQ_FILTER + {\"$token_key\": \$v_$token_key}"
+        elif [[ "$token_val" =~ ^[0-9]+$ ]]; then
+            JQ_FILTER="$JQ_FILTER + {\"$token_key\": $token_val}"
+        fi
+    done
+fi
+
 for kv in "${FILTERED_ARGS[@]}"; do
     key="${kv%%=*}"
     val="${kv#*=}"
+    if [ "${QUARTET_OUTCOME_LINEAGE:-false}" = "true" ]; then
+        [ "$key" = "run_id" ] && continue
+        if [ "$EVENT" = "job.end" ]; then
+            case "$key" in
+                provider|model|input_tokens|cache_read_tokens|cache_write_tokens|output_tokens|reasoning_tokens)
+                    continue ;;
+            esac
+        fi
+    fi
     # Accept int/float/bool/null unquoted; otherwise string.
     if [[ "$val" =~ ^-?[0-9]+$ ]] || \
        [[ "$val" =~ ^-?[0-9]+\.[0-9]+$ ]] || \

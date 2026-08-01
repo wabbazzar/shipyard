@@ -372,6 +372,79 @@ fi"
   [ ! -e "$P/tmp/critic-queue-s1" ]
 }
 
+@test "outcome lineage: shoulder critique and deposited disposition share one opaque ID" {
+  P="$(make_fixture_project critlineage)"
+  printf '\n[telemetry]\noutcome_lineage = true\n' >>"$P/.agents/config.toml"
+  make_stub claude 0 "$CANNED_CLAUDE_JSON"
+  make_stub claude-note 0
+  queue_files "$P" s1 2
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
+
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  critique="$(events_json | jq -c 'select(.event=="release.critique")')"
+  delivery="$(events_json | jq -c 'select(.event=="release.critique.delivery")')"
+  cid="$(jq -r '.critique_id' <<<"$critique")"
+  [[ "$cid" =~ ^[0-9a-f]{64}$ ]]
+  jq -e --arg id "$cid" \
+    '.critique_id==$id and .disposition=="deposited"' <<<"$delivery" >/dev/null
+  ! events_json | grep -qE 'PRIVATE_|prompt|message|diff|filename|summary|finding|result'
+}
+
+@test "outcome lineage: shoulder delivery records deferred expired and failed dispositions" {
+  for disposition in deferred expired failed; do
+    P="$(make_fixture_project "crit-$disposition")"
+    printf '\n[telemetry]\noutcome_lineage = true\n' >>"$P/.agents/config.toml"
+    make_stub claude 0 "$CANNED_CLAUDE_JSON"
+    queue_files "$P" s1 1
+    fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+    export CRITIC_IDLE_SEC=1
+    case "$disposition" in
+      deferred)
+        make_stub claude-note 3
+        export CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
+        run run_watch "$P" --session s1 --once ;;
+      expired)
+        unset CLAUDE_NOTE_CMD
+        run run_watch "$P" --session s1 --once ;;
+      failed)
+        make_stub claude-note 127
+        export CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
+        for _ in 1 2 3; do
+          fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+          run run_watch "$P" --session s1 --once
+          [ "$status" -eq 0 ]
+        done ;;
+    esac
+    [ "$status" -eq 0 ]
+    events_json | jq -s -e --arg disposition "$disposition" '
+      any(.[]; .event=="release.critique.delivery" and
+        .disposition==$disposition and
+        (.critique_id | test("^[0-9a-f]{64}$")))
+    ' >/dev/null
+    : >"$(events_file)"
+  done
+}
+
+@test "outcome lineage: critic preserves malformed TOML fallback but rejects malformed telemetry" {
+  P="$(make_fixture_project critcfgfallback)"
+  printf '[release\n' >"$P/.agents/config.toml"
+
+  run run_watch "$P" --once
+  [ "$status" -eq 0 ]
+  [ ! -e "$(events_file)" ]
+
+  P="$(make_fixture_project critcfglineage)"
+  printf '\n[telemetry]\noutcome_lineage = "yes"\n' \
+    >>"$P/.agents/config.toml"
+
+  run run_watch "$P" --once
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"telemetry.outcome_lineage must be boolean"* ]]
+  [ ! -e "$(events_file)" ]
+}
+
 # ---------------------------------------------------------------------------
 # (e) token budget
 # ---------------------------------------------------------------------------

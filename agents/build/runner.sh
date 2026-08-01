@@ -29,6 +29,7 @@ PROJECT_DIR=""
 MODE=""
 INCIDENT_FILE=""
 TICKET_FILE=""
+UPSTREAM_WORK_ID=""
 CHECK_CONFIG=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -36,6 +37,7 @@ while [ $# -gt 0 ]; do
     --mode)           MODE="$2"; shift 2 ;;
     --incident-file)  INCIDENT_FILE="$2"; shift 2 ;;
     --ticket-file|--ticket) TICKET_FILE="$2"; shift 2 ;;
+    --upstream-work-id) UPSTREAM_WORK_ID="$2"; shift 2 ;;
     --check-config)   CHECK_CONFIG=1; shift ;;
     -h|--help)        sed -n '2,16p' "$0"; exit 0 ;;
     *)                echo "unknown arg: $1" >&2; exit 2 ;;
@@ -96,6 +98,11 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
                wall_clock_sec:($cfg.build.wall_clock_sec // 3600)}}'
   exit 0
 fi
+
+outcome_lineage_start_run "$CFG_JSON" || {
+  echo "failed to initialize outcome lineage" >&2
+  exit 2
+}
 
 RESULT_DIR="$PROJECT_DIR/$RESULT_DIR_REL"
 WORKTREE_DIR="$PROJECT_DIR/$WORKTREE_DIR_REL"
@@ -283,6 +290,9 @@ $RUN_CONTEXT"
   [ "$JOB_STATUS" = "ok" ] && [ "$EXIT" -ne 0 ] && JOB_STATUS="partial"
 
   JOB_DUR=$(( $(date +%s) - JOB_START ))
+  if ! outcome_lineage_emit_build_items "$LOG_EVENT" "$SVC" "$RESULT_FILE"; then
+    echo "[$SVC] outcome lineage: validated build items unavailable" >>"$LOG_FILE"
+  fi
   agent_finish "$SVC" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
     --episode "$RUN_EPISODE" mode="$MODE" exit_code="$EXIT" tokens="$TOKENS" \
     >> "$LOG_FILE" 2>&1
@@ -304,12 +314,29 @@ if [ "$MODE" = "ticket" ]; then
   [ -z "$TICKET_FILE" ] && { echo "--ticket-file required for ticket mode" >&2; exit 2; }
   [ -f "$TICKET_FILE" ] || { echo "ticket file not found: $TICKET_FILE" >&2; exit 2; }
 
+  TICKET_ID=""
+  TICKET_LINEAGE=()
+  if outcome_lineage_enabled; then
+    TICKET_ID="$(outcome_lineage_ticket_id "$PROJECT_DIR" "$TICKET_FILE")" || {
+      echo "ticket lineage requires a ticket inside the project" >&2
+      exit 2
+    }
+    if [ -n "$UPSTREAM_WORK_ID" ]; then
+      [[ "$UPSTREAM_WORK_ID" =~ ^[A-Za-z0-9._:@-]{1,256}$ ]] || {
+        echo "--upstream-work-id must be an opaque identifier" >&2
+        exit 2
+      }
+      TICKET_LINEAGE+=("upstream_work_id=$UPSTREAM_WORK_ID")
+    fi
+    TICKET_LINEAGE+=("ticket_id=$TICKET_ID")
+  fi
+
   WALL_CLOCK="$(jq -r '.build.wall_clock_sec // 3600' <<<"$CFG_JSON")"
   LOG_FILE="$RESULT_DIR/$SVC-ticket-last-run.log"
   JOB_START="$(date +%s)"
   echo "[$SVC] $(now_iso) start mode=ticket ticket=$TICKET_FILE" > "$LOG_FILE"
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.start \
-    mode="ticket" project="$PROJECT_NAME" || true
+    mode="ticket" project="$PROJECT_NAME" "${TICKET_LINEAGE[@]}" || true
 
   # Headless: the execute-ticket skill is symlinked into
   # <project>/.claude/skills at install, so a cwd-at-project `claude -p`
@@ -329,9 +356,13 @@ if [ "$MODE" = "ticket" ]; then
 
   JOB_DUR=$(( $(date +%s) - JOB_START ))
   JOB_STATUS=$([ "$EXIT" = "0" ] && echo "ok" || echo "fail")
+  if outcome_lineage_enabled; then
+    "$LOG_EVENT" "$SVC" build.ticket.outcome work_id="$TICKET_ID" \
+      outcome="$JOB_STATUS" "${TICKET_LINEAGE[@]}" || true
+  fi
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
     mode="ticket" status="$JOB_STATUS" duration_s="$JOB_DUR" exit_code="$EXIT" \
-    tokens="$TOKENS" project="$PROJECT_NAME" || true
+    tokens="$TOKENS" project="$PROJECT_NAME" "${TICKET_LINEAGE[@]}" || true
   exit "$EXIT"
 fi
 
