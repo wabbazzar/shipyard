@@ -2,10 +2,10 @@
 
 - **Created:** 2026-08-01
 - **Owner:** wabbazzar
-- **Status:** draft
+- **Status:** ready
 - **Priority:** high
 - **Type:** feature
-- **Estimated Points:** 23 (five phases: 5 · 5 · 5 · 5 · 3)
+- **Estimated Points:** 28 (six phases: 5 · 5 · 5 · 5 · 5 · 3)
 - **Refs:** `dashboard/reader.py`, `dashboard/server.py`,
   `dashboard/static/index.html`, `dashboard/static/app.js`,
   `dashboard/static/styles.css`, `dashboard/tests/`,
@@ -68,6 +68,34 @@ PR, branch, and item outcome fields, but `job.end` currently retains only
 status, duration, exit, and tokens. Shoulder critique events retain counts and
 token use but do not durably record successful delivery or a shared critique
 identity.
+
+## Verified Polishing Baseline — 2026-08-01
+
+- `python3 -m unittest -v dashboard.tests.test_reader
+  dashboard.tests.test_server` passed 40/40 in 0.473 seconds.
+- `node dashboard/tests/browser.mjs --browser chromium --viewport 1440x900
+  --screenshot-dir <mktemp-dir>` and the equivalent `390x844` command passed
+  against Chrome 147. Both preserved selection/scroll after SSE, exposed no
+  mutation controls or external request origins, rendered hostile text inert,
+  and supplied a static reduced-motion equivalent. The screenshot directory is
+  mandatory; omitting it exits nonzero and is not render evidence.
+- `python3 dashboard/tests/benchmark_reader.py --rows 300000` returned 2,000
+  bounded results in 1.359 seconds at 203.5 MiB peak RSS and left the source
+  checksum unchanged.
+- `bats tests/shipyard-inspect.bats tests/dashboard.bats
+  tests/dashboard-install.bats tests/shoulder-mode.bats
+  tests/codex-feedback-delivery.bats` passed 205/205.
+- Python 3.12.3, Node 24.12.0, Bats 1.10.0, Git 2.43.0, authenticated `gh`,
+  and executable Chrome are present.
+- This Linux machine has no installed `shipyard-dashboard.service`, nothing
+  listening on `127.0.0.1:8765`, and no launchd directory. Execution can prove
+  the real installed systemd service, the shared static UI, and hermetic launchd
+  fixtures; a native Mac launchd smoke is external confirmation, never a
+  fabricated local gate.
+- Visual critique of the baseline found a sound responsive evidence surface but
+  an overlarge desktop masthead, repeated explanatory eyebrow labels, and no
+  outcome/relationship hierarchy. The new composition must make the living map
+  carry meaning and remove at least one redundant accessory before completion.
 
 ## Confirmed Product Decisions
 
@@ -190,7 +218,27 @@ state must also be carried by text, shape, border, and accessible labels.
   and available input/cache/output/reasoning token classes only when already
   supplied by the harness result. No price or dollar estimate is emitted.
 
-### 3. Shipyard-owned operator document
+### 3. Content-free crew and skill relationships
+
+Before the operator document is composed, add a bounded, content-free
+relationship aggregate:
+
+- Generalize `scripts/delegation-report.py` (or extract its parsers without
+  changing its CLI) so core can count observable caller→callee and skill
+  invocations from current-user Claude and Codex transcripts. Persist or return
+  only provider, stable opaque actor/session IDs or declared role/harness IDs,
+  skill IDs, timestamps, enum completion states when explicitly recorded, and
+  counters. Never retain task descriptions, prompts, messages, tool arguments,
+  results, or transcript paths.
+- Distinguish declared graph edges from observed calls. Missing providers,
+  absent transcript roots, parse gaps, and unsupported Hermes evidence are
+  `unknown`/limitations, never zero activity or success.
+- Keep the existing delegation report output and `execute-ticket` measurement
+  contract backward compatible. If additional invocation markers are needed,
+  use the smallest generic marker contract and regenerate coupled deck data;
+  do not invent skill use from prose matching.
+
+### 4. Shipyard-owned operator document and change metrics
 
 - Add `dashboard/operator.py` with an independent
   `OPERATOR_VIEW_SCHEMA_VERSION = 1`, a pure deterministic composer, and a
@@ -209,6 +257,10 @@ state must also be carried by text, shape, border, and accessible labels.
     reliability, operator load, and efficiency only where denominators exist;
   - `topology`: stable human/role/skill nodes, declared membership/pipeline
     edges, observed overlays, live state, last activity, and evidence IDs;
+  - `changes`: only for an explicitly linked, validated `base_sha..head_sha`,
+    aggregate additions, deletions, files touched, commit count, and
+    product/test/docs buckets from local Git metadata without returning any
+    filename;
   - `attention`, `coverage`, and bounded redacted evidence objects.
 - The composer selects and redacts from `build_document()`; it never exposes
   machine paths, prompt/message/result bodies, filenames, diffs, or critique
@@ -222,8 +274,15 @@ state must also be carried by text, shape, border, and accessible labels.
   the last good inspection snapshot on refresh failure and mark it stale.
 - The operator request must not execute inspection synchronously per page
   request; use a bounded TTL and one in-flight refresh.
+- Resolve Git references without a shell, reject missing/non-commit/unreachable
+  or reversed ranges, and report a limitation rather than guessing a range.
+  “Survived” or “durable” change may be reported only when explicit ancestry
+  and revert evidence supports it; otherwise it is unknown.
+- Bound the response to 200 attention items, 500 evidence objects, eight story
+  beats, and a 300-second inspection TTL. Preserve deterministic priority/order
+  when truncating and report truncation as coverage metadata.
 
-### 4. Standalone/macOS thin adapter
+### 5. Standalone/macOS thin adapter
 
 - Replace browser-side state derivation with one operator-document fetch.
   Existing raw events may still be fetched only inside the Evidence mode.
@@ -243,7 +302,7 @@ state must also be carried by text, shape, border, and accessible labels.
   intentionally conflict with raw events and prove the DOM follows the core
   document, catching duplicated adapter derivation.
 
-### 5. Stable adapter contract for Ice
+### 6. Stable adapter contract for Ice
 
 - Document the versioned operator payload and compatibility rules in the
   existing dashboard/operator documentation; do not add a parallel product
@@ -255,6 +314,15 @@ state must also be carried by text, shape, border, and accessible labels.
 
 ## Implementation Plan
 
+Every delegation brief below is limited to the named slice and owned files. It
+must include this instruction verbatim:
+
+> Converge honestly or report the precise blocker with the actual evidence — NEVER fake green, weaken a check, or hand-wave "should work". Run the real command, read the real file, curl the real port, and report exact output (exit codes, JSONL lines, HTTP codes), not adjectives.
+
+Any delegated task that discovers a need for spend, outward communication,
+history rewrite, destructive cleanup, or a change outside the ticket boundaries
+must stop and return the decision to the orchestrator.
+
 ### Phase 1 — Launchd inspection parity (5 pts)
 
 Introduce the scheduler-neutral manifest boundary, preserve systemd output
@@ -262,9 +330,25 @@ byte-for-byte for existing fixtures, add hermetic launchd fixtures, and route
 the CLI through platform detection. Prove macOS manifests produce the same
 canonical fleet/project/role evidence shape.
 
-Delegation: subagent — implement scheduler-neutral inspection discovery and
-launchd parity with focused Python/Bats coverage; return exact files, RED/GREEN
-tests, schema comparison, and blockers.
+Delegation (≤40 lines): subagent owns `skills/shipyard/inspect.py`, the minimal
+platform-selection edit in `skills/shipyard/shipyard.sh`, launchd fixtures, and
+focused cases in `tests/shipyard-inspect.bats` / `tests/shipyard-status.bats`.
+First capture a failing launchd-equivalence case; then implement only the
+scheduler boundary and canonical validation. Return exact files, RED/GREEN exit
+codes, compared schema paths, and blockers, followed by the required honesty
+clause above.
+
+Verification:
+
+```bash
+python3 -m py_compile skills/shipyard/inspect.py
+bash -n skills/shipyard/shipyard.sh
+bats tests/shipyard-inspect.bats tests/shipyard-status.bats
+```
+
+Observable phase DoD: equivalent hermetic systemd and launchd manifests yield
+the same fleet/project/role/coverage shape; malformed and foreign plists become
+limitations; every pre-existing inspect/status case remains green.
 
 ### Phase 2 — Content-minimizing lineage (5 pts)
 
@@ -272,41 +356,187 @@ Add the default-off telemetry gate, run IDs, explicit build/ticket lineage,
 token classes, and shoulder critique disposition. Prove false/unset event bytes
 remain unchanged and true produces only the allowed structured fields.
 
-Delegation: subagent — implement the gated lineage slice across shared runner
-helpers and focused emitters, with pre-change RED and post-change hermetic Bats
-evidence; return exact event lines and no content-bearing fields.
+Delegation (≤40 lines): subagent owns `.agents/config.toml`, shared event/run
+helpers, the smallest necessary role runners, shoulder delivery emitters, and
+their focused Bats fixtures/tests. Capture RED assertions for the opted-in
+shape and byte-for-byte unset/false compatibility before implementation. Return
+exact changed files, exit codes, representative redacted JSONL keys, forbidden
+field assertions, and blockers, followed by the required honesty clause above.
 
-### Phase 3 — Operator document and cached API (5 pts)
+Verification:
+
+```bash
+bash -n agents/lib/*.sh agents/*/runner.sh agents/release/critic-*.sh
+bats tests/harness.bats tests/design.bats tests/gap-fixes.bats \
+  tests/incident-reroute.bats tests/token-caps.bats \
+  tests/shoulder-mode.bats tests/codex-feedback-delivery.bats
+bash scripts/leak-check.sh
+```
+
+Observable phase DoD: unset/false telemetry produces byte-identical legacy
+events; true joins starts, explicit domain outcomes, token classes, and critique
+delivery using opaque IDs and contains none of the prohibited content fields.
+
+### Phase 3 — Content-free crew and skill evidence (5 pts)
+
+Extend the existing transcript measurement boundary to emit deterministic,
+bounded caller→callee and skill aggregates for the operator composer. Preserve
+the current report contract and turn unsupported/missing sources into coverage
+limitations.
+
+Delegation (≤40 lines): subagent owns `scripts/delegation-report.py`, dedicated
+fixtures under `tests/fixtures/delegation-report/`, and focused
+`tests/delegation-report.bats` / `tests/delegation-contract.bats` cases. Do not
+touch dashboard UI or runner outcome logic. Return exact RED/GREEN results,
+emitted aggregate keys, proof that content/transcript paths are absent, legacy
+golden compatibility, and blockers, followed by the required honesty clause
+above.
+
+Verification:
+
+```bash
+python3 -m py_compile scripts/delegation-report.py
+bats tests/delegation-report.bats tests/delegation-contract.bats
+python3 scripts/delegation-report.py --all --json
+```
+
+Observable phase DoD: fixture calls and skill invocations match exact supplied
+order/counts; Claude/Codex gaps and Hermes are honestly limited; no prose,
+arguments, results, or filesystem paths cross the aggregate boundary.
+
+### Phase 4 — Operator document and cached API (5 pts)
 
 Implement the pure composer, presentation-topology loader, inspection cache,
-redaction boundary, and `/api/operator` endpoint. Preserve every existing API
-contract and benchmark bound.
+redaction boundary, validated Git aggregates, and `/api/operator` endpoint.
+Preserve every existing API contract and benchmark bound.
 
-Delegation: subagent — own `dashboard/operator.py`, its focused tests, and the
-minimal server integration; return schema keys, cache/concurrency evidence,
-redaction assertions, compatibility results, and blockers.
+Delegation (≤40 lines): subagent owns new `dashboard/operator.py`, operator
+fixtures/tests, and the minimal integration in `dashboard/server.py`; it may
+consume but not change the Phase 1–3 contracts. Return schema keys,
+cache/single-flight/failure evidence, exact Git range cases, redaction and
+bound assertions, legacy API results, and blockers, followed by the required
+honesty clause above.
 
-### Phase 4 — Outcomes, crew map, evidence, and story (5 pts)
+Verification:
+
+```bash
+python3 -m py_compile dashboard/operator.py dashboard/reader.py dashboard/server.py
+python3 -m unittest -v dashboard.tests.test_operator \
+  dashboard.tests.test_reader dashboard.tests.test_server
+bats tests/dashboard.bats tests/shipyard-inspect.bats
+python3 dashboard/tests/benchmark_reader.py --rows 300000
+```
+
+Observable phase DoD: all three windows return deterministic schema-v1 data;
+invalid queries/ranges fail closed; stale last-good inspection is explicit;
+concurrent refresh is single-flight; no legacy API or reader bound regresses.
+
+### Phase 5 — Outcomes, crew map, evidence, and story (5 pts)
 
 Recompose the standalone UI as a thin client of the operator document, using
 short headers, restrained state color, a responsive crew/skill tree, and a
 deterministic narrative mode. Strengthen the browser harness with contradictory
 sentinel data so adapter-owned semantics cannot regress.
 
-Delegation: subagent — implement the standalone HTML/CSS/JS and real-browser
-coverage at both viewports; return files, screenshots, assertion counts,
-keyboard/reduced-motion/overflow/network evidence, and blockers.
+Delegation (≤40 lines): subagent owns `dashboard/static/index.html`,
+`dashboard/static/styles.css`, `dashboard/static/app.js`, browser fixtures, and
+`dashboard/tests/browser.mjs`. Remove at least one redundant accessory. Do not
+derive state in JavaScript. Return exact files, both screenshot paths,
+assertion counts, focus/keyboard/reduced-motion/overflow/network evidence, and
+blockers, followed by the required honesty clause above.
 
-### Phase 5 — Installed Mac/Linux proof and contract handoff (3 pts)
+Verification:
+
+```bash
+node --check dashboard/static/app.js
+node --check dashboard/tests/browser.mjs
+WIDE_SHOTS="$(mktemp -d)"
+NARROW_SHOTS="$(mktemp -d)"
+node dashboard/tests/browser.mjs --browser chromium --viewport 1440x900 \
+  --screenshot-dir "$WIDE_SHOTS"
+node dashboard/tests/browser.mjs --browser chromium --viewport 390x844 \
+  --screenshot-dir "$NARROW_SHOTS"
+```
+
+The orchestrator must inspect both final screenshots, not merely record that
+the browser exited zero.
+
+Observable phase DoD: contradictory sentinel raw/operator inputs render the
+operator values and order; all four modes work at both viewports; the tree has
+a semantic narrow form; focus, contrast, reduced motion, hostile text, SSE
+state preservation, and same-origin behavior are visibly and mechanically
+proven.
+
+### Phase 6 — Installed Mac/Linux proof and contract handoff (3 pts)
 
 Reinstall/restart the intended local dashboard service without disturbing any
 other loopback listener, verify the operator payload and rendered modes on the
 real event store, update canonical docs, publish the fixture/compatibility
 contract, and hand the shipped schema/commit to the dependent Ice ticket.
 
-Delegation: subagent — audit installer/docs/contract completeness and run the
-platform-appropriate installed-service proof; return doctor status, host/port,
-schema version, screenshots, fixture checksum, and blockers.
+Delegation (≤40 lines): subagent owns only installer-focused tests, canonical
+dashboard/operator docs, the committed schema fixture, and contract handoff
+notes. It may run but must not silently replace another process on port 8765.
+Return exact doctor output, host/port, HTTP status/schema version, screenshot
+paths, fixture checksum, docs links, and blockers, followed by the required
+honesty clause above.
+
+Verification:
+
+```bash
+bash scripts/install-dashboard.sh --install --port 8765
+bash scripts/install-dashboard.sh --doctor --port 8765
+curl --fail --silent --show-error http://127.0.0.1:8765/api/health
+curl --fail --silent --show-error 'http://127.0.0.1:8765/api/operator?window=24h'
+bats tests/
+bash -n install.sh agents/lib/*.sh agents/*/runner.sh \
+  agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit
+python3 -m py_compile scripts/gen-deck-data.py dashboard/*.py \
+  skills/shipyard/inspect.py scripts/delegation-report.py
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bash scripts/check-deck-complete.sh
+node scripts/check-deck-render.mjs
+bash scripts/ticket-lifecycle.sh --project . --check
+python3 scripts/delegation-report.py --all
+git diff --check
+```
+
+Repeat the Phase 5 real-browser commands against the installed service. On
+Linux, the native systemd smoke plus hermetic launchd fixture is the required
+gate. A real Mac launchd smoke is recorded as external confirmation and is not
+faked or made a Linux completion blocker. After local gates, push canonical
+`main`, inspect `gh` CI checks, and graduate the ticket with
+`scripts/ticket-lifecycle.sh`.
+
+Observable phase DoD: the real current-platform service is healthy and serving
+schema v1 plus the shared UI; the committed fixture matches the documented
+contract; full local gates and remote CI are green; the completed ticket is in
+its configured lifecycle folder.
+
+## Orchestration Protocol
+
+- Work directly on canonical `main`; this repository forbids feature
+  branches/worktrees because fleet skill symlinks resolve through the canonical
+  checkout.
+- Preserve the owner’s unrelated `docs/styles.css` safe-area edit exactly as
+  found. Never stage it in a ticket commit and name it in every hygiene check.
+- At phase start, record `git status --short --branch`, HEAD, and the files
+  assigned. Capture a failing focused test before implementation when the phase
+  introduces observable behavior.
+- One builder owns one disjoint phase slice. The orchestrator reviews the diff,
+  reruns every phase command itself, checks `git diff --check` and ticket
+  lifecycle, then commits only explicit phase paths with required attribution.
+- Never weaken, skip, or replace a required gate to obtain green. A missing
+  native Mac host remains explicit external confirmation; all available Linux,
+  fixture, browser, service, and CI gates still run.
+- Before install/restart, identify the current loopback listener and unit. Do
+  not kill or overwrite an unrelated process. Record event-source checksums
+  before/after all read-only dashboard proof.
+- After each accepted phase, update the ledger with builder, commit, exact
+  evidence, limitations, and any baseline variance. If a user-decision-class
+  issue appears, stop and alert the owner; implementation uncertainty is not a
+  reason to fabricate a decision.
 
 ## Testing Strategy
 
@@ -340,6 +570,12 @@ schema version, screenshots, fixture checksum, and blockers.
       beats; missing lineage remains `unverified`, never zero or green.
 - [ ] Every claim, outcome, node, and observed edge exposes bounded evidence IDs
       or an explicit limitation explaining why evidence is unavailable.
+- [ ] Content-free caller→callee and skill aggregates preserve declared versus
+      observed relationships, expose source coverage, and treat unsupported
+      Hermes/missing transcripts as unknown rather than zero.
+- [ ] Explicit valid Git ranges produce aggregate additions, deletions, files,
+      commits, and product/test/docs buckets without filenames; invalid or
+      unlinked ranges remain limited/unknown and no durability claim is guessed.
 - [ ] No new telemetry or operator response stores prompts, messages, diffs,
       filenames, critique prose, result bodies, or machine-private paths.
 - [ ] With `[telemetry] outcome_lineage` unset or false, runner event behavior is
@@ -362,6 +598,8 @@ schema version, screenshots, fixture checksum, and blockers.
 - [ ] One committed fixture and compatibility note are sufficient for a later
       Ice adapter to render the same ordered semantics without JSONL access or
       Python imports.
+- [ ] Attention/evidence/story payloads obey the locked 200/500/8 bounds and
+      inspection refresh uses the locked 300-second TTL.
 - [ ] Installed service, focused tests, full repository gates, CI, cleanup, and
       ticket lifecycle checks are green; event history remains byte-identical.
 
@@ -438,5 +676,11 @@ schema version, screenshots, fixture checksum, and blockers.
 
 | Phase | Plan | Builder | Commit | Evidence / notes |
 |---|---|---|---|---|
+| 1 | Launchd inspection parity | — | — | pending |
+| 2 | Minimal outcome lineage | — | — | pending |
+| 3 | Crew/skill relationship evidence | — | — | pending |
+| 4 | Operator document/API and Git metrics | — | — | pending |
+| 5 | Shared standalone/macOS UI | — | — | pending |
+| 6 | Installed proof and Ice contract handoff | — | — | pending |
 
 Run this ticket with the `execute-ticket` skill.
