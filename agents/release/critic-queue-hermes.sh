@@ -14,6 +14,7 @@
 # so critic-watch.sh drains it unchanged. ALWAYS exits 0.
 
 set -u
+umask 077
 
 # shellcheck source=agents/release/critic-queue-lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/critic-queue-lib.sh"

@@ -49,10 +49,21 @@ stated probe. Never wait for the scheduled cadence.
   server — rebuild + restart after every source edit, then
   `curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:<PORT>/<route>`
   must return 200 before "done".
-- If this is a phone/PWA surface, render the changed view at **mobile viewport**
-  with a headless browser and actually look at it — desktop-width "looks fine"
-  is not evidence. **Kill the headless browser afterward and verify with `ps`
-  it's gone** (a forgotten headless browser can poll an endpoint for days).
+- Start the real app on a loopback development port, curl its health/API
+  endpoints, and run the project's development-browser check at every
+  ticket-declared viewport. Browser-runtime absence is RED, never an optional
+  skip.
+- A UI/UX completion claim requires both visual screenshot inspection and
+  semantic assertions against the live page: exact identities and cardinality
+  in responsive views, DOM landmarks and state copy, keyboard/focus behavior,
+  horizontal overflow, reduced motion, inert hostile content, zero console
+  errors, and zero request origins outside the loopback server. A plausible
+  screenshot alone is not proof. Phone/PWA surfaces must include a mobile
+  viewport; desktop-width "looks fine" is not evidence.
+- **Kill the proof browser and development server afterward and verify with
+  `ps` that both are gone** (a forgotten browser can poll an endpoint for
+  days). Installed-service changes additionally require the ticket's explicit
+  restart, health, listener, API, and live-browser checks.
 
 ### Event stream / notifications  — APPLIES: yes / no
 If the phase emits events, read the actual JSONL line in

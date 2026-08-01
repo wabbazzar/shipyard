@@ -17,16 +17,19 @@
 # codex/hermes capture hooks). ALWAYS exits 0, even on malformed input.
 
 set -u
+umask 077
 
 # shellcheck source=agents/release/critic-queue-lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/critic-queue-lib.sh"
 
 INPUT="$(cat 2>/dev/null || true)"
 
-FILE_PATH="$(jq -r '.tool_input.file_path // empty' <<<"$INPUT" 2>/dev/null || true)"
+FILE_PATH="$(printf '%s' "$INPUT" | \
+  jq -r '.tool_input.file_path // empty' 2>/dev/null || true)"
 [ -n "$FILE_PATH" ] || exit 0   # not an Edit/Write payload — nothing to queue
 
-SESSION_ID="$(jq -r '.session_id // empty' <<<"$INPUT" 2>/dev/null || true)"
+SESSION_ID="$(printf '%s' "$INPUT" | \
+  jq -r '.session_id // empty' 2>/dev/null || true)"
 
 cq_enqueue "$FILE_PATH" "$SESSION_ID" "${CLAUDE_PROJECT_DIR:-$PWD}"
 
