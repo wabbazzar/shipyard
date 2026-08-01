@@ -12,12 +12,13 @@ import os
 import stat
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Optional
+from typing import Any, Callable, Iterable, Iterator, Mapping, Optional
 
 
 WINDOW_SECONDS = {"24h": 24 * 60 * 60, "7d": 7 * 24 * 60 * 60, "30d": 30 * 24 * 60 * 60}
+MAX_WINDOW_DAYS = max(WINDOW_SECONDS.values()) // (24 * 60 * 60)
 DEFAULT_LIMIT = 500
 MAX_LIMIT = 2_000
 DEFAULT_STALE_SECONDS = 7_200
@@ -175,11 +176,18 @@ def _decode_event(raw: bytes) -> dict[str, Any]:
 class EventReader:
     """Snapshot and query a directory of newline-delimited event files."""
 
-    def __init__(self, event_dir: os.PathLike[str] | str, *, stale_seconds: int = DEFAULT_STALE_SECONDS):
+    def __init__(
+        self,
+        event_dir: os.PathLike[str] | str,
+        *,
+        stale_seconds: int = DEFAULT_STALE_SECONDS,
+        clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    ):
         self.event_dir = Path(event_dir)
         if stale_seconds < 0:
             raise ValueError("stale_seconds must be non-negative")
         self.stale_seconds = stale_seconds
+        self._clock = clock
         self.files: list[IndexedFile] = []
         self.references: list[EventRef] = []
         self.problems: list[ParseProblem] = []
@@ -214,10 +222,20 @@ class EventReader:
     def _event_paths(self) -> list[Path]:
         if not self.event_dir.exists():
             return []
+        current = self._clock()
+        if current.tzinfo is None:
+            raise ValueError("clock must return a timezone-aware datetime")
+        cutoff = current.astimezone(timezone.utc).date() - timedelta(days=MAX_WINDOW_DAYS)
         paths = []
         with os.scandir(self.event_dir) as entries:
             for entry in entries:
                 if not entry.name.endswith(".jsonl") or entry.is_symlink():
+                    continue
+                try:
+                    file_date = datetime.strptime(entry.name, "%Y-%m-%d.jsonl").date()
+                except ValueError:
+                    file_date = None
+                if file_date is not None and file_date < cutoff:
                     continue
                 try:
                     if entry.is_file(follow_symlinks=False):

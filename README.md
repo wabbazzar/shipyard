@@ -496,13 +496,38 @@ the legacy stream.
 The optional **private operations dashboard** is the built-in read-only view
 of that stream. It runs as one native user service, binds only
 `127.0.0.1:${SHIPYARD_DASHBOARD_PORT:-8765}`, and uses no database, cloud
-transport, or build step:
+transport, or build step. Its in-memory index reads only canonical daily files
+needed by the largest supported 30-day window; it never edits or deletes older
+history:
 
 ```bash
 scripts/install-dashboard.sh --install
 skills/shipyard/shipyard.sh dashboard       # prints URL + health
 skills/shipyard/shipyard.sh dashboard --open
 ```
+
+Adapters consume `GET /api/operator?window=24h|7d|30d`. A successful response
+has `schema_version: 1`, `kind: "shipyard.operator"`, and the public sections
+`metadata`, `narrative`, `promises`, `outcomes`, `topology`, `changes`,
+`attention`, `coverage`, and `evidence`. Shipyard core owns every promise/KPI
+meaning, state, threshold, priority, label, limitation, topology relationship,
+and array order. A dashboard may format timestamps and map supplied semantic
+tokens to presentation, but it must not recalculate, reprioritize, or sort the
+document.
+
+`metadata.inspection_state` is `fresh`, `stale`, or `unavailable`; stale means
+the last good snapshot is being served. Unknown, partial, unverified, and not
+applicable remain distinct from zero and from success. Responses are bounded
+to 200 attention items, 500 evidence objects, and eight story beats, with any
+truncation stated in coverage. The deterministic adapter example is
+[`dashboard/tests/fixtures/operator-v1.json`](dashboard/tests/fixtures/operator-v1.json).
+
+Schema v1 is additive: readers ignore unknown members while preserving the
+supplied order, and render an unknown enum as unknown/unavailable rather than
+healthy. Removing, retyping, or changing the meaning of an existing member or
+stable ID requires a new schema version. Adapters must not receive filesystem
+paths, prompts, messages, diffs, filenames, result bodies, or critique prose,
+and must never reconstruct this view from raw JSONL.
 
 Existing installs keep the event path already baked into their crew jobs; a
 clean install falls back to `~/Library/Application Support/Shipyard/events/`

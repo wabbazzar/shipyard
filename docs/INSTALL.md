@@ -130,6 +130,49 @@ skills/shipyard/shipyard.sh dashboard
 skills/shipyard/shipyard.sh dashboard --open
 ```
 
+### Operator adapter contract
+
+The versioned adapter surface is:
+
+```text
+GET /api/operator?window=24h
+GET /api/operator?window=7d
+GET /api/operator?window=30d
+```
+
+Schema v1 returns `kind: "shipyard.operator"` plus `metadata`, `narrative`,
+`promises`, `outcomes`, `topology`, `changes`, `attention`, `coverage`, and
+`evidence`. The committed, deterministic example is
+[`dashboard/tests/fixtures/operator-v1.json`](../dashboard/tests/fixtures/operator-v1.json).
+It is a contract fixture, not evidence that a dashboard is installed or
+running on the current machine. A downstream Ice server adapter can parse that
+JSON directly; it does not import Shipyard Python and does not read event
+JSONL.
+
+Shipyard core owns semantic states, promise and KPI rules, thresholds,
+priority, narrative wording, topology, limitations, and array order. Adapters
+preserve those values and order exactly. `metadata.inspection_state` is
+`fresh`, `stale`, or `unavailable`: stale serves the last good snapshot, and
+unavailable remains unknown rather than becoming an empty healthy fleet.
+Likewise, `unknown`, `partial`, `unverified`, and `not_applicable` are never
+collapsed into zero or success. The maximums are 200 attention items, 500
+evidence objects, and eight narrative beats; coverage reports truncation.
+
+Compatibility within schema v1 is additive. Readers ignore unknown object
+members, retain supplied array order, and display an unrecognized enum as
+unknown/unavailable. Removing or retyping a member, changing its meaning, or
+reassigning a stable promise ID requires a new schema version. No adapter
+payload may contain filesystem paths, prompts, messages, diffs, filenames,
+result bodies, or critique prose.
+
+The dashboard is loopback-only, read-only, and emits no CORS allowance. Its
+browser uses same-origin requests. Another local product must fetch the
+loopback endpoint from its server side and project the returned contract; it
+must not embed the dashboard, expose the endpoint remotely, or parse raw
+history as a competing source of operator meaning. To keep the service bounded,
+the in-memory index skips canonical daily files older than the largest
+supported 30-day window; the files remain untouched on disk.
+
 The installer writes exactly one service:
 
 | Platform | Definition | Event fallback | Logs |

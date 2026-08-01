@@ -93,6 +93,7 @@ import sys
 root = pathlib.Path(sys.argv[1])
 paths = [
     root / "dashboard" / "reader.py",
+    root / "dashboard" / "operator.py",
     root / "dashboard" / "server.py",
     root / "dashboard" / "static" / "index.html",
     root / "dashboard" / "static" / "favicon.svg",
@@ -294,6 +295,23 @@ print(sys.argv[1].replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%"), 
 PY
 }
 
+systemd_path() {
+  "$PYTHON_BIN" - "$1" <<'PY'
+import sys
+
+safe = frozenset(b"/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-")
+parts = []
+for byte in sys.argv[1].encode("utf-8"):
+    if byte == ord("%"):
+        parts.append("%%")
+    elif byte in safe:
+        parts.append(chr(byte))
+    else:
+        parts.append(f"\\x{byte:02x}")
+print("".join(parts), end="")
+PY
+}
+
 xml_escape() {
   "$PYTHON_BIN" - "$1" <<'PY'
 import html
@@ -303,12 +321,14 @@ PY
 }
 
 render_manifest() {
-  local q_python q_source q_events q_root
+  local q_python q_source q_events q_root q_log_out q_log_err
   if [ "$SCHEDULER" = "systemd" ]; then
     q_python="$(systemd_quote "$PYTHON_BIN")"
     q_source="$(systemd_quote "$SOURCE")"
     q_events="$(systemd_quote "$EVENTS_DIR")"
-    q_root="$(systemd_quote "$ROOT")"
+    q_root="$(systemd_path "$ROOT")"
+    q_log_out="append:$(systemd_path "$LOG_OUT")"
+    q_log_err="append:$(systemd_path "$LOG_ERR")"
     cat <<EOF
 # Managed by Shipyard. Re-run scripts/install-dashboard.sh to change.
 [Unit]
@@ -330,8 +350,8 @@ Environment="SHIPYARD_DASHBOARD_SOURCE=$(systemd_escape "$SOURCE")"
 Environment="SHIPYARD_DASHBOARD_ASSETS=$(systemd_escape "$ASSETS")"
 Environment="SHIPYARD_DASHBOARD_BUILD_VERSION=$BUILD_VERSION"
 Environment="SHIPYARD_DASHBOARD_ASSET_DIGEST=$ASSET_DIGEST"
-StandardOutput=$(systemd_quote "append:$LOG_OUT")
-StandardError=$(systemd_quote "append:$LOG_ERR")
+StandardOutput=$q_log_out
+StandardError=$q_log_err
 
 [Install]
 WantedBy=default.target
@@ -399,7 +419,8 @@ activate_service() {
     "$LAUNCHCTL" kickstart -k "$DOMAIN/$SERVICE_ID" || return 2
   else
     "$SYSTEMCTL" --user daemon-reload || return 2
-    "$SYSTEMCTL" --user enable --now "$SERVICE_ID" || return 2
+    "$SYSTEMCTL" --user enable "$SERVICE_ID" || return 2
+    "$SYSTEMCTL" --user restart "$SERVICE_ID" || return 2
   fi
 }
 

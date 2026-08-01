@@ -465,7 +465,11 @@ async function main() {
       mutationForms: document.querySelectorAll('form[method="post"], form[method="put"], form[method="delete"]').length,
       panels: [...document.querySelectorAll('[role=tabpanel]')].map(item => [item.id, item.hidden]),
       headings: [...document.querySelectorAll('h1,h2,h3')].map(item => item.textContent.trim()),
-      treeItems: document.querySelectorAll('#topology-nodes [role=treeitem]').length
+      treeItems: document.querySelectorAll('#topology-nodes [role=treeitem]').length,
+      promiseChildrenContained: [...document.querySelectorAll('.promise-card')].every(card => {
+        const bounds = card.getBoundingClientRect();
+        return [...card.children].every(child => child.getBoundingClientRect().right <= bounds.right + 1);
+      })
     })`);
     overflow = responsive.overflow;
     verify.ok(responsive.overflow <= 0, `horizontal overflow: ${responsive.overflow}px`);
@@ -475,6 +479,7 @@ async function main() {
     verify.deepEqual(responsive.panels, [["mode-outcomes", true], ["mode-crew", true], ["mode-evidence", false], ["mode-story", true]], "mode visibility is ambiguous");
     verify.deepEqual(responsive.headings, ["Shipyard", "Outcomes", "Needs you", "Crew", "Skills", "Evidence", "Story"], "headings exceeded the locked short vocabulary");
     verify.equal(responsive.treeItems, 4, "semantic narrow tree is incomplete");
+    verify.equal(responsive.promiseChildrenContained, true, "promise content escaped its card");
 
     const contrast = await evaluate(browser, `(() => {
       const root = getComputedStyle(document.documentElement);

@@ -73,7 +73,9 @@ main { width: min(1280px, calc(100% - 48px)); margin: 0 auto; padding: 20px 0 56
 .promise-card, .kpi-card, .attention-card, .node-card, .selection-panel, .evidence-detail, .raw-panel, .story-card {
   border: 1px solid #304252; border-radius: 8px; background: var(--bulkhead);
 }
-.promise-card { display: grid; align-content: space-between; min-height: 168px; padding: 14px; border-top-width: 4px; }
+.promise-card { display: grid; align-content: space-between; min-width: 0; min-height: 168px; padding: 14px; border-top-width: 4px; }
+.promise-card > * { min-width: 0; }
+.promise-card .quiet { overflow-wrap: anywhere; }
 .card-title { margin-bottom: 12px; font-weight: 680; line-height: 1.25; }
 .claim-values { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
 .claim-values span { display: block; color: var(--neutral); font-size: .67rem; }

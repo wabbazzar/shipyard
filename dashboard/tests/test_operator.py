@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 import threading
@@ -449,6 +450,198 @@ class OperatorComposerTest(unittest.TestCase):
         assert_links(document)
         bounds = next(item for item in document["coverage"] if item["source"] == "operator_bounds")
         self.assertEqual(bounds["state"], "partial")
+
+
+class OperatorFixtureContractTest(unittest.TestCase):
+    EXPECTED_PROMISE_IDS = [
+        "promise:bugs_caught_and_fixed",
+        "promise:usage_assessed_projects",
+        "promise:features_shipped_end_to_end",
+        "promise:consequential_decisions_surfaced",
+        "promise:critique_actionability",
+        "promise:execute_ticket_delegation_claude",
+        "promise:execute_ticket_delegation_codex",
+        "promise:execute_ticket_delegation_hermes",
+    ]
+
+    def setUp(self) -> None:
+        fixture = Path(__file__).with_name("fixtures") / "operator-v1.json"
+        self.document = json.loads(fixture.read_text(encoding="utf-8"))
+
+    def test_fixture_exposes_the_additive_schema_v1_adapter_surface(self) -> None:
+        required = {
+            "schema_version",
+            "kind",
+            "metadata",
+            "narrative",
+            "promises",
+            "outcomes",
+            "topology",
+            "changes",
+            "attention",
+            "coverage",
+            "evidence",
+        }
+        self.assertTrue(required.issubset(self.document))
+        self.assertEqual(self.document["schema_version"], 1)
+        self.assertEqual(self.document["kind"], "shipyard.operator")
+        self.assertEqual(self.document["metadata"]["schema_version"], 1)
+        self.assertIn(self.document["metadata"]["window"], {"24h", "7d", "30d"})
+        self.assertEqual(
+            self.document["metadata"]["limits"],
+            {"attention": MAX_ATTENTION, "evidence": MAX_EVIDENCE, "story_beats": MAX_STORY_BEATS},
+        )
+        self.assertLessEqual(len(self.document["attention"]), MAX_ATTENTION)
+        self.assertLessEqual(len(self.document["evidence"]), MAX_EVIDENCE)
+        self.assertLessEqual(len(self.document["narrative"]["beats"]), MAX_STORY_BEATS)
+
+    def test_fixture_has_stable_promises_and_only_public_state_enums(self) -> None:
+        self.assertEqual(
+            [row["id"] for row in self.document["promises"]],
+            self.EXPECTED_PROMISE_IDS,
+        )
+        self.assertTrue(
+            {row["state"] for row in self.document["promises"]}
+            <= {"verified", "violated", "unverified", "not_applicable"}
+        )
+        self.assertIn(
+            self.document["metadata"]["inspection_state"],
+            {"fresh", "stale", "unavailable"},
+        )
+        self.assertTrue(
+            {row["state"] for row in self.document["narrative"]["beats"]}
+            <= {"clear", "waiting", "alarm", "signal", "unknown"}
+        )
+        self.assertTrue(
+            {row["state"] for row in self.document["attention"]}
+            <= {"clear", "waiting", "alarm", "signal", "unknown"}
+        )
+        self.assertTrue(
+            {row["state"] for row in self.document["coverage"]}
+            <= {"available", "partial", "unavailable", "unknown"}
+        )
+        outcomes = self.document["outcomes"]
+        self.assertTrue(
+            {
+                outcomes["reliability"]["state"],
+                outcomes["operator_load"]["state"],
+                outcomes["efficiency"]["state"],
+                outcomes["shoulder"]["state"],
+                *(row["state"] for row in outcomes["role_contracts"]),
+            }
+            <= {"measured", "partial", "unknown"}
+        )
+        self.assertTrue(
+            {row["state"] for row in outcomes["chains"]}
+            <= {"complete", "incomplete"}
+        )
+        self.assertTrue(
+            {row["state"] for row in outcomes["lineages"]}
+            <= {"complete", "unverified"}
+        )
+
+    def test_fixture_evidence_links_and_topology_endpoints_are_closed(self) -> None:
+        evidence_ids = [row["id"] for row in self.document["evidence"]]
+        self.assertEqual(len(evidence_ids), len(set(evidence_ids)))
+        known_evidence = set(evidence_ids)
+
+        def assert_evidence_links(value: object) -> None:
+            if isinstance(value, dict):
+                if "evidence_ids" in value:
+                    self.assertTrue(set(value["evidence_ids"]).issubset(known_evidence))
+                for child in value.values():
+                    assert_evidence_links(child)
+            elif isinstance(value, list):
+                for child in value:
+                    assert_evidence_links(child)
+
+        assert_evidence_links(self.document)
+        nodes = self.document["topology"]["nodes"]
+        node_ids = {node["id"] for node in nodes}
+        self.assertEqual(len(node_ids), len(nodes))
+        for edge in (
+            self.document["topology"]["declared_edges"]
+            + self.document["topology"]["observed_edges"]
+        ):
+            self.assertIn(edge["from"], node_ids)
+            self.assertIn(edge["to"], node_ids)
+        edge_ids = [
+            edge["id"]
+            for edge in (
+                self.document["topology"]["declared_edges"]
+                + self.document["topology"]["observed_edges"]
+            )
+        ]
+        self.assertEqual(len(edge_ids), len(set(edge_ids)))
+        self.assertTrue(
+            {edge["state"] for edge in self.document["topology"]["declared_edges"]}
+            <= {"declared"}
+        )
+        self.assertTrue(
+            {edge["state"] for edge in self.document["topology"]["observed_edges"]}
+            <= {"observed"}
+        )
+        self.assertTrue(
+            {node["state"] for node in nodes}
+            <= {"declared", "healthy", "running", "stale", "failed", "unknown", "observed"}
+        )
+        self.assertTrue(
+            {row["durability"] for row in self.document["changes"]} <= {"unknown"}
+        )
+
+    def test_fixture_recursively_excludes_private_content_and_raw_history(self) -> None:
+        forbidden_keys = {
+            "path",
+            "paths",
+            "file_path",
+            "project_path",
+            "source_ref",
+            "filename",
+            "filenames",
+            "prompt",
+            "prompts",
+            "message",
+            "messages",
+            "diff",
+            "diffs",
+            "result",
+            "results",
+            "result_body",
+            "critique_body",
+            "critique_text",
+            "critique_prose",
+            "transcript_path",
+            "raw_jsonl",
+        }
+        forbidden_fragments = (
+            "/home/",
+            "/users/",
+            "/private/",
+            ".jsonl",
+            "diff --git",
+            "result body",
+            "critique prose",
+            "begin private key",
+        )
+
+        def assert_safe(value: object) -> None:
+            if isinstance(value, dict):
+                self.assertFalse(forbidden_keys & set(value))
+                for child in value.values():
+                    assert_safe(child)
+            elif isinstance(value, list):
+                for child in value:
+                    assert_safe(child)
+            elif isinstance(value, str):
+                lowered = value.lower()
+                self.assertFalse(any(fragment in lowered for fragment in forbidden_fragments))
+                self.assertFalse(value.startswith(("/", "~", "\\")))
+                self.assertIsNone(re.match(r"^[A-Za-z]:[\\/]", value))
+                self.assertFalse(
+                    lowered.endswith((".py", ".js", ".md", ".json", ".jsonl", ".toml", ".sh"))
+                )
+
+        assert_safe(self.document)
 
 
 class InspectionCacheTest(unittest.TestCase):

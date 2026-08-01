@@ -1,0 +1,598 @@
+{
+  "schema_version": 1,
+  "kind": "shipyard.operator",
+  "metadata": {
+    "schema_version": 1,
+    "build_version": "0.1.0",
+    "rule_version": "operator-outcomes-v1",
+    "inspection_rule_version": "shipyard-inspect-v1",
+    "window": "24h",
+    "generated_at": "2026-08-01T12:00:00Z",
+    "inspection_state": "stale",
+    "refresh_age_seconds": 420,
+    "limits": {
+      "attention": 200,
+      "evidence": 500,
+      "story_beats": 8
+    },
+    "limitations": [
+      "inspection_stale",
+      "relationship_provider_partial"
+    ]
+  },
+  "narrative": {
+    "heading": "Fleet promises",
+    "subline": "What changed, what held, and where evidence stops",
+    "focus": "Close the decision evidence gap",
+    "operator_action": "Inspect evidence for Close the decision evidence gap",
+    "beats": [
+      {
+        "id": "story:promises",
+        "heading": "Outcomes",
+        "body": "3 verified · 1 violated · 3 unverified · 1 not applicable",
+        "state": "alarm",
+        "evidence_ids": [
+          "inspect:summary"
+        ]
+      },
+      {
+        "id": "story:attention",
+        "heading": "Needs you",
+        "body": "Close the decision evidence gap",
+        "state": "waiting",
+        "evidence_ids": [
+          "inspect:attention-1"
+        ]
+      },
+      {
+        "id": "story:reliability",
+        "heading": "Runs",
+        "body": "1 of 1 completed successfully",
+        "state": "clear",
+        "evidence_ids": [
+          "event:run-start",
+          "event:work-outcome",
+          "event:run-end"
+        ]
+      },
+      {
+        "id": "story:crew",
+        "heading": "Crew",
+        "body": "1 observed call · 1 skill invocation",
+        "state": "signal",
+        "evidence_ids": [
+          "relationship:call-1",
+          "skill-call:execute-1"
+        ]
+      }
+    ]
+  },
+  "promises": [
+    {
+      "id": "promise:bugs_caught_and_fixed",
+      "label": "Bugs caught and fixed",
+      "state": "unverified",
+      "target": {
+        "operator": "gte",
+        "value": 1,
+        "unit": "bugs"
+      },
+      "observed_value": null,
+      "evidence_ids": [
+        "inspect:summary"
+      ],
+      "limitations": [
+        "missing_bug_fix_lineage"
+      ]
+    },
+    {
+      "id": "promise:usage_assessed_projects",
+      "label": "Projects assessed",
+      "state": "verified",
+      "target": {
+        "operator": "gte",
+        "value": 1,
+        "unit": "projects"
+      },
+      "observed_value": 2,
+      "evidence_ids": [
+        "inspect:summary"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "promise:features_shipped_end_to_end",
+      "label": "Features shipped end to end",
+      "state": "verified",
+      "target": {
+        "operator": "gte",
+        "value": 1,
+        "unit": "features"
+      },
+      "observed_value": 1,
+      "evidence_ids": [
+        "event:work-outcome"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "promise:consequential_decisions_surfaced",
+      "label": "Decisions surfaced",
+      "state": "violated",
+      "target": {
+        "operator": "gte",
+        "value": 1,
+        "unit": "decisions"
+      },
+      "observed_value": 0,
+      "evidence_ids": [
+        "inspect:attention-1"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "promise:critique_actionability",
+      "label": "Critiques acted on",
+      "state": "not_applicable",
+      "target": {
+        "operator": null,
+        "value": null,
+        "unit": null
+      },
+      "observed_value": null,
+      "evidence_ids": [],
+      "limitations": [
+        "no_explicit_critique_lineage"
+      ]
+    },
+    {
+      "id": "promise:execute_ticket_delegation_claude",
+      "label": "Claude delegation",
+      "state": "verified",
+      "target": {
+        "operator": "gte",
+        "value": 1,
+        "unit": "calls"
+      },
+      "observed_value": 1,
+      "evidence_ids": [
+        "relationship:call-1"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "promise:execute_ticket_delegation_codex",
+      "label": "Codex delegation",
+      "state": "unverified",
+      "target": {
+        "operator": "gte",
+        "value": 1,
+        "unit": "calls"
+      },
+      "observed_value": null,
+      "evidence_ids": [],
+      "limitations": [
+        "skill_marker_coverage_partial"
+      ]
+    },
+    {
+      "id": "promise:execute_ticket_delegation_hermes",
+      "label": "Hermes delegation",
+      "state": "unverified",
+      "target": {
+        "operator": "gte",
+        "value": 1,
+        "unit": "calls"
+      },
+      "observed_value": null,
+      "evidence_ids": [],
+      "limitations": [
+        "unsupported_provider"
+      ]
+    }
+  ],
+  "outcomes": {
+    "chains": [
+      {
+        "run_id": "11111111111111111111111111111111",
+        "state": "complete",
+        "role": "build",
+        "started_at": "2026-08-01T10:00:00Z",
+        "ended_at": "2026-08-01T10:02:00Z",
+        "status": "ok",
+        "proposal_ids": [
+          "proposal-01"
+        ],
+        "incident_ids": [],
+        "work_ids": [
+          "work-01"
+        ],
+        "evidence_ids": [
+          "event:run-start",
+          "event:work-outcome",
+          "event:run-end"
+        ],
+        "limitations": []
+      }
+    ],
+    "lineages": [
+      {
+        "id": "lineage:feature-01",
+        "kind": "feature",
+        "state": "complete",
+        "identifiers": [
+          "proposal-01",
+          "work-01"
+        ],
+        "started_at": "2026-08-01T09:55:00Z",
+        "ended_at": "2026-08-01T10:01:00Z",
+        "outcome": "pr_opened",
+        "evidence_ids": [
+          "event:work-outcome"
+        ],
+        "limitations": []
+      }
+    ],
+    "role_contracts": [
+      {
+        "role": "build",
+        "state": "measured",
+        "started": 1,
+        "completed": 1,
+        "successful": 1,
+        "completion_rate": 1.0,
+        "limitations": []
+      },
+      {
+        "role": "release",
+        "state": "unknown",
+        "started": null,
+        "completed": null,
+        "successful": null,
+        "completion_rate": null,
+        "limitations": [
+          "role_start_denominator_missing"
+        ]
+      }
+    ],
+    "reliability": {
+      "state": "measured",
+      "completed": 1,
+      "successful": 1,
+      "rate": 1.0,
+      "limitations": []
+    },
+    "operator_load": {
+      "state": "measured",
+      "attention_items": 1,
+      "limitations": []
+    },
+    "efficiency": {
+      "state": "partial",
+      "completed_runs": 1,
+      "input_tokens": 100,
+      "input_tokens_coverage_runs": 1,
+      "cache_read_tokens": 20,
+      "cache_read_tokens_coverage_runs": 1,
+      "cache_write_tokens": null,
+      "cache_write_tokens_coverage_runs": 0,
+      "output_tokens": 10,
+      "output_tokens_coverage_runs": 1,
+      "reasoning_tokens": null,
+      "reasoning_tokens_coverage_runs": 0,
+      "total_tokens": null,
+      "total_token_coverage_runs": 0,
+      "tokens_per_completed_run": null,
+      "limitations": [
+        "token_coverage_partial"
+      ]
+    },
+    "shoulder": {
+      "state": "unknown",
+      "critiques": null,
+      "deposited": null,
+      "deferred": null,
+      "failed": null,
+      "expired": null,
+      "limitations": [
+        "critique_lineage_missing"
+      ]
+    }
+  },
+  "topology": {
+    "nodes": [
+      {
+        "id": "role:human",
+        "kind": "human",
+        "label": "operator",
+        "loop": "human",
+        "state": "declared",
+        "observed_count": null,
+        "last_activity": null,
+        "evidence_ids": [],
+        "limitations": [
+          "human_activity_not_inferred"
+        ]
+      },
+      {
+        "id": "role:build",
+        "kind": "role",
+        "label": "build",
+        "loop": "build",
+        "state": "healthy",
+        "observed_count": 3,
+        "last_activity": "2026-08-01T10:02:00Z",
+        "evidence_ids": [
+          "event:run-start",
+          "event:work-outcome",
+          "event:run-end"
+        ],
+        "limitations": []
+      },
+      {
+        "id": "skill:execute-ticket",
+        "kind": "skill",
+        "label": "execute-ticket",
+        "skill_kind": "pipeline",
+        "state": "observed",
+        "observed_count": 1,
+        "last_activity": "2026-08-01T10:00:00Z",
+        "evidence_ids": [
+          "skill-call:execute-1"
+        ],
+        "limitations": []
+      },
+      {
+        "id": "agent:claude:actor-01",
+        "kind": "agent",
+        "label": "Claude caller",
+        "provider": "claude",
+        "state": "observed",
+        "evidence_ids": [
+          "relationship:call-1",
+          "skill-call:execute-1"
+        ]
+      },
+      {
+        "id": "agent:claude:callee-01",
+        "kind": "agent",
+        "label": "Claude callee",
+        "provider": "claude",
+        "state": "observed",
+        "evidence_ids": [
+          "relationship:call-1"
+        ]
+      }
+    ],
+    "declared_edges": [
+      {
+        "id": "membership:build:execute-ticket",
+        "kind": "membership",
+        "from": "role:build",
+        "to": "skill:execute-ticket",
+        "state": "declared",
+        "evidence_ids": [],
+        "limitations": []
+      },
+      {
+        "id": "membership:human:execute-ticket",
+        "kind": "membership",
+        "from": "role:human",
+        "to": "skill:execute-ticket",
+        "state": "declared",
+        "evidence_ids": [],
+        "limitations": []
+      }
+    ],
+    "observed_edges": [
+      {
+        "id": "observed:relationship:call-1",
+        "kind": "call",
+        "from": "agent:claude:actor-01",
+        "to": "agent:claude:callee-01",
+        "state": "observed",
+        "completion": "completed",
+        "count": 1,
+        "last_activity": "2026-08-01T10:01:00Z",
+        "evidence_ids": [
+          "relationship:call-1"
+        ],
+        "limitations": []
+      },
+      {
+        "id": "observed:skill-call:execute-1",
+        "kind": "skill_call",
+        "from": "agent:claude:actor-01",
+        "to": "skill:execute-ticket",
+        "state": "observed",
+        "count": 1,
+        "last_activity": "2026-08-01T10:00:00Z",
+        "evidence_ids": [
+          "skill-call:execute-1"
+        ],
+        "limitations": []
+      }
+    ],
+    "limitations": [
+      "relationship_provider_partial"
+    ]
+  },
+  "changes": [
+    {
+      "project_id": "project:sample",
+      "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "additions": 24,
+      "deletions": 5,
+      "files_touched": 3,
+      "commits": 2,
+      "buckets": {
+        "product": 1,
+        "test": 1,
+        "docs": 1
+      },
+      "durability": "unknown",
+      "evidence_ids": [
+        "event:work-outcome"
+      ],
+      "limitations": [
+        "durability_not_proven"
+      ]
+    }
+  ],
+  "attention": [
+    {
+      "id": "attention:decision-evidence",
+      "kind": "next_pr",
+      "label": "Close the decision evidence gap",
+      "priority": 1,
+      "rule_id": "decision_lineage_gap_v1",
+      "state": "waiting",
+      "detected_at": "2026-08-01T10:05:00Z",
+      "evidence_ids": [
+        "inspect:attention-1"
+      ],
+      "limitations": []
+    }
+  ],
+  "coverage": [
+    {
+      "source": "inspection_events",
+      "state": "partial",
+      "reason": "parse_gap",
+      "records_total": 12,
+      "records_valid": 11,
+      "limitations": [
+        "one_record_unavailable"
+      ]
+    },
+    {
+      "source": "relationships_claude",
+      "state": "available",
+      "reason": "complete",
+      "records_total": 1,
+      "limitations": []
+    },
+    {
+      "source": "relationships_codex",
+      "state": "partial",
+      "reason": "partial",
+      "limitations": [
+        "skill_marker_coverage_partial"
+      ]
+    },
+    {
+      "source": "relationships_hermes",
+      "state": "unknown",
+      "reason": "unknown",
+      "limitations": [
+        "unsupported_provider"
+      ]
+    },
+    {
+      "source": "presentation_topology",
+      "state": "available",
+      "reason": "ok",
+      "limitations": []
+    },
+    {
+      "source": "operator_bounds",
+      "state": "available",
+      "reason": "ok",
+      "limitations": []
+    },
+    {
+      "source": "operator_events",
+      "state": "available",
+      "reason": "ok",
+      "records_total": 3,
+      "limitations": []
+    }
+  ],
+  "evidence": [
+    {
+      "id": "inspect:summary",
+      "source": "inspection",
+      "kind": "benchmark",
+      "observed_at": "2026-08-01T10:05:00Z",
+      "fields": {
+        "projects_assessed": 2,
+        "features_complete": 1
+      },
+      "limitations": []
+    },
+    {
+      "id": "inspect:attention-1",
+      "source": "inspection",
+      "kind": "evidence_gap",
+      "observed_at": "2026-08-01T10:05:00Z",
+      "fields": {
+        "rule_id": "decision_lineage_gap_v1",
+        "priority": 1
+      },
+      "limitations": []
+    },
+    {
+      "id": "event:run-start",
+      "source": "events",
+      "kind": "event",
+      "observed_at": "2026-08-01T10:00:00Z",
+      "fields": {
+        "event": "job.start",
+        "role": "build",
+        "run_id": "11111111111111111111111111111111"
+      },
+      "limitations": []
+    },
+    {
+      "id": "event:work-outcome",
+      "source": "events",
+      "kind": "event",
+      "observed_at": "2026-08-01T10:01:00Z",
+      "fields": {
+        "event": "build.work.outcome",
+        "role": "build",
+        "run_id": "11111111111111111111111111111111",
+        "work_id": "work-01",
+        "outcome": "pr_opened"
+      },
+      "limitations": []
+    },
+    {
+      "id": "event:run-end",
+      "source": "events",
+      "kind": "event",
+      "observed_at": "2026-08-01T10:02:00Z",
+      "fields": {
+        "event": "job.end",
+        "role": "build",
+        "run_id": "11111111111111111111111111111111",
+        "status": "ok"
+      },
+      "limitations": []
+    },
+    {
+      "id": "relationship:call-1",
+      "source": "relationships",
+      "kind": "caller_callee",
+      "observed_at": "2026-08-01T10:01:00Z",
+      "fields": {
+        "provider": "claude",
+        "count": 1
+      },
+      "limitations": []
+    },
+    {
+      "id": "skill-call:execute-1",
+      "source": "relationships",
+      "kind": "skill_invocation",
+      "observed_at": "2026-08-01T10:00:00Z",
+      "fields": {
+        "provider": "claude",
+        "skill_id": "execute-ticket",
+        "count": 1
+      },
+      "limitations": []
+    }
+  ]
+}

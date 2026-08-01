@@ -76,10 +76,10 @@ def main() -> int:
         root = Path(temporary)
         generate(root, args.rows)
         before = checksum(root)
-        started = time.perf_counter()
-        reader = EventReader(root).refresh()
-        elapsed = time.perf_counter() - started
         query_now = datetime(2026, 7, 1, tzinfo=timezone.utc) + timedelta(seconds=args.rows)
+        started = time.perf_counter()
+        reader = EventReader(root, clock=lambda: query_now).refresh()
+        elapsed = time.perf_counter() - started
         result_count = len(reader.query_refs(window="30d", now=query_now, limit=2_000))
         after = checksum(root)
         rss = peak_rss_mib()

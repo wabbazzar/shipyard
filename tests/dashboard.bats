@@ -22,7 +22,7 @@ setup() {
 
   make_stub_script systemctl '
 case "$*" in
-  *"enable --now shipyard-dashboard.service"*) : >"$DASH_STATE"; exit 0 ;;
+  *"restart shipyard-dashboard.service"*) : >"$DASH_STATE"; exit 0 ;;
   *"is-enabled shipyard-dashboard.service"*|*"is-active shipyard-dashboard.service"*)
     [ -f "$DASH_STATE" ]; exit $? ;;
   *"disable --now shipyard-dashboard.service"*) unlink "$DASH_STATE" 2>/dev/null || true; exit 0 ;;

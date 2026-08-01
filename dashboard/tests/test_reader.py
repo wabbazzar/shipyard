@@ -52,6 +52,7 @@ class ReaderTest(unittest.TestCase):
         self.temporary.cleanup()
 
     def reader(self, **kwargs: object) -> EventReader:
+        kwargs.setdefault("clock", lambda: NOW)
         return EventReader(self.root, **kwargs).refresh()
 
     def test_empty_directory(self) -> None:
@@ -71,6 +72,26 @@ class ReaderTest(unittest.TestCase):
         self.assertTrue(reader.read_event(refs[0])["alien"])
         self.assertEqual(reader.read_event(refs[1])["future"], {"x": 1})
         self.assertEqual(checksums(self.root), before)
+
+    def test_canonical_daily_files_older_than_the_largest_window_are_not_indexed(self) -> None:
+        old_path = self.root / "2026-06-30.jsonl"
+        boundary_path = self.root / "2026-07-01.jsonl"
+        named_path = self.root / "historical.jsonl"
+        append_rows(old_path, [event(NOW - timedelta(days=31), "old")])
+        append_rows(boundary_path, [event(NOW - timedelta(days=30), "boundary")])
+        append_rows(named_path, [event(NOW - timedelta(days=31), "named")])
+        before = checksums(self.root)
+
+        reader = self.reader()
+
+        self.assertEqual([item.name for item in reader.files], ["2026-07-01.jsonl", "historical.jsonl"])
+        self.assertEqual({reference.event for reference in reader.references}, {"boundary", "named"})
+        self.assertEqual(checksums(self.root), before)
+
+    def test_retention_clock_must_be_timezone_aware(self) -> None:
+        append_rows(self.root / "2026-07-31.jsonl", [event(NOW, "tick")])
+        with self.assertRaisesRegex(ValueError, "timezone-aware"):
+            EventReader(self.root, clock=lambda: datetime(2026, 7, 31)).refresh()
 
     def test_newline_invalid_row_is_error_but_earlier_rows_survive(self) -> None:
         path = self.root / "2026-07-31.jsonl"
@@ -148,11 +169,11 @@ class ReaderTest(unittest.TestCase):
 
         worker = threading.Thread(target=writer)
         worker.start()
-        reader = CoordinatedReader(self.root).refresh()
+        reader = CoordinatedReader(self.root, clock=lambda: NOW).refresh()
         worker.join(2)
         self.assertFalse(worker.is_alive())
         self.assertEqual(reader.row_count, 1)
-        reader = EventReader(self.root).refresh()
+        reader = EventReader(self.root, clock=lambda: NOW).refresh()
         self.assertEqual(reader.row_count, 2)
 
     def test_windows_are_start_inclusive_and_end_exclusive(self) -> None:

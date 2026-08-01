@@ -33,7 +33,7 @@ setup() {
 
   make_stub_script systemctl '
 case "$*" in
-  *"enable --now shipyard-dashboard.service"*) : >"$DASHBOARD_TEST_STATE"; exit 0 ;;
+  *"restart shipyard-dashboard.service"*) : >"$DASHBOARD_TEST_STATE"; exit 0 ;;
   *"is-enabled shipyard-dashboard.service"*|*"is-active shipyard-dashboard.service"*)
     [ -f "$DASHBOARD_TEST_STATE" ]; exit $? ;;
   *"disable --now shipyard-dashboard.service"*) unlink "$DASHBOARD_TEST_STATE" 2>/dev/null || true; exit 0 ;;
@@ -107,17 +107,24 @@ PY
   [ -f "$unit" ]
   first="$(manifest_digest "$unit")"
   [ "$(python3 -c 'import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode))[2:])' "$unit")" = "644" ]
+  grep -Fxq "WorkingDirectory=$QUARTET_ROOT" "$unit"
+  ! grep -Fq 'WorkingDirectory="' "$unit"
   grep -Fq 'ExecStart=' "$unit"
   grep -Fq -- '--host 127.0.0.1 --port 8766' "$unit"
   grep -Fq "Environment=\"QUARTET_EVENTS_DIR=$EVENTS_DIR\"" "$unit"
   grep -Fq "Environment=\"SHIPYARD_DASHBOARD_SOURCE=$QUARTET_ROOT/dashboard/server.py\"" "$unit"
   grep -Eq 'Environment="SHIPYARD_DASHBOARD_ASSET_DIGEST=[0-9a-f]{64}"' "$unit"
-  grep -Fq "StandardOutput=\"append:$LOG_DIR/dashboard.log\"" "$unit"
+  grep -Fq 'root / "dashboard" / "operator.py",' "$INSTALLER"
+  grep -Fxq "StandardOutput=append:$LOG_DIR/dashboard.log" "$unit"
+  grep -Fxq "StandardError=append:$LOG_DIR/dashboard.err.log" "$unit"
+  ! grep -Fq 'StandardOutput="' "$unit"
 
   run dashboard --install
   [ "$status" -eq 0 ]
   second="$(manifest_digest "$unit")"
   [ "$first" = "$second" ]
+  grep -Fq -- '--user enable shipyard-dashboard.service' "$SHIM_LOG/systemctl.argv"
+  grep -Fq -- '--user restart shipyard-dashboard.service' "$SHIM_LOG/systemctl.argv"
   echo "systemd_first=$first systemd_reinstall=$second"
 
   run dashboard --doctor
@@ -215,7 +222,7 @@ PY
   run dashboard --install
   [ "$status" -eq 0 ]
   expected="$XDG_STATE_HOME/shipyard/logs/dashboard.log"
-  grep -Fq "StandardOutput=\"append:$expected\"" "$SYSTEMD_DIR/shipyard-dashboard.service"
+  grep -Fxq "StandardOutput=append:$expected" "$SYSTEMD_DIR/shipyard-dashboard.service"
 }
 
 @test "installer refuses symlink and unsafe targets" {
