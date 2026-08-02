@@ -20,11 +20,63 @@
       "relationship_provider_partial"
     ]
   },
+  "brief": {
+    "state": "waiting",
+    "takeaway": "Repair observed Shipyard core job failure",
+    "action": "Repair 18 observed Shipyard job failures",
+    "signals": [
+      {
+        "id": "promises_verified",
+        "label": "Promises verified",
+        "value": 3,
+        "unit": "promise",
+        "state": "alarm",
+        "observed": 4,
+        "total": 8,
+        "limitations": ["promise_evidence_incomplete"]
+      },
+      {
+        "id": "successful_runs",
+        "label": "Successful runs",
+        "value": 1,
+        "unit": "completed run",
+        "state": "measured",
+        "observed": 1,
+        "total": 1,
+        "limitations": []
+      },
+      {
+        "id": "attention",
+        "label": "Attention",
+        "value": 1,
+        "unit": "group",
+        "state": "waiting",
+        "observed": 1,
+        "total": 1,
+        "limitations": []
+      }
+    ],
+    "attention_groups": [
+      {
+        "id": "attention-group:core-job-failure",
+        "label": "Repair observed Shipyard core job failure",
+        "action": "Repair 18 observed Shipyard job failures",
+        "state": "waiting",
+        "item_count": 1,
+        "evidence_count": 18,
+        "project_count": 1,
+        "latest_at": "2026-08-01T10:05:00Z",
+        "evidence_ids": ["inspect:attention-1"],
+        "limitations": []
+      }
+    ],
+    "limitations": ["inspection_stale"]
+  },
   "narrative": {
-    "heading": "Fleet promises",
-    "subline": "What changed, what held, and where evidence stops",
-    "focus": "Close the decision evidence gap",
-    "operator_action": "Inspect evidence for Close the decision evidence gap",
+    "heading": "Repair observed Shipyard core job failure",
+    "subline": "Repair 18 observed Shipyard job failures",
+    "focus": "Repair observed Shipyard core job failure",
+    "operator_action": "Repair 18 observed Shipyard job failures",
     "beats": [
       {
         "id": "story:promises",
@@ -38,7 +90,7 @@
       {
         "id": "story:attention",
         "heading": "Needs you",
-        "body": "Close the decision evidence gap",
+        "body": "Repair 18 observed Shipyard job failures",
         "state": "waiting",
         "evidence_ids": [
           "inspect:attention-1"

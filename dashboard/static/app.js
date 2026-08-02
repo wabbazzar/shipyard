@@ -13,6 +13,7 @@ const state = {
   rawRefreshing: false,
   unavailablePolls: 0,
   pollTimer: null,
+  streamRetryTimer: null,
 };
 
 const modeNames = ["outcomes", "crew", "evidence", "story"];
@@ -80,10 +81,13 @@ function limitationsText(value) {
   return Array.isArray(value) && value.length ? value.map(String).join(", ") : "none";
 }
 
-function evidenceButton(evidenceIds) {
-  const button = element("button", "", "Inspect evidence");
-  button.type = "button";
+function evidenceButton(evidenceIds, suppliedCount = null) {
   const ids = Array.isArray(evidenceIds) ? evidenceIds.map(String) : [];
+  const count = Number.isFinite(suppliedCount) && suppliedCount >= 0 ? suppliedCount : ids.length;
+  const noun = count === 1 ? "record" : "records";
+  const button = element("button", "evidence-action", `Review ${count} ${noun}`);
+  button.type = "button";
+  button.disabled = ids.length === 0;
   button.addEventListener("click", () => {
     state.selectedEvidenceId = ids[0] || null;
     setMode("evidence", {focus: true});
@@ -93,13 +97,48 @@ function evidenceButton(evidenceIds) {
 
 function renderOperatorState() {
   const metadata = state.document?.metadata || {};
-  const narrative = state.document?.narrative || {};
   const supplied = sourceState(metadata.inspection_state);
+  const limitations = Array.isArray(metadata.limitations) ? metadata.limitations : [];
   const notice = document.getElementById("operator-state");
   markState(notice, supplied);
-  notice.textContent = `${supplied} · ${present(narrative.operator_action)}`;
+  if (supplied === "unavailable") {
+    notice.textContent = "Fleet evidence is still loading · retrying locally";
+  } else if (limitations.includes("event_index_refresh_failed")) {
+    notice.textContent = `Fleet evidence update failed · showing the last good snapshot from ${formatTimestamp(metadata.generated_at)}`;
+  } else if (limitations.includes("event_index_refreshing") || supplied === "stale") {
+    notice.textContent = `Updating fleet evidence · showing the last good snapshot from ${formatTimestamp(metadata.generated_at)}`;
+  } else {
+    notice.textContent = `Fleet evidence current · ${formatTimestamp(metadata.generated_at)}`;
+  }
   notice.hidden = false;
   document.getElementById("generated-at").textContent = `${present(metadata.window)} · ${formatTimestamp(metadata.generated_at)}`;
+}
+
+function renderBrief() {
+  const brief = state.document?.brief || {};
+  document.getElementById("brief-takeaway").textContent = present(brief.takeaway);
+  document.getElementById("brief-action").textContent = present(brief.action);
+  markState(document.querySelector(".brief-hero"), brief.state);
+  const signals = Array.isArray(brief.signals) ? brief.signals : [];
+  const cards = signals.map((signal, index) => {
+    const card = element("article", "signal-card");
+    card.dataset.signalId = present(signal.id);
+    card.dataset.order = String(index);
+    markState(card, signal.state);
+    const value = element("p", "signal-value", present(signal.value));
+    value.append(element("span", "signal-unit", present(signal.unit)));
+    const coverage = signal.observed === null || signal.observed === undefined || signal.total === null || signal.total === undefined
+      ? "Coverage unknown"
+      : `${present(signal.observed)} of ${present(signal.total)} observed`;
+    card.append(
+      element("p", "signal-label", present(signal.label)),
+      value,
+      element("p", "signal-coverage", coverage),
+      stateMark(signal.state),
+    );
+    return card;
+  });
+  document.getElementById("signal-list").replaceChildren(...cards);
 }
 
 function renderPromises() {
@@ -125,6 +164,7 @@ function renderPromises() {
     return card;
   });
   document.getElementById("promise-list").replaceChildren(...cards);
+  document.getElementById("promise-count").textContent = String(promises.length);
 }
 
 function metricCard(group, item, index) {
@@ -167,21 +207,29 @@ function renderMetrics() {
 }
 
 function renderAttention() {
-  const attention = Array.isArray(state.document?.attention) ? state.document.attention : [];
-  document.getElementById("attention-count").textContent = String(attention.length);
+  const brief = state.document?.brief || {};
+  const attention = Array.isArray(brief.attention_groups) ? brief.attention_groups : [];
+  const signal = (Array.isArray(brief.signals) ? brief.signals : []).find(item => item?.id === "attention");
+  document.getElementById("attention-count").textContent = present(signal?.value);
   document.getElementById("attention-empty").hidden = attention.length !== 0;
   const cards = attention.map((item, index) => {
     const li = document.createElement("li");
-    const card = element("article", "attention-card");
+    const card = element("article", "attention-card attention-summary");
     card.dataset.attentionId = present(item.id);
     card.dataset.order = String(index);
     markState(card, item.state);
+    const scale = [
+      `${present(item.item_count)} ${item.item_count === 1 ? "item" : "items"}`,
+      `${present(item.evidence_count)} ${item.evidence_count === 1 ? "record" : "records"}`,
+      item.project_count === null || item.project_count === undefined ? "project coverage unknown" : `${present(item.project_count)} ${item.project_count === 1 ? "project" : "projects"}`,
+    ].join(" · ");
     card.append(
       element("p", "card-title", present(item.label)),
+      element("p", "attention-action", present(item.action)),
+      element("p", "attention-scale", scale),
       stateMark(item.state),
-      element("p", "quiet", `Priority ${present(item.priority)} · ${formatTimestamp(item.detected_at)}`),
-      element("p", "quiet", `Limits · ${limitationsText(item.limitations)}`),
-      evidenceButton(item.evidence_ids),
+      element("p", "utility", formatTimestamp(item.latest_at)),
+      evidenceButton(item.evidence_ids, item.evidence_count),
     );
     li.append(card);
     return li;
@@ -374,12 +422,10 @@ function renderStory() {
 }
 
 function renderDocument() {
-  const narrative = state.document?.narrative || {};
   document.getElementById("loading-state").hidden = true;
   document.getElementById("error-state").hidden = true;
-  document.getElementById("narrative-heading").textContent = present(narrative.heading);
-  document.getElementById("narrative-subline").textContent = present(narrative.subline);
   renderOperatorState();
+  renderBrief();
   renderPromises();
   renderMetrics();
   renderAttention();
@@ -491,7 +537,11 @@ function connectStream() {
   });
   source.addEventListener("shipyard", () => {
     refreshOperator({preserve: true});
-    if (state.mode === "evidence") refreshRawEvents({preserve: true});
+    if (state.mode === "evidence") {
+      refreshRawEvents({preserve: true});
+      clearTimeout(state.streamRetryTimer);
+      state.streamRetryTimer = setTimeout(() => refreshRawEvents({preserve: true}), 250);
+    }
   });
   source.addEventListener("error", () => {
     document.querySelector(".connection").classList.add("is-offline");

@@ -29,7 +29,7 @@
       <label class="window-control">Window
         <select id="window-select" aria-label="Operator window">
           <option value="24h">24 hours</option>
-          <option value="7d">7 days</option>
+          <option value="7d" selected>7 days</option>
           <option value="30d">30 days</option>
         </select>
       </label>
@@ -42,24 +42,32 @@
     <div id="error-state" class="notice" role="alert" hidden></div>
 
     <section id="mode-outcomes" class="mode-panel" role="tabpanel" aria-labelledby="tab-outcomes" tabindex="0">
-      <header class="mode-heading">
-        <div>
-          <h2>Outcomes</h2>
-          <p id="narrative-heading" class="lede">—</p>
-          <p id="narrative-subline" class="subline">—</p>
+      <header class="brief-hero">
+        <div class="brief-copy">
+          <h2 id="brief-takeaway">—</h2>
+          <p id="brief-action">—</p>
         </div>
         <p id="generated-at" class="utility">—</p>
       </header>
-      <div id="promise-list" class="promise-grid" aria-label="Promise states"></div>
-      <div id="kpi-list" class="kpi-grid" aria-label="Outcome measures"></div>
+      <div id="signal-list" class="signal-grid" aria-label="Fleet signals"></div>
       <section class="attention-section" aria-labelledby="attention-heading">
         <div class="section-row">
           <h2 id="attention-heading">Needs you</h2>
           <span id="attention-count" class="count-mark">0</span>
         </div>
         <ol id="attention-list" class="attention-list"></ol>
-        <p id="attention-empty" class="quiet">No operator action is supplied for this window.</p>
+        <p id="attention-empty" class="quiet">No operator action is currently evidenced.</p>
       </section>
+      <div class="outcome-details">
+        <details id="promise-disclosure">
+          <summary>Promises <span id="promise-count">0</span></summary>
+          <div id="promise-list" class="promise-grid" aria-label="Promise states"></div>
+        </details>
+        <details id="measurement-disclosure">
+          <summary>Measurements</summary>
+          <div id="kpi-list" class="kpi-grid" aria-label="Outcome measures"></div>
+        </details>
+      </div>
     </section>
 
     <section id="mode-crew" class="mode-panel" role="tabpanel" aria-labelledby="tab-crew" tabindex="0" hidden>

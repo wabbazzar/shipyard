@@ -276,6 +276,7 @@ async function main() {
   let scrollAfter = 0;
   let rawScrollBefore = 0;
   let rawScrollAfter = 0;
+  let outcomesHeight = 0;
 
   try {
     const port = await waitForFile(portFile, server);
@@ -329,33 +330,49 @@ async function main() {
     verify.equal(requestPaths.some(path => path.startsWith("/api/events")), false, "raw events were fetched outside Evidence");
     pausedApi = false;
     for (const params of paused.splice(0)) await handlePaused(params);
-    await waitFor(browser, "document.getElementById('operator-state').textContent.startsWith('unavailable ·')", "supplied unavailable state");
-    verify.match(await evaluate(browser, "document.getElementById('operator-state').textContent"), /^unavailable · Wait for the bounded refresh$/, "unavailable state or next step drifted");
-    await waitFor(browser, "document.getElementById('narrative-heading').textContent === 'Sentinel promise audit'", "bounded operator poll");
+    await waitFor(browser, "document.getElementById('operator-state').textContent.startsWith('Fleet evidence is still loading')", "supplied unavailable state");
+    verify.equal(await evaluate(browser, "document.getElementById('operator-state').textContent"), "Fleet evidence is still loading · retrying locally", "unavailable state or next step drifted");
+    await waitFor(browser, "document.getElementById('brief-takeaway').textContent === 'Repair observed Shipyard core job failure'", "bounded operator poll");
     verify.equal(operatorRequests, 2, "unavailable state did not poll exactly once before fresh document arrived");
-    verify.equal(await evaluate(browser, "document.getElementById('operator-state').textContent"), "stale · Inspect sentinel evidence", "adapter manufactured freshness or copy");
+    verify.match(await evaluate(browser, "document.getElementById('operator-state').textContent"), /^Updating fleet evidence · showing the last good snapshot from /, "refreshing snapshot was presented as current");
+    verify.match(await evaluate(browser, `(() => {
+      const original = state.document.metadata.limitations;
+      state.document.metadata.limitations = ["event_index_refresh_failed"];
+      renderOperatorState();
+      const copy = document.getElementById('operator-state').textContent;
+      state.document.metadata.limitations = original;
+      renderOperatorState();
+      return copy;
+    })()`), /^Fleet evidence update failed · showing the last good snapshot from /, "failed refresh was presented as current");
     verify.equal(sha256(await readFile(eventFile)), fixtureBefore, "operator reads mutated raw evidence");
+    verify.equal(await evaluate(browser, "document.getElementById('window-select').value"), "7d", "shared dashboard did not default to 7d");
+    verify.equal(await evaluate(browser, "document.getElementById('brief-takeaway').textContent"), "Repair observed Shipyard core job failure", "core takeaway was not rendered verbatim");
+    verify.equal(await evaluate(browser, "document.getElementById('brief-action').textContent"), "Repair 18 observed Shipyard job failures", "qualified core action was not rendered verbatim");
+    verify.deepEqual(await evaluate(browser, "[...document.querySelectorAll('.signal-card')].map(card => card.dataset.signalId)"), ["promises_verified", "successful_runs", "attention"], "brief signal order was re-derived");
+    verify.equal(await evaluate(browser, "document.querySelector('.attention-summary button').textContent"), "Review 18 records", "summary evidence was not compressed into a count");
+    verify.equal(await evaluate(browser, `(() => { const text = document.getElementById('mode-outcomes').innerText; return /\\b[0-9a-f]{16,}\\b/i.test(text); })()`), false, "opaque evidence ID was visible in Outcomes");
+    outcomesHeight = await evaluate(browser, "document.getElementById('mode-outcomes').scrollHeight");
+    verify.ok(outcomesHeight > 0 && outcomesHeight <= 12000, `Outcomes height ${outcomesHeight}px exceeded the bounded brief`);
 
     const operatorOrder = await evaluate(browser, `({
       promises: [...document.querySelectorAll('.promise-card')].map(card => [card.dataset.promiseId, card.dataset.sourceState, card.querySelector('.card-title').textContent]),
-      attention: [...document.querySelectorAll('.attention-card')].map(card => [card.dataset.attentionId, card.dataset.sourceState, card.querySelector('.card-title').textContent, card.textContent.includes('Priority 99')]),
+      attention: [...document.querySelectorAll('.attention-card')].map(card => [card.dataset.attentionId, card.dataset.sourceState, card.querySelector('.card-title').textContent, card.querySelector('.attention-scale').textContent]),
       metrics: [...document.querySelectorAll('.kpi-card')].map(card => [card.dataset.metricGroup, card.dataset.sourceState]),
-      narrative: [document.getElementById('narrative-heading').textContent, document.getElementById('narrative-subline').textContent]
+      brief: [document.getElementById('brief-takeaway').textContent, document.getElementById('brief-action').textContent]
     })`);
     verify.deepEqual(operatorOrder.promises, [
       ["promise:zeta", "violated", "Zeta promise stays first"],
       ["promise:alpha", "verified", "Alpha promise stays second"],
     ], "promise order/state was re-derived");
     verify.deepEqual(operatorOrder.attention, [
-      ["attention:zeta", "waiting", "Zeta attention stays first", true],
-      ["attention:alpha", "alarm", "Alpha attention stays second", false],
-    ], "attention was sorted or reclassified in the adapter");
+      ["attention-group:core-job-failure", "alarm", "Repair observed Shipyard core job failure", "2 items · 18 records · 1 project"],
+    ], "core-grouped attention order/counts were re-derived");
     verify.deepEqual(operatorOrder.metrics, [
       ["chains", "incomplete"], ["lineages", "unverified"], ["role_contracts", "partial"],
       ["reliability", "partial"], ["operator_load", "measured"], ["efficiency", "unknown"],
       ["shoulder", "measured"], ["changes", "unknown"],
     ], "outcome/KPI order or states drifted");
-    verify.deepEqual(operatorOrder.narrative, ["Sentinel promise audit", "Operator truth beats raw noise"]);
+    verify.deepEqual(operatorOrder.brief, ["Repair observed Shipyard core job failure", "Repair 18 observed Shipyard job failures"]);
     const semanticTokens = await evaluate(browser, `Object.fromEntries(
       ['complete','incomplete','running','available','measured','partial','observed','declared','fresh','stale','unavailable','future_state']
         .map(value => [value, stateToken(value)]))`);
@@ -405,9 +422,12 @@ async function main() {
     await press(browser, "Enter", "Enter", 13);
     verify.equal(await evaluate(browser, "document.querySelector('[data-node-id=\"role:build\"] .node-card').getAttribute('aria-pressed')"), "true", "keyboard node selection failed");
 
-    await evaluate(browser, "document.querySelector('[data-promise-id=\"promise:zeta\"] button').click()");
+    await evaluate(browser, "document.querySelector('.attention-summary button').click()");
     await waitFor(browser, "document.getElementById('raw-event-count').textContent === '19 raw events'", "lazy raw evidence fetch");
     verify.equal(requestPaths.some(path => path.startsWith("/api/events")), true, "Evidence mode did not fetch raw events");
+    verify.equal(await evaluate(browser, "document.querySelector('[data-evidence-id=\"abcdef0123456789abcdef0123456789\"]').getAttribute('aria-current')"), "true", "count drill-in did not select grouped evidence");
+    verify.equal(await evaluate(browser, "document.getElementById('mode-evidence').innerText.includes('abcdef0123456789abcdef0123456789')"), true, "opaque ID was not reachable in Evidence");
+    await evaluate(browser, "document.querySelector('[data-evidence-id=\"ev:first\"]').click()");
     verify.equal(await evaluate(browser, "document.querySelector('[data-evidence-id=\"ev:first\"]').getAttribute('aria-current')"), "true", "claim evidence selection was lost");
     const hostileEvidence = await evaluate(browser, `({
       executed: window.__hostile === 1,
@@ -435,6 +455,7 @@ async function main() {
       text: document.querySelector('#story-card .story-body').textContent.includes('<script>window.__hostile=1</script>')
     })`);
     verify.deepEqual(hostileStory, {state: "clear", executed: false, elements: false, text: true}, "story copy/state was changed or executed");
+    verify.equal(await evaluate(browser, `(() => /\\b[0-9a-f]{16,}\\b/i.test(document.getElementById('mode-story').innerText))()`), false, "opaque evidence ID was visible in Story");
 
     await evaluate(browser, `(() => {
       document.body.setAttribute('tabindex', '-1'); document.body.focus(); document.body.removeAttribute('tabindex'); window.scrollTo(0, 0);
@@ -477,7 +498,7 @@ async function main() {
     verify.deepEqual(responsive.controls, [], "mutation-like controls appeared");
     verify.equal(responsive.mutationForms, 0, "mutation form appeared");
     verify.deepEqual(responsive.panels, [["mode-outcomes", true], ["mode-crew", true], ["mode-evidence", false], ["mode-story", true]], "mode visibility is ambiguous");
-    verify.deepEqual(responsive.headings, ["Shipyard", "Outcomes", "Needs you", "Crew", "Skills", "Evidence", "Story"], "headings exceeded the locked short vocabulary");
+    verify.deepEqual(responsive.headings, ["Shipyard", "Repair observed Shipyard core job failure", "Needs you", "Crew", "Skills", "Evidence", "Story"], "heading hierarchy drifted or retained a redundant Outcomes label");
     verify.equal(responsive.treeItems, 4, "semantic narrow tree is incomplete");
     verify.equal(responsive.promiseChildrenContained, true, "promise content escaped its card");
 
@@ -496,11 +517,7 @@ async function main() {
     verify.equal(responseStatuses.some(item => item === "/api/events:200"), true, "events HTTP 200 not observed");
     verify.deepEqual(pageErrors, [], `page errors: ${pageErrors.join(" | ")}`);
 
-    if (options.width <= 700) {
-      await evaluate(browser, "document.getElementById('tab-crew').focus(); document.getElementById('tab-crew').click()");
-    } else {
-      await evaluate(browser, "document.getElementById('tab-outcomes').focus(); document.getElementById('tab-outcomes').click()");
-    }
+    await evaluate(browser, "document.getElementById('tab-outcomes').focus(); document.getElementById('tab-outcomes').click()");
     screenshotPath = join(resolve(options.screenshotDir), `dashboard-${options.width}x${options.height}.png`);
     await screenshot(browser, screenshotPath);
     server.kill("SIGTERM");
@@ -510,7 +527,7 @@ async function main() {
     success = true;
 
     console.log(`browser=${browser.version.product} executable=${browser.executable}`);
-    console.log(`viewport=${options.width}x${options.height} overflow=${overflow}px`);
+    console.log(`viewport=${options.width}x${options.height} overflow=${overflow}px outcomes_height=${outcomesHeight}px`);
     console.log(`operator_requests=${operatorRequests} unavailable_poll=true final_inspection_state=stale operator_wins=true`);
     console.log(`modes=Outcomes,Crew,Evidence,Story keyboard=skip,tabs,node,story focus_outline=${focusOutline}`);
     console.log(`topology=nodes:4,edges:3 supplied_order=true narrow_tree=${options.width <= 700}`);

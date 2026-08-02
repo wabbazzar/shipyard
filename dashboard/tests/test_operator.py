@@ -262,6 +262,97 @@ class OperatorComposerTest(unittest.TestCase):
         self.assertLessEqual(len(document["evidence"]), MAX_EVIDENCE)
         self.assertLessEqual(len(document["narrative"]["beats"]), MAX_STORY_BEATS)
 
+    def test_brief_preserves_controlled_action_and_qualified_counts(self) -> None:
+        inspection = inspection_fixture()
+        evidence_ids = [f"failure-{index}" for index in range(18)]
+        inspection["summary"] = {"fleet_state": "degraded_observed", "attention_count": 18}
+        inspection["priorities"] = [
+            {
+                "id": "priority-core-job-failure",
+                "rank": 1,
+                "category": "confirmed_failure",
+                "scope": "shipyard_core",
+                "claim_kind": "fact",
+                "rule_id": "core_job_failure_v1",
+                "title": "Repair observed Shipyard core job failure",
+                "project_ids": ["project-safe"],
+                "evidence_count": 18,
+                "newest_ts": "2026-08-01T10:00:00Z",
+                "evidence_ids": evidence_ids,
+                "operands": {"failure_records": 18},
+                "limitations": [],
+            }
+        ]
+        inspection["attention"] = []
+        inspection["evidence"] = [
+            {
+                "id": evidence_id,
+                "project_id": "project-safe",
+                "source": "events",
+                "kind": "job_result",
+                "observed_at": "2026-08-01T10:00:00Z",
+                "limitations": [],
+            }
+            for evidence_id in evidence_ids
+        ]
+
+        document = self.compose(inspection=inspection)
+        brief = document["brief"]
+        self.assertEqual(brief["takeaway"], "Repair observed Shipyard core job failure")
+        self.assertEqual(brief["action"], "Repair 18 observed Shipyard job failures")
+        attention_signal = next(row for row in brief["signals"] if row["id"] == "attention")
+        self.assertEqual(
+            (attention_signal["value"], attention_signal["unit"], attention_signal["observed"], attention_signal["total"]),
+            (1, "group", 1, 1),
+        )
+        group = brief["attention_groups"][0]
+        self.assertEqual(group["label"], "Repair observed Shipyard core job failure")
+        self.assertEqual(group["action"], "Repair 18 observed Shipyard job failures")
+        self.assertEqual((group["item_count"], group["evidence_count"], group["project_count"]), (1, 18, 1))
+
+    def test_brief_groups_attention_without_losing_evidence(self) -> None:
+        inspection = inspection_fixture()
+        evidence_ids = [f"failure-{index}" for index in range(20)]
+        inspection["summary"] = {"fleet_state": "degraded_observed", "attention_count": 10}
+        inspection["priorities"] = [
+            {
+                "id": f"priority-core-job-failure-{index}",
+                "rank": index + 1,
+                "category": "confirmed_failure",
+                "scope": "shipyard_core",
+                "claim_kind": "fact",
+                "rule_id": "core_job_failure_v1",
+                "title": "Repair observed Shipyard core job failure",
+                "project_ids": ["project-safe"],
+                "evidence_count": 2,
+                "newest_ts": f"2026-08-01T10:{index:02d}:00Z",
+                "evidence_ids": evidence_ids[index * 2 : index * 2 + 2],
+                "operands": {"failure_records": 2},
+                "limitations": [],
+            }
+            for index in range(10)
+        ]
+        inspection["attention"] = []
+        inspection["evidence"] = [
+            {
+                "id": evidence_id,
+                "project_id": "project-safe",
+                "source": "events",
+                "kind": "job_result",
+                "observed_at": "2026-08-01T10:00:00Z",
+                "limitations": [],
+            }
+            for evidence_id in evidence_ids
+        ]
+
+        document = self.compose(inspection=inspection)
+        self.assertEqual(len(document["attention"]), 10)
+        self.assertEqual(len(document["brief"]["attention_groups"]), 1)
+        group = document["brief"]["attention_groups"][0]
+        self.assertEqual((group["item_count"], group["evidence_count"]), (10, 20))
+        self.assertEqual(group["evidence_ids"], evidence_ids)
+        self.assertTrue(set(group["evidence_ids"]).issubset({row["id"] for row in document["evidence"]}))
+
     def test_response_redacts_paths_filenames_messages_and_result_prose(self) -> None:
         encoded = json.dumps(self.compose(), sort_keys=True)
         for forbidden in (
@@ -473,6 +564,7 @@ class OperatorFixtureContractTest(unittest.TestCase):
             "schema_version",
             "kind",
             "metadata",
+            "brief",
             "narrative",
             "promises",
             "outcomes",
@@ -590,6 +682,13 @@ class OperatorFixtureContractTest(unittest.TestCase):
         )
 
     def test_fixture_recursively_excludes_private_content_and_raw_history(self) -> None:
+        brief = self.document["brief"]
+        self.assertLessEqual(len(brief["signals"]), 4)
+        self.assertLessEqual(len(brief["attention_groups"]), 8)
+        self.assertEqual(
+            set(brief),
+            {"state", "takeaway", "action", "signals", "attention_groups", "limitations"},
+        )
         forbidden_keys = {
             "path",
             "paths",

@@ -26,6 +26,8 @@ INSPECTION_TTL_SECONDS = 300
 MAX_ATTENTION = 200
 MAX_EVIDENCE = 500
 MAX_STORY_BEATS = 8
+MAX_BRIEF_SIGNALS = 4
+MAX_ATTENTION_GROUPS = 8
 MAX_RELATIONSHIP_EDGES = 500
 MAX_OUTCOME_CHAINS = 500
 MAX_CHANGE_RANGES = 50
@@ -53,6 +55,33 @@ _TOKEN_FIELDS = (
     "output_tokens",
     "reasoning_tokens",
 )
+
+# Titles copied into the public brief must be controlled by the inspector rule,
+# never by an event, prompt, model result, or other free-form source field.
+_PRIORITY_LABELS = {
+    "core_doctor_drift_v1": "Repair observed Shipyard core install drift",
+    "core_job_failure_v1": "Repair observed Shipyard core job failure",
+    "core_restart_failure_v1": "Repair failed Shipyard core restart",
+    "core_critic_failure_v1": "Repair Shipyard core critic failure",
+    "core_human_gate_v1": "Resolve the Shipyard operator gate",
+    "cross_project_recurrence_v1": "Investigate a recurring fleet failure",
+    "core_evidenced_opportunity_v1": "Review the evidenced Shipyard opportunity",
+    "historical_benchmark_gap_v1": "Close outcome linkage",
+    "cross_project_coverage_gap_v1": "Close repeated coverage gaps",
+    "budget_gate_scope_mismatch_v1": "Scope shared budget gates to attributed projects",
+    "budget_gate_root_mismatch_v1": "Align unset runner budget roots with emitted events",
+    "duplicate_matching_manifest_v1": "Remove duplicate matching manifests",
+}
+_PRIORITY_NUMERIC_OPERANDS = {
+    "core_doctor_drift_v1": ("failure_records",),
+    "core_job_failure_v1": ("failure_records",),
+    "core_restart_failure_v1": ("failure_records",),
+    "core_critic_failure_v1": ("failure_records",),
+    "cross_project_recurrence_v1": ("project_count",),
+    "core_evidenced_opportunity_v1": ("resolved_signal_count",),
+    "cross_project_coverage_gap_v1": ("project_count",),
+    "duplicate_matching_manifest_v1": ("manifest_count",),
+}
 
 
 class OperatorDataError(ValueError):
@@ -386,6 +415,40 @@ def _promise_rows(inspection: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda row: (_STATE_RANK[row["state"]], row["id"]))
 
 
+def _priority_operands(rule_id: Optional[str], value: Any) -> dict[str, int | float]:
+    allowed = _PRIORITY_NUMERIC_OPERANDS.get(rule_id or "", ())
+    source = _object(value)
+    result: dict[str, int | float] = {}
+    for key in allowed:
+        number = _safe_number(source.get(key))
+        if number is not None and number >= 0:
+            result[key] = number
+    return result
+
+
+def _priority_action(
+    rule_id: Optional[str],
+    label: str,
+    operands: dict[str, int | float],
+    *,
+    evidence_count: int,
+) -> str:
+    if rule_id == "core_job_failure_v1" and isinstance(operands.get("failure_records"), int):
+        count = operands["failure_records"]
+        noun = "failure" if count == 1 else "failures"
+        return f"Repair {count} observed Shipyard job {noun}"
+    if rule_id == "core_doctor_drift_v1" and isinstance(operands.get("failure_records"), int):
+        return f"Repair {operands['failure_records']} observed Shipyard install drift records"
+    if rule_id == "core_restart_failure_v1" and isinstance(operands.get("failure_records"), int):
+        return f"Repair {operands['failure_records']} failed Shipyard restart records"
+    if rule_id == "core_critic_failure_v1" and isinstance(operands.get("failure_records"), int):
+        return f"Repair {operands['failure_records']} Shipyard critic failure records"
+    if evidence_count:
+        noun = "record" if evidence_count == 1 else "records"
+        return f"Review {evidence_count} {noun} for {label.lower()}"
+    return label
+
+
 def _attention_rows(inspection: Optional[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
     if inspection is None:
         return [], False
@@ -398,21 +461,31 @@ def _attention_rows(inspection: Optional[dict[str, Any]]) -> tuple[list[dict[str
         if item_id is None or not isinstance(rank, int) or category is None:
             continue
         rule_id = _safe_code(item.get("rule_id"))
-        safe_title = {
-            "budget_gate_root_mismatch_v1": "Align budget roots",
-            "budget_gate_scope_mismatch_v1": "Scope budget gates",
-            "cross_project_coverage_gap_v1": "Close repeated coverage gaps",
-            "historical_benchmark_gap_v1": "Close outcome linkage",
-        }.get(rule_id, category.replace("_", " ").title())
+        safe_title = _PRIORITY_LABELS.get(rule_id or "", category.replace("_", " ").title())
+        evidence_ids = _safe_ids(item.get("evidence_ids"))
+        evidence_count = _safe_number(item.get("evidence_count"))
+        if not isinstance(evidence_count, int) or evidence_count < len(evidence_ids):
+            evidence_count = len(evidence_ids)
+        operands = _priority_operands(rule_id, item.get("operands"))
+        project_ids = _safe_ids(item.get("project_ids"), limit=50)
+        state = "alarm" if category in {"confirmed_failure", "recurring_failure"} else "waiting"
         rows.append(
             {
                 "id": item_id,
                 "kind": "next_pr",
                 "label": safe_title,
+                "action": _priority_action(
+                    rule_id, safe_title, operands, evidence_count=evidence_count
+                ),
                 "rule_id": rule_id,
+                "scope": _safe_code(item.get("scope")) or "fleet",
+                "project_ids": project_ids,
+                "operands": operands,
                 "priority": rank,
-                "state": "waiting",
-                "evidence_ids": _safe_ids(item.get("evidence_ids")),
+                "state": state,
+                "detected_at": _safe_timestamp(item.get("newest_ts")),
+                "evidence_count": evidence_count,
+                "evidence_ids": evidence_ids,
                 "limitations": _safe_limitations(item.get("limitations")),
             }
         )
@@ -425,15 +498,26 @@ def _attention_rows(inspection: Optional[dict[str, Any]]) -> tuple[list[dict[str
             continue
         severity = item.get("severity_advisory")
         state = "alarm" if severity in {"high", "critical"} else "waiting"
+        label = kind.replace("_", " ").title()
+        evidence_ids = _safe_ids(item.get("evidence_ids"))
+        project_id = _safe_id(item.get("project_id"))
         rows.append(
             {
                 "id": item_id,
                 "kind": kind,
-                "label": kind.replace("_", " ").title(),
+                "label": label,
+                "action": _priority_action(
+                    None, label, {}, evidence_count=len(evidence_ids)
+                ),
+                "rule_id": f"attention_{kind}",
+                "scope": "project" if project_id is not None else "fleet",
+                "project_ids": [project_id] if project_id is not None else [],
+                "operands": {},
                 "priority": priority_offset + index,
                 "state": state,
                 "detected_at": _safe_timestamp(item.get("detected_at")),
-                "evidence_ids": _safe_ids(item.get("evidence_ids")),
+                "evidence_count": len(evidence_ids),
+                "evidence_ids": evidence_ids,
                 "limitations": _safe_limitations(item.get("limitations")),
             }
         )
@@ -1206,7 +1290,156 @@ def _coverage_rows(
     return rows
 
 
+def _brief_document(
+    promises: list[dict[str, Any]],
+    attention: list[dict[str, Any]],
+    outcomes: dict[str, Any],
+    *,
+    inspection_state: str,
+    attention_truncated: bool,
+) -> dict[str, Any]:
+    grouped: list[dict[str, Any]] = []
+    group_index: dict[tuple[str, str], int] = {}
+    for item in attention:
+        rule_id = item.get("rule_id") if isinstance(item.get("rule_id"), str) else item["kind"]
+        scope = item.get("scope") if isinstance(item.get("scope"), str) else "fleet"
+        key = (rule_id, scope)
+        if key not in group_index:
+            digest = hashlib.sha256(f"{rule_id}\0{scope}".encode("utf-8")).hexdigest()[:16]
+            group_index[key] = len(grouped)
+            grouped.append(
+                {
+                    "id": f"attention-group:{digest}",
+                    "label": item["label"],
+                    "action": item.get("action") or item["label"],
+                    "state": item["state"],
+                    "item_count": 0,
+                    "evidence_count": 0,
+                    "project_count": None,
+                    "latest_at": item.get("detected_at"),
+                    "evidence_ids": [],
+                    "limitations": [],
+                    "_project_ids": [],
+                    "_failure_records": 0,
+                    "_counts_complete": True,
+                }
+            )
+        group = grouped[group_index[key]]
+        group["item_count"] += 1
+        source_evidence_count = item.get("evidence_count")
+        if not (
+            isinstance(source_evidence_count, int)
+            and not isinstance(source_evidence_count, bool)
+            and source_evidence_count == len(item["evidence_ids"])
+        ):
+            group["_counts_complete"] = False
+        for evidence_id in item["evidence_ids"]:
+            if evidence_id not in group["evidence_ids"]:
+                group["evidence_ids"].append(evidence_id)
+        for project_id in item.get("project_ids", []):
+            if project_id not in group["_project_ids"]:
+                group["_project_ids"].append(project_id)
+        latest = item.get("detected_at")
+        if isinstance(latest, str) and (group["latest_at"] is None or latest > group["latest_at"]):
+            group["latest_at"] = latest
+        group["limitations"].extend(item.get("limitations", []))
+        failure_records = _object(item.get("operands")).get("failure_records")
+        if isinstance(failure_records, int) and not isinstance(failure_records, bool) and failure_records >= 0:
+            group["_failure_records"] += failure_records
+
+    for group in grouped:
+        group["project_count"] = len(group.pop("_project_ids")) or None
+        counts_complete = group.pop("_counts_complete")
+        group["evidence_count"] = len(group["evidence_ids"]) if counts_complete else None
+        failure_records = group.pop("_failure_records")
+        if group["label"] == _PRIORITY_LABELS["core_job_failure_v1"] and failure_records:
+            noun = "failure" if failure_records == 1 else "failures"
+            group["action"] = f"Repair {failure_records} observed Shipyard job {noun}"
+        group["limitations"] = sorted(set(group["limitations"]))
+        if len(group["evidence_ids"]) > 50:
+            group["evidence_ids"] = group["evidence_ids"][:50]
+            group["limitations"].append("evidence_truncated")
+
+    brief_limitations: list[str] = []
+    if inspection_state == "unavailable":
+        brief_limitations.append("inspection_unavailable")
+    elif inspection_state == "stale":
+        brief_limitations.append("inspection_stale")
+    if attention_truncated:
+        brief_limitations.append("attention_truncated")
+    if len(grouped) > MAX_ATTENTION_GROUPS:
+        brief_limitations.append("attention_groups_truncated")
+    bounded_groups = grouped[:MAX_ATTENTION_GROUPS]
+
+    promise_counts = {
+        state: sum(1 for item in promises if item["state"] == state)
+        for state in _STATE_RANK
+    }
+    assessed_promises = promise_counts["verified"] + promise_counts["violated"]
+    promise_state = (
+        "alarm"
+        if promise_counts["violated"]
+        else ("waiting" if promise_counts["unverified"] else "clear")
+    )
+    reliability = _object(outcomes.get("reliability"))
+    completed = _safe_number(reliability.get("completed"))
+    successful = _safe_number(reliability.get("successful"))
+    reliability_state = reliability.get("state")
+    if not isinstance(reliability_state, str):
+        reliability_state = "unknown"
+    signals = [
+        {
+            "id": "promises_verified",
+            "label": "Promises verified",
+            "value": promise_counts["verified"],
+            "unit": "promise" if promise_counts["verified"] == 1 else "promises",
+            "state": promise_state,
+            "observed": assessed_promises,
+            "total": len(promises),
+            "limitations": ["promise_evidence_incomplete"] if promise_counts["unverified"] else [],
+        },
+        {
+            "id": "successful_runs",
+            "label": "Successful runs",
+            "value": successful if successful is not None and successful >= 0 else None,
+            "unit": "completed run" if successful == 1 else "completed runs",
+            "state": reliability_state,
+            "observed": successful if successful is not None and successful >= 0 else None,
+            "total": completed if completed is not None and completed >= 0 else None,
+            "limitations": _safe_limitations(reliability.get("limitations")),
+        },
+        {
+            "id": "attention",
+            "label": "Attention",
+            "value": len(grouped),
+            "unit": "group" if len(grouped) == 1 else "groups",
+            "state": bounded_groups[0]["state"] if bounded_groups else "unknown",
+            "observed": len(bounded_groups),
+            "total": len(grouped),
+            "limitations": ["attention_truncated"] if attention_truncated else [],
+        },
+    ][:MAX_BRIEF_SIGNALS]
+    if bounded_groups:
+        lead = bounded_groups[0]
+        state = lead["state"]
+        takeaway = lead["label"]
+        action = lead["action"]
+    else:
+        state = "unknown" if inspection_state != "stale" else "waiting"
+        takeaway = "No operator action is currently evidenced"
+        action = "Review current evidence coverage"
+    return {
+        "state": state,
+        "takeaway": takeaway,
+        "action": action,
+        "signals": signals,
+        "attention_groups": bounded_groups,
+        "limitations": sorted(set(brief_limitations)),
+    }
+
+
 def _narrative_document(
+    brief: dict[str, Any],
     promises: list[dict[str, Any]],
     attention: list[dict[str, Any]],
     outcomes: dict[str, Any],
@@ -1214,7 +1447,7 @@ def _narrative_document(
     changes: list[dict[str, Any]],
 ) -> dict[str, Any]:
     counts = {state: sum(1 for item in promises if item["state"] == state) for state in _STATE_RANK}
-    focus = attention[0]["label"] if attention else "No operator action is currently evidenced"
+    focus = brief["takeaway"]
     beats = [
         {
             "id": "story:promises",
@@ -1226,9 +1459,9 @@ def _narrative_document(
         {
             "id": "story:attention",
             "heading": "Needs you",
-            "body": focus,
-            "state": attention[0]["state"] if attention else "clear",
-            "evidence_ids": attention[0]["evidence_ids"] if attention else [],
+            "body": brief["action"],
+            "state": brief["state"],
+            "evidence_ids": brief["attention_groups"][0]["evidence_ids"] if brief["attention_groups"] else [],
         },
     ]
     reliability = outcomes["reliability"]
@@ -1275,10 +1508,10 @@ def _narrative_document(
             }
         )
     return {
-        "heading": "Fleet promises",
-        "subline": "What changed, what held, and where evidence stops",
+        "heading": brief["takeaway"],
+        "subline": brief["action"],
         "focus": focus,
-        "operator_action": f"Inspect evidence for {focus}" if attention else "Keep watching the evidence stream",
+        "operator_action": brief["action"],
         "beats": beats[:MAX_STORY_BEATS],
     }
 
@@ -1322,6 +1555,13 @@ def compose_operator_document(
     topology_document, relationship_evidence = _topology_document(
         topology, summary, safe_events, relationships
     )
+    brief = _brief_document(
+        promises,
+        attention,
+        outcomes,
+        inspection_state=inspection_state,
+        attention_truncated=attention_truncated,
+    )
     changes = _safe_change_rows(changes)
     safe_change_limitations = _safe_limitations(
         change_limitations if change_limitations is not None else ["explicit_git_range_unavailable"]
@@ -1333,7 +1573,7 @@ def compose_operator_document(
         if row["id"] not in seen_evidence:
             unique_evidence.append(row)
             seen_evidence.add(row["id"])
-    consumers = [promises, attention, outcomes, topology_document, changes]
+    consumers = [brief, promises, attention, outcomes, topology_document, changes]
     unique_evidence, selected_evidence_ids, missing_evidence_ids, evidence_truncated = _bound_evidence(
         unique_evidence, consumers
     )
@@ -1388,12 +1628,13 @@ def compose_operator_document(
         }
     )
     narrative = _narrative_document(
-        promises, attention, outcomes, topology_document, changes
+        brief, promises, attention, outcomes, topology_document, changes
     )
     return {
         "schema_version": OPERATOR_VIEW_SCHEMA_VERSION,
         "kind": "shipyard.operator",
         "metadata": metadata,
+        "brief": brief,
         "narrative": narrative,
         "promises": promises,
         "outcomes": outcomes,

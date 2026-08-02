@@ -6,11 +6,19 @@
       "schema_version": 1,
       "build_version": "browser-fixture-v1",
       "rule_version": "operator-sentinel-v1",
-      "window": "24h",
+      "window": "7d",
       "generated_at": "2026-08-01T11:59:00Z",
       "inspection_state": "unavailable",
       "refresh_age_seconds": null,
       "limits": {"attention": 200, "evidence": 500, "story_beats": 8},
+      "limitations": ["sentinel_core_warming"]
+    },
+    "brief": {
+      "state": "unknown",
+      "takeaway": "Fleet evidence is still loading",
+      "action": "Retry after the bounded refresh",
+      "signals": [],
+      "attention_groups": [],
       "limitations": ["sentinel_core_warming"]
     },
     "narrative": {
@@ -38,11 +46,36 @@
       "schema_version": 1,
       "build_version": "browser-fixture-v1",
       "rule_version": "operator-sentinel-v1",
-      "window": "24h",
+      "window": "7d",
       "generated_at": "2026-08-01T12:00:00Z",
       "inspection_state": "stale",
       "refresh_age_seconds": 41,
       "limits": {"attention": 200, "evidence": 500, "story_beats": 8},
+      "limitations": ["event_index_refreshing", "operator_stale_sentinel"]
+    },
+    "brief": {
+      "state": "alarm",
+      "takeaway": "Repair observed Shipyard core job failure",
+      "action": "Repair 18 observed Shipyard job failures",
+      "signals": [
+        {"id": "promises_verified", "label": "Promises verified", "value": 1, "unit": "promise", "state": "alarm", "observed": 2, "total": 2, "limitations": []},
+        {"id": "successful_runs", "label": "Successful runs", "value": 3, "unit": "completed runs", "state": "partial", "observed": 3, "total": 7, "limitations": ["sentinel_partial"]},
+        {"id": "attention", "label": "Attention", "value": 1, "unit": "group", "state": "alarm", "observed": 1, "total": 1, "limitations": []}
+      ],
+      "attention_groups": [
+        {
+          "id": "attention-group:core-job-failure",
+          "label": "Repair observed Shipyard core job failure",
+          "action": "Repair 18 observed Shipyard job failures",
+          "state": "alarm",
+          "item_count": 2,
+          "evidence_count": 18,
+          "project_count": 1,
+          "latest_at": "2026-08-01T11:01:00Z",
+          "evidence_ids": ["abcdef0123456789abcdef0123456789"],
+          "limitations": []
+        }
+      ],
       "limitations": ["operator_stale_sentinel"]
     },
     "narrative": {
@@ -94,6 +127,7 @@
       {"source": "sentinel_alpha", "state": "available", "reason": "ok", "records_total": 1, "limitations": []}
     ],
     "evidence": [
+      {"id": "abcdef0123456789abcdef0123456789", "source": "operator_fixture", "kind": "job_failure", "observed_at": "2026-08-01T11:01:00Z", "fields": {"records": 18}, "limitations": []},
       {"id": "ev:second", "source": "operator_fixture", "kind": "sentinel_second", "observed_at": "2026-08-01T11:45:00Z", "fields": {"value": "OPERATOR EVIDENCE SECOND"}, "limitations": []},
       {"id": "ev:first", "source": "operator_fixture", "kind": "sentinel_first", "observed_at": "2026-08-01T11:30:00Z", "fields": {"value": "<img src=x onerror=window.__hostile=1><script>window.__hostile=1</script>"}, "limitations": ["evidence_sentinel_limit"]}
     ]

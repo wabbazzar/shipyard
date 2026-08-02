@@ -140,7 +140,7 @@ GET /api/operator?window=7d
 GET /api/operator?window=30d
 ```
 
-Schema v1 returns `kind: "shipyard.operator"` plus `metadata`, `narrative`,
+Schema v1 returns `kind: "shipyard.operator"` plus `metadata`, `brief`, `narrative`,
 `promises`, `outcomes`, `topology`, `changes`, `attention`, `coverage`, and
 `evidence`. The committed, deterministic example is
 [`dashboard/tests/fixtures/operator-v1.json`](../dashboard/tests/fixtures/operator-v1.json).
@@ -157,6 +157,13 @@ unavailable remains unknown rather than becoming an empty healthy fleet.
 Likewise, `unknown`, `partial`, `unverified`, and `not_applicable` are never
 collapsed into zero or success. The maximums are 200 attention items, 500
 evidence objects, and eight narrative beats; coverage reports truncation.
+
+The additive `brief` supplies one takeaway and action, no more than four
+qualified signals, and no more than eight core-grouped attention rows. Counts
+always retain their unit, state, and observed/total coverage. Summary modes use
+counted controls such as `Review 18 records`; only Evidence/detail renders the
+opaque IDs carried by `evidence_ids`. Clients must not regroup attention,
+rewrite the takeaway, or infer success from missing data.
 
 Compatibility within schema v1 is additive. Readers ignore unknown object
 members, retain supplied array order, and display an unrecognized enum as
