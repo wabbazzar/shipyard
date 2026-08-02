@@ -12,6 +12,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 from unittest import mock
 
 from dashboard.reader import EventReader
@@ -250,6 +251,152 @@ class ServerTest(unittest.TestCase):
                 self.assertEqual(status, 400)
                 self.assertEqual(payload["error"]["code"], code)
 
+    def test_operator_serves_last_good_while_index_refreshes(self) -> None:
+        initial_count = 2
+        refreshed = row("dashboard.refreshed", seconds_ago=0, status="ok")
+        with self.today.open("ab") as output:
+            output.write(encode(refreshed))
+        source_checksum = checksum(self.today)
+
+        entered = threading.Event()
+        release = threading.Event()
+        calls_lock = threading.Lock()
+        refresh_calls = 0
+        original_refresh = EventReader.refresh
+
+        def held_refresh(reader: EventReader) -> EventReader:
+            nonlocal refresh_calls
+            with calls_lock:
+                refresh_calls += 1
+            entered.set()
+            self.assertTrue(release.wait(2), "test did not release the held index refresh")
+            return original_refresh(reader)
+
+        results: queue.Queue[tuple[int, dict[str, str], object]] = queue.Queue()
+        request_threads = [
+            threading.Thread(
+                target=lambda: results.put(self.json_request("GET", "/api/operator?window=7d"))
+            )
+            for _ in range(6)
+        ]
+        with mock.patch.object(EventReader, "refresh", autospec=True, side_effect=held_refresh):
+            try:
+                for thread in request_threads:
+                    thread.start()
+                self.assertTrue(entered.wait(1), "changed event signature did not start a refresh")
+                response_deadline = time.monotonic() + 0.5
+                while results.qsize() < len(request_threads) and time.monotonic() < response_deadline:
+                    time.sleep(0.005)
+                self.assertTrue(
+                    results.qsize() == len(request_threads),
+                    "operator requests blocked behind the event-index rebuild",
+                )
+                for _ in request_threads:
+                    status, _, payload = results.get_nowait()
+                    self.assertEqual(status, 200)
+                    self.assertIn("event_index_refreshing", payload["metadata"]["limitations"])
+                    coverage = next(row for row in payload["coverage"] if row["source"] == "operator_events")
+                    self.assertEqual(coverage["records_total"], initial_count)
+                self.assertEqual(refresh_calls, 1, "concurrent requests started more than one rebuild")
+            finally:
+                release.set()
+                for thread in request_threads:
+                    thread.join(2)
+
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                status, _, payload = self.json_request("GET", "/api/operator?window=7d")
+                coverage = next(row for row in payload["coverage"] if row["source"] == "operator_events")
+                if coverage["records_total"] == initial_count + 1:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(status, 200)
+            self.assertEqual(coverage["records_total"], initial_count + 1)
+            self.assertNotIn("event_index_refreshing", payload["metadata"]["limitations"])
+        self.assertEqual(checksum(self.today), source_checksum)
+
+        failed = row("dashboard.failed-refresh", seconds_ago=0, status="error")
+        with self.today.open("ab") as output:
+            output.write(encode(failed))
+        failed_checksum = checksum(self.today)
+        failure_entered = threading.Event()
+
+        def failed_refresh(_reader: EventReader) -> EventReader:
+            failure_entered.set()
+            raise OSError("deliberate replacement-reader failure")
+
+        with mock.patch.object(EventReader, "refresh", autospec=True, side_effect=failed_refresh):
+            status, _, payload = self.json_request("GET", "/api/operator?window=7d")
+            self.assertEqual(status, 200)
+            self.assertTrue(failure_entered.wait(1), "failed refresh was not attempted")
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                status, _, payload = self.json_request("GET", "/api/operator?window=7d")
+                if "event_index_refresh_failed" in payload["metadata"]["limitations"]:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(status, 200)
+            self.assertIn("event_index_refresh_failed", payload["metadata"]["limitations"])
+            coverage = next(row for row in payload["coverage"] if row["source"] == "operator_events")
+            self.assertEqual(coverage["records_total"], initial_count + 1)
+        self.assertEqual(checksum(self.today), failed_checksum)
+
+    def test_operator_uses_last_good_document_during_rotation_and_truncation(self) -> None:
+        status, _, initial = self.json_request("GET", "/api/operator?window=7d")
+        self.assertEqual(status, 200)
+        initial_coverage = next(row for row in initial["coverage"] if row["source"] == "operator_events")
+        self.assertEqual(initial_coverage["records_total"], 2)
+
+        def assert_transition(mutate: Callable[[], None], expected_event: str, stale_count: int) -> None:
+            entered = threading.Event()
+            release = threading.Event()
+            original_refresh = EventReader.refresh
+
+            def held_refresh(reader: EventReader) -> EventReader:
+                entered.set()
+                self.assertTrue(release.wait(2), "test did not release the held index refresh")
+                return original_refresh(reader)
+
+            mutate()
+            with mock.patch.object(EventReader, "refresh", autospec=True, side_effect=held_refresh):
+                try:
+                    started = time.monotonic()
+                    status, _, stale = self.json_request("GET", "/api/operator?window=7d")
+                    elapsed = time.monotonic() - started
+                    self.assertTrue(entered.wait(1), "changed source did not start a rebuild")
+                    self.assertEqual(status, 200)
+                    self.assertLess(elapsed, 0.5)
+                    self.assertIn("event_index_refreshing", stale["metadata"]["limitations"])
+                    stale_coverage = next(
+                        row for row in stale["coverage"] if row["source"] == "operator_events"
+                    )
+                    self.assertEqual(stale_coverage["records_total"], stale_count)
+                finally:
+                    release.set()
+
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    status, _, fresh = self.json_request("GET", "/api/operator?window=7d")
+                    if any(item.get("fields", {}).get("event") == expected_event for item in fresh["evidence"]):
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(status, 200)
+                self.assertTrue(
+                    any(item.get("fields", {}).get("event") == expected_event for item in fresh["evidence"]),
+                    f"replacement index did not expose {expected_event}",
+                )
+
+        rotated = row("dashboard.rotation", seconds_ago=0, status="ok")
+
+        def rotate() -> None:
+            self.today.rename(self.today.with_suffix(".rotated"))
+            self.today.write_bytes(encode(rotated))
+
+        assert_transition(rotate, "dashboard.rotation", 2)
+
+        truncated = row("dashboard.truncation", seconds_ago=0, status="ok")
+        assert_transition(lambda: self.today.write_bytes(encode(truncated)), "dashboard.truncation", 1)
+
     def test_event_details_are_lazily_read_and_limit_is_enforced(self) -> None:
         with mock.patch.object(EventReader, "read_event", wraps=self.running.server.reader.read_event) as read:
             status, _, payload = self.json_request("GET", "/api/events?window=24h&limit=1")
@@ -262,21 +409,47 @@ class ServerTest(unittest.TestCase):
         appended = row("dashboard.append", seconds_ago=0, status="ok")
         with self.today.open("ab") as output:
             output.write(encode(appended))
-        _, _, advanced = self.json_request("GET", "/api/health")
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            _, _, advanced = self.json_request("GET", "/api/health")
+            if advanced["row_count"] == initial["row_count"] + 1:
+                break
+            time.sleep(0.01)
         self.assertEqual(advanced["row_count"], initial["row_count"] + 1)
         self.assertEqual(advanced["latest_timestamp"], appended["ts"])
         replacement = row("dashboard.rotation", seconds_ago=0, status="ok")
         self.today.rename(self.today.with_suffix(".old"))
         self.today.write_bytes(encode(replacement))
-        _, _, events = self.json_request("GET", "/api/events?window=24h")
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            _, _, events = self.json_request("GET", "/api/events?window=24h")
+            if events.get("count") == 1 and events["events"][0]["event"] == "dashboard.rotation":
+                break
+            time.sleep(0.01)
         self.assertEqual(events["count"], 1)
         self.assertEqual(events["events"][0]["event"], "dashboard.rotation")
+
+        truncated = row("dashboard.truncation", seconds_ago=0, status="ok")
+        self.today.write_bytes(encode(truncated))
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            _, _, events = self.json_request("GET", "/api/events?window=24h")
+            if events.get("count") == 1 and events["events"][0]["event"] == "dashboard.truncation":
+                break
+            time.sleep(0.01)
+        self.assertEqual(events["count"], 1)
+        self.assertEqual(events["events"][0]["event"], "dashboard.truncation")
 
     def test_api_escapes_lone_surrogates_without_crashing(self) -> None:
         hostile = row("dashboard.hostile", seconds_ago=0, detail="\ud800")
         with self.today.open("ab") as output:
             output.write(encode(hostile))
-        status, _, body = self.request("GET", "/api/events?window=24h&event=dashboard.hostile")
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            status, _, body = self.request("GET", "/api/events?window=24h&event=dashboard.hostile")
+            if json.loads(body)["count"] == 1:
+                break
+            time.sleep(0.01)
         self.assertEqual(status, 200)
         self.assertIn(b"\\ud800", body)
         self.assertEqual(json.loads(body)["events"][0]["detail"], "\ud800")

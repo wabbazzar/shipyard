@@ -202,6 +202,16 @@ def _summary_payload(reader: EventReader, window: str) -> dict[str, Any]:
     }
 
 
+def _with_event_index_limitation(payload: dict[str, Any], limitation: Optional[str]) -> dict[str, Any]:
+    if limitation is None:
+        return payload
+    response = dict(payload)
+    metadata = dict(payload["metadata"])
+    metadata["limitations"] = sorted(set(metadata["limitations"] + [limitation]))
+    response["metadata"] = metadata
+    return response
+
+
 @dataclass
 class TailState:
     path: Optional[Path] = None
@@ -256,6 +266,11 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.reader = EventReader(self.event_dir)
         self.reader_lock = threading.RLock()
         self._index_signature: tuple[tuple[str, int, int, int, int], ...] = ()
+        self._index_refresh_in_flight = False
+        self._index_refresh_failed_signature: Optional[tuple[tuple[str, int, int, int, int], ...]] = None
+        # At most one bounded operator document per validated window. This is
+        # enough to survive lazy-reference rotation without retaining raw rows.
+        self._operator_documents: dict[str, dict[str, Any]] = {}
         with self.reader_lock:
             self._refresh_index_locked()
         self.poll_interval = poll_interval
@@ -304,10 +319,71 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         # final concurrent mutation and retries instead of treating it as read.
         self._index_signature = before
 
-    def refresh_index_if_changed(self) -> None:
+    def _build_replacement_reader(
+        self,
+    ) -> tuple[EventReader, tuple[tuple[str, int, int, int, int], ...]]:
+        before: tuple[tuple[str, int, int, int, int], ...] = ()
+        replacement = EventReader(self.event_dir)
+        for _ in range(3):
+            before = self._event_signature()
+            replacement = EventReader(self.event_dir)
+            replacement.refresh()
+            after = self._event_signature()
+            if before == after:
+                return replacement, after
+        # The reader remains a safe per-file snapshot. Keeping the signature
+        # from immediately before its final build makes a later request notice
+        # the concurrent mutation and schedule another replacement.
+        return replacement, before
+
+    def _refresh_index_in_background(
+        self, requested_signature: tuple[tuple[str, int, int, int, int], ...]
+    ) -> None:
+        try:
+            replacement, replacement_signature = self._build_replacement_reader()
+        except Exception:
+            with self.reader_lock:
+                self._index_refresh_in_flight = False
+                self._index_refresh_failed_signature = requested_signature
+            return
         with self.reader_lock:
-            if self._event_signature() != self._index_signature:
-                self._refresh_index_locked()
+            self.reader = replacement
+            self._index_signature = replacement_signature
+            self._index_refresh_in_flight = False
+            self._index_refresh_failed_signature = None
+
+    def refresh_index_if_changed(self) -> None:
+        observed_signature = self._event_signature()
+        refresh_thread: Optional[threading.Thread] = None
+        with self.reader_lock:
+            if observed_signature == self._index_signature:
+                if not self._index_refresh_in_flight:
+                    self._index_refresh_failed_signature = None
+                return
+            if self._index_refresh_in_flight or observed_signature == self._index_refresh_failed_signature:
+                return
+            self._index_refresh_in_flight = True
+            self._index_refresh_failed_signature = None
+            refresh_thread = threading.Thread(
+                target=self._refresh_index_in_background,
+                args=(observed_signature,),
+                name="shipyard-event-index-refresh",
+                daemon=True,
+            )
+        try:
+            refresh_thread.start()
+        except RuntimeError:
+            with self.reader_lock:
+                self._index_refresh_in_flight = False
+                self._index_refresh_failed_signature = observed_signature
+
+    def index_refresh_limitation(self) -> Optional[str]:
+        with self.reader_lock:
+            if self._index_refresh_in_flight:
+                return "event_index_refreshing"
+            if self._index_refresh_failed_signature is not None:
+                return "event_index_refresh_failed"
+            return None
 
     def server_close(self) -> None:
         self.stop_event.set()
@@ -454,11 +530,22 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
     def _operator(self, window: str) -> None:
         self.dashboard.refresh_index_if_changed()
+        cached_payload: Optional[dict[str, Any]] = None
         with self.dashboard.reader_lock:
-            summary = _summary_payload(self.dashboard.reader, window)
-            refs = self.dashboard.reader.query_refs(window=window, limit=MAX_LIMIT)
-            events = [self.dashboard.reader.read_event(ref) for ref in refs]
-            event_stream_truncated = len(refs) == MAX_LIMIT
+            index_refresh_limitation = self.dashboard.index_refresh_limitation()
+            reader = self.dashboard.reader
+            try:
+                summary = _summary_payload(reader, window)
+                refs = reader.query_refs(window=window, limit=MAX_LIMIT)
+                events = [reader.read_event(ref) for ref in refs]
+                event_stream_truncated = len(refs) == MAX_LIMIT
+            except StaleReferenceError:
+                cached_payload = self.dashboard._operator_documents.get(window)
+                if cached_payload is None:
+                    raise
+        if cached_payload is not None:
+            self._json(200, _with_event_index_limitation(cached_payload, index_refresh_limitation))
+            return
         snapshot = self.dashboard.operator_cache.get(window)
         cached = snapshot.data or {}
         inspection = cached.get("inspection")
@@ -478,7 +565,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             changes=changes,
             change_limitations=change_limitations,
         )
-        self._json(200, payload)
+        with self.dashboard.reader_lock:
+            if self.dashboard.reader is reader:
+                self.dashboard._operator_documents[window] = payload
+        self._json(200, _with_event_index_limitation(payload, index_refresh_limitation))
 
     def _static(self, request_path: str) -> None:
         name, content_type = STATIC_FILES[request_path]
