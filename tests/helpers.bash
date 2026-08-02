@@ -51,6 +51,13 @@ quartet_setup() {
   export SHIPYARD_SCHEDULER=systemd
   mkdir -p "$HOME"
 
+  # Hermeticity: the suite must not inherit the invoking shell's ambient
+  # state. In particular CLAUDECODE=1 leaks in whenever bats is run from
+  # inside a Claude Code session (e.g. a release runner testing itself),
+  # which flips log_event.sh's source-inference and breaks byte-for-byte
+  # event assertions that assume no source/actor fields.
+  unset CLAUDECODE QUARTET_SOURCE QUARTET_ROLE QUARTET_RUN_ID QUARTET_OUTCOME_LINEAGE
+
   make_notify_stub
 }
 
