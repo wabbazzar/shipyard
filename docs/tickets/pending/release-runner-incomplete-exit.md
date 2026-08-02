@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-02
 - **Owner:** wabbazzar
-- **Status:** Pending
+- **Status:** In progress — Phase 1 verified 2026-08-02 CDT
 - **Priority:** critical
 - **Type:** bugfix
 - **Estimated Points:** 3 (two phases: 2 · 1)
@@ -292,7 +292,7 @@ but not self-merged.
 
 | Phase | Builder | Gates / Evidence | Commit | Result |
 |---|---|---|---|---|
-| 1 | pending | pending | pending | pending |
+| 1 | subagent (1 agent) | Pre-code real-runner sentinel failed with `expected fail-closed outer status 1, observed 0`. Post-fix release suites passed 33/33 and token/harness suites passed 34/34; Claude, Codex, and Hermes each produced outer/job exit 1 from `pass:false` + incomplete + transport 0 with one attempt and no retry. `pass:true/0`, `pass:true/9`, `pass:false/7`, blocking-gate 7/124, syntax, diff, leak, and delegation gates passed. Independently rerun by orchestrator. | this commit | complete |
 | 2 | orchestrator | pending | pending | pending |
 
 Execute with `execute-ticket
