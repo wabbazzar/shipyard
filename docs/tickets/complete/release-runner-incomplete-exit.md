@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-02
 - **Owner:** wabbazzar
-- **Status:** In progress — Phase 1 verified 2026-08-02 CDT
+- **Status:** Complete — built and verified 2026-08-02 CDT
 - **Priority:** critical
 - **Type:** bugfix
 - **Estimated Points:** 3 (two phases: 2 · 1)
@@ -266,18 +266,18 @@ but not self-merged.
 
 ## Definition of Done
 
-- [ ] The captured `run-in-progress` reproduction returns nonzero.
-- [ ] Every final `pass:false` plus zero transport exit returns exactly `1`.
-- [ ] Genuine nonzero harness and blocking-gate exit codes are preserved.
-- [ ] JSON, `job.end`, terminal log, fallback summary, and outer status agree.
-- [ ] Incomplete remains routine/non-actionable while blocking the caller.
-- [ ] Claude, Codex, and Hermes remain supported by the same generic contract.
-- [ ] The named outer-status coverage gap is closed with hermetic Bats tests.
-- [ ] Focused release suites, full `bats tests/`, syntax, leak, deck freshness,
+- [x] The captured `run-in-progress` reproduction returns nonzero.
+- [x] Every final `pass:false` plus zero transport exit returns exactly `1`.
+- [x] Genuine nonzero harness and blocking-gate exit codes are preserved.
+- [x] JSON, `job.end`, terminal log, fallback summary, and outer status agree.
+- [x] Incomplete remains routine/non-actionable while blocking the caller.
+- [x] Claude, Codex, and Hermes remain supported by the same generic contract.
+- [x] The named outer-status coverage gap is closed with hermetic Bats tests.
+- [x] Focused release suites, full `bats tests/`, syntax, leak, deck freshness,
       and deck completeness gates pass.
-- [ ] Aurora's effective release configuration is inspected and a live
+- [x] Aurora's effective release configuration is inspected and a live
       post-fix hook result is recorded.
-- [ ] Ledger records per-phase builder, gates, evidence, commit, and result.
+- [x] Ledger records per-phase builder, gates, evidence, commit, and result.
 
 ## Out of Scope
 
@@ -292,8 +292,8 @@ but not self-merged.
 
 | Phase | Builder | Gates / Evidence | Commit | Result |
 |---|---|---|---|---|
-| 1 | subagent (1 agent) | Pre-code real-runner sentinel failed with `expected fail-closed outer status 1, observed 0`. Post-fix release suites passed 33/33 and token/harness suites passed 34/34; Claude, Codex, and Hermes each produced outer/job exit 1 from `pass:false` + incomplete + transport 0 with one attempt and no retry. `pass:true/0`, `pass:true/9`, `pass:false/7`, blocking-gate 7/124, syntax, diff, leak, and delegation gates passed. Independently rerun by orchestrator. | this commit | complete |
-| 2 | orchestrator | pending | pending | pending |
+| 1 | subagent (1 agent) | Pre-code real-runner sentinel failed with `expected fail-closed outer status 1, observed 0`. Post-fix release suites passed 33/33 and token/harness suites passed 34/34; Claude, Codex, and Hermes each produced outer/job exit 1 from `pass:false` + incomplete + transport 0 with one attempt and no retry. `pass:true/0`, `pass:true/9`, `pass:false/7`, blocking-gate 7/124, syntax, diff, leak, and delegation gates passed. Independently rerun by orchestrator. | `d97065c` | complete |
+| 2 | orchestrator (inline: final gates and live installed-runner proof) | Final `bats tests/` passed 726/726. Syntax, Python compile, leak, deck freshness/completeness, diff, lifecycle, and delegation gates passed. A concurrent scheduled reviewer exposed and fixed one ambient-environment test leak in `8b94e8f`, then independently passed the same 726-test fleet surface. The hermetic matrix kept Claude, Codex, and Hermes on the same generic path; Aurora config inspection reported its active Codex shoulder configuration and `blocking_gate:null`. Its scheduled daily run and the controlled foreground hook both left `pass:false,incomplete:true,errors:["run-in-progress"]`; the installed fixed runner returned `1`, logged `done pass=false exit=1`, and systemd recorded the daily unit as failed with status 1. The first complete-suite attempt's timing-sensitive stop-poll case passed alone; after correcting the medic fixture's stale exit-zero expectation, the complete suite passed cleanly. | `8b94e8f` + this commit | complete |
 
 Execute with `execute-ticket
 docs/tickets/pending/release-runner-incomplete-exit.md`.
