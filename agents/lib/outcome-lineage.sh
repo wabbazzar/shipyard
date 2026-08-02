@@ -110,19 +110,29 @@ outcome_lineage_emit_build_items() {
       ((.branch // "") | type == "string" and length <= 255 and
         (. == "" or test("^[A-Za-z0-9._/-]+$"))) and
       ((.commit_sha // "") | type == "string" and
-        (. == "" or test("^[0-9a-fA-F]{7,64}$"))))
+        (. == "" or test("^[0-9a-fA-F]{7,64}$"))) and
+      ((.upstream_work_id // "") | type == "string" and length <= 256 and
+        (. == "" or test("^[A-Za-z0-9._:@-]+$"))))
   ' "$result_file" >/dev/null 2>&1 || return 1
 
-  while IFS=$'\t' read -r work_id classification outcome pr_url branch commit_sha; do
+  while IFS= read -r work_id &&
+        IFS= read -r classification &&
+        IFS= read -r outcome &&
+        IFS= read -r upstream_work_id &&
+        IFS= read -r pr_url &&
+        IFS= read -r branch &&
+        IFS= read -r commit_sha; do
     local fields=("work_id=$work_id" "classification=$classification" "outcome=$outcome")
+    [ -n "$upstream_work_id" ] && fields+=("upstream_work_id=$upstream_work_id")
     [ -n "$pr_url" ] && fields+=("pr_url=$pr_url")
     [ -n "$branch" ] && fields+=("branch=$branch")
     [ -n "$commit_sha" ] && fields+=("commit_sha=$commit_sha")
     "$log_event" "$svc" build.work.outcome "${fields[@]}" || true
-  done < <(jq -r '.items[] | [
+  done < <(jq -r '.items[] |
     .id, .classification,
     (.outcome // (if .classification == "SKIP" then "skipped"
       elif .classification == "SECURITY" then "security" else "" end)),
-    (.pr_url // ""), (.branch // ""), (.commit_sha // "")
-  ] | @tsv' "$result_file")
+    (.upstream_work_id // ""), (.pr_url // ""), (.branch // ""),
+    (.commit_sha // "")
+  ' "$result_file")
 }

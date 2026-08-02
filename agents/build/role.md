@@ -114,6 +114,7 @@ in your reasoning, not a feature.
   "items": [
     {
       "id": "fyi_... | chat:<conv_id>",
+      "upstream_work_id": "opaque prior work id", // explicit only; <=256 safe-id chars
       "classification": "ATTEMPT | SKIP | SECURITY",
       "reason": "...",                 // SKIP/SECURITY only
       "files_planned": [...],          // ATTEMPT only

@@ -26,9 +26,21 @@ INSPECTION_TTL_SECONDS = 300
 MAX_ATTENTION = 200
 MAX_EVIDENCE = 500
 MAX_STORY_BEATS = 8
+MAX_BRIEF_SIGNALS = 4
+MAX_ATTENTION_GROUPS = 8
 MAX_RELATIONSHIP_EDGES = 500
 MAX_OUTCOME_CHAINS = 500
 MAX_CHANGE_RANGES = 50
+MAX_SCOPE_PROJECTS = 50
+MAX_RUNTIME_EVENTS_PER_NODE = 20
+MAX_ARCHITECTURE_GRAPH_NODES = 32
+MAX_ARCHITECTURE_GRAPH_EDGES = 64
+MAX_PROJECT_RUNTIME_GRAPH_NODES = 8
+MAX_PROJECT_RUNTIME_GRAPH_EDGES = 8
+MAX_DELIVERY_GRAPHS = 50
+MAX_DELIVERY_GRAPH_NODES = 12
+MAX_DELIVERY_GRAPH_EDGES = 16
+MAX_GRAPH_EVIDENCE_IDS = 20
 WINDOW_DAYS = {"24h": 1, "7d": 7, "30d": 30}
 PROMISE_DEFINITIONS = (
     ("bugs_caught_and_fixed", "Bugs caught and fixed"),
@@ -46,6 +58,14 @@ _CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,127}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _STATE_RANK = {"violated": 0, "unverified": 1, "verified": 2, "not_applicable": 3}
 _ROLE_STATE_RANK = {"failed": 0, "stale": 1, "running": 2, "healthy": 3, "unknown": 4}
+_RUNTIME_TERMINAL_STATUSES = {"ok", "fail", "abort", "partial", "skipped"}
+_RUNTIME_TERMINAL_REASONS = {
+    "dirty",
+    "not_trunk",
+    "open_cap",
+    "budget",
+    "budget_deferred",
+}
 _TOKEN_FIELDS = (
     "input_tokens",
     "cache_read_tokens",
@@ -54,9 +74,55 @@ _TOKEN_FIELDS = (
     "reasoning_tokens",
 )
 
+# Titles copied into the public brief must be controlled by the inspector rule,
+# never by an event, prompt, model result, or other free-form source field.
+_PRIORITY_LABELS = {
+    "core_doctor_drift_v1": "Repair observed Shipyard core install drift",
+    "core_job_failure_v1": "Repair observed Shipyard core job failure",
+    "core_restart_failure_v1": "Repair failed Shipyard core restart",
+    "core_critic_failure_v1": "Repair Shipyard core critic failure",
+    "core_human_gate_v1": "Resolve the Shipyard operator gate",
+    "cross_project_recurrence_v1": "Investigate a recurring fleet failure",
+    "core_evidenced_opportunity_v1": "Review the evidenced Shipyard opportunity",
+    "historical_benchmark_gap_v1": "Close outcome linkage",
+    "cross_project_coverage_gap_v1": "Close repeated coverage gaps",
+    "budget_gate_scope_mismatch_v1": "Scope shared budget gates to attributed projects",
+    "budget_gate_root_mismatch_v1": "Align unset runner budget roots with emitted events",
+    "duplicate_matching_manifest_v1": "Remove duplicate matching manifests",
+}
+_PRIORITY_NUMERIC_OPERANDS = {
+    "core_doctor_drift_v1": ("failure_records",),
+    "core_job_failure_v1": ("failure_records",),
+    "core_restart_failure_v1": ("failure_records",),
+    "core_critic_failure_v1": ("failure_records",),
+    "cross_project_recurrence_v1": ("project_count",),
+    "core_evidenced_opportunity_v1": ("resolved_signal_count",),
+    "cross_project_coverage_gap_v1": ("project_count",),
+    "duplicate_matching_manifest_v1": ("manifest_count",),
+}
+
 
 class OperatorDataError(ValueError):
     """Raised when a core data source does not satisfy its public contract."""
+
+
+class GraphValidationError(OperatorDataError):
+    """Controlled graph rejection whose code is safe for public limitations."""
+
+    _CODES = {
+        "bound",
+        "cycle",
+        "dangling_endpoint",
+        "duplicate_id",
+        "invalid",
+        "project_isolation",
+    }
+
+    def __init__(self, code: str):
+        if code not in self._CODES:
+            code = "invalid"
+        self.code = code
+        super().__init__(f"graph validation failed: {code}")
 
 
 @dataclass(frozen=True)
@@ -211,6 +277,106 @@ def _safe_ids(values: Any, *, limit: int = 50) -> list[str]:
     return result
 
 
+def _controlled_explanation(
+    state: str,
+    limitations: list[str],
+    *,
+    terminal_status: Optional[str] = None,
+    terminal_reason: Optional[str] = None,
+) -> dict[str, str]:
+    """Return bounded public copy without forwarding source prose or codes."""
+    if state == "verified":
+        return {
+            "reason_code": "target_met",
+            "reason": "The observed evidence meets the configured target.",
+            "impact": "No promise gap is evidenced in this window.",
+            "action": "Keep monitoring the next evidence window.",
+        }
+    if state == "violated":
+        return {
+            "reason_code": "target_missed",
+            "reason": "The observed evidence does not meet the configured target.",
+            "impact": "The promised outcome is below its target in this window.",
+            "action": "Review the linked evidence and restore the target.",
+        }
+    if state == "not_applicable":
+        return {
+            "reason_code": "not_applicable",
+            "reason": "This measurement does not apply to the current population.",
+            "impact": "It is excluded from the verified total rather than counted as success or failure.",
+            "action": "No action is required unless the population changes.",
+        }
+    if terminal_status == "fail" or state == "failed":
+        return {
+            "reason_code": "runtime_failed",
+            "reason": "The latest recorded run ended in failure.",
+            "impact": "This role did not complete its scheduled work.",
+            "action": "Review the linked runtime evidence and repair the failing run.",
+        }
+    if terminal_status == "abort":
+        return {
+            "reason_code": "recorded_early_stop",
+            "reason": "The scheduled run stopped before producing a result.",
+            "impact": "This recorded early stop is not an outage; no completed result was produced.",
+            "action": "Review the run preconditions before the next scheduled attempt.",
+        }
+    if state == "healthy":
+        return {
+            "reason_code": "runtime_healthy",
+            "reason": "The latest recorded run completed successfully.",
+            "impact": "No runtime failure is evidenced for this role in the selected window.",
+            "action": "Keep monitoring the next scheduled run.",
+        }
+    if state == "running":
+        return {
+            "reason_code": "runtime_in_progress",
+            "reason": "A run started and has not recorded a terminal result yet.",
+            "impact": "The outcome is pending rather than successful or failed.",
+            "action": "Wait for the terminal event or investigate if the run becomes stale.",
+        }
+    if state == "stale":
+        return {
+            "reason_code": "runtime_stale",
+            "reason": "A run started but no timely terminal result was recorded.",
+            "impact": "The role may be stuck or its terminal telemetry may be missing.",
+            "action": "Inspect the latest run and its event coverage.",
+        }
+    if any(code == "unsupported_in_v1" or code.startswith("unsupported_") for code in limitations):
+        return {
+            "reason_code": "unsupported_in_v1",
+            "reason": "This measurement is not supported by the current evidence contract.",
+            "impact": "No success or failure conclusion can be drawn from this source.",
+            "action": "Add supported evidence before evaluating this promise.",
+        }
+    if "event_window_truncated" in limitations:
+        return {
+            "reason_code": "event_window_truncated",
+            "reason": "The selected event window exceeded the bounded outcome page.",
+            "impact": "The visible evidence may not contain the complete denominator.",
+            "action": "Use project runtime evidence or a narrower window before drawing a conclusion.",
+        }
+    if "inspection_unavailable" in limitations:
+        return {
+            "reason_code": "inspection_unavailable",
+            "reason": "The fleet inspection snapshot is unavailable.",
+            "impact": "This state cannot be verified from the current inspection.",
+            "action": "Restore inspection coverage and reassess the promise.",
+        }
+    if any("missing" in code or "partial" in code or "gap" in code for code in limitations):
+        return {
+            "reason_code": "evidence_incomplete",
+            "reason": "Required evidence is missing or incomplete for this measurement.",
+            "impact": "The state remains unknown rather than being counted as success.",
+            "action": "Close the named evidence coverage gap and reassess.",
+        }
+    return {
+        "reason_code": "evidence_unknown",
+        "reason": "Available evidence does not establish a verified state.",
+        "impact": "No success or failure conclusion is justified.",
+        "action": "Review evidence coverage before acting on this state.",
+    }
+
+
 def _event_evidence_id(event: dict[str, Any]) -> str:
     safe = {
         key: event.get(key)
@@ -223,6 +389,7 @@ def _event_evidence_id(event: dict[str, Any]) -> str:
             "disposition",
             "run_id",
             "work_id",
+            "upstream_work_id",
             "proposal_id",
             "incident_id",
             "critique_id",
@@ -248,6 +415,7 @@ def _safe_event_evidence(event: dict[str, Any]) -> dict[str, Any]:
         "disposition",
         "run_id",
         "work_id",
+        "upstream_work_id",
         "proposal_id",
         "incident_id",
         "critique_id",
@@ -344,6 +512,7 @@ def _promise_rows(inspection: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
     for key, label in PROMISE_DEFINITIONS:
         item = measured.get(key)
         if item is None:
+            limitations = ["inspection_unavailable" if inspection is None else "promise_evidence_missing"]
             rows.append(
                 {
                     "id": f"promise:{key}",
@@ -352,7 +521,8 @@ def _promise_rows(inspection: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
                     "target": {"operator": None, "value": None, "unit": None},
                     "observed_value": None,
                     "evidence_ids": [],
-                    "limitations": ["inspection_unavailable" if inspection is None else "promise_evidence_missing"],
+                    "limitations": limitations,
+                    **_controlled_explanation("unverified", limitations),
                 }
             )
             continue
@@ -372,6 +542,7 @@ def _promise_rows(inspection: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
             }[operator]
             state = "verified" if met else "violated"
         unit = _safe_code(item.get("unit"))
+        limitations = _safe_limitations(item.get("limitations"))
         rows.append(
             {
                 "id": f"promise:{key}",
@@ -380,10 +551,45 @@ def _promise_rows(inspection: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
                 "target": {"operator": operator, "value": target_value, "unit": unit},
                 "observed_value": observed,
                 "evidence_ids": _safe_ids(item.get("evidence_ids")),
-                "limitations": _safe_limitations(item.get("limitations")),
+                "limitations": limitations,
+                **_controlled_explanation(state, limitations),
             }
         )
     return sorted(rows, key=lambda row: (_STATE_RANK[row["state"]], row["id"]))
+
+
+def _priority_operands(rule_id: Optional[str], value: Any) -> dict[str, int | float]:
+    allowed = _PRIORITY_NUMERIC_OPERANDS.get(rule_id or "", ())
+    source = _object(value)
+    result: dict[str, int | float] = {}
+    for key in allowed:
+        number = _safe_number(source.get(key))
+        if number is not None and number >= 0:
+            result[key] = number
+    return result
+
+
+def _priority_action(
+    rule_id: Optional[str],
+    label: str,
+    operands: dict[str, int | float],
+    *,
+    evidence_count: int,
+) -> str:
+    if rule_id == "core_job_failure_v1" and isinstance(operands.get("failure_records"), int):
+        count = operands["failure_records"]
+        noun = "failure" if count == 1 else "failures"
+        return f"Repair {count} observed Shipyard job {noun}"
+    if rule_id == "core_doctor_drift_v1" and isinstance(operands.get("failure_records"), int):
+        return f"Repair {operands['failure_records']} observed Shipyard install drift records"
+    if rule_id == "core_restart_failure_v1" and isinstance(operands.get("failure_records"), int):
+        return f"Repair {operands['failure_records']} failed Shipyard restart records"
+    if rule_id == "core_critic_failure_v1" and isinstance(operands.get("failure_records"), int):
+        return f"Repair {operands['failure_records']} Shipyard critic failure records"
+    if evidence_count:
+        noun = "record" if evidence_count == 1 else "records"
+        return f"Review {evidence_count} {noun} for {label.lower()}"
+    return label
 
 
 def _attention_rows(inspection: Optional[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
@@ -398,21 +604,31 @@ def _attention_rows(inspection: Optional[dict[str, Any]]) -> tuple[list[dict[str
         if item_id is None or not isinstance(rank, int) or category is None:
             continue
         rule_id = _safe_code(item.get("rule_id"))
-        safe_title = {
-            "budget_gate_root_mismatch_v1": "Align budget roots",
-            "budget_gate_scope_mismatch_v1": "Scope budget gates",
-            "cross_project_coverage_gap_v1": "Close repeated coverage gaps",
-            "historical_benchmark_gap_v1": "Close outcome linkage",
-        }.get(rule_id, category.replace("_", " ").title())
+        safe_title = _PRIORITY_LABELS.get(rule_id or "", category.replace("_", " ").title())
+        evidence_ids = _safe_ids(item.get("evidence_ids"))
+        evidence_count = _safe_number(item.get("evidence_count"))
+        if not isinstance(evidence_count, int) or evidence_count < len(evidence_ids):
+            evidence_count = len(evidence_ids)
+        operands = _priority_operands(rule_id, item.get("operands"))
+        project_ids = _safe_ids(item.get("project_ids"), limit=50)
+        state = "alarm" if category in {"confirmed_failure", "recurring_failure"} else "waiting"
         rows.append(
             {
                 "id": item_id,
                 "kind": "next_pr",
                 "label": safe_title,
+                "action": _priority_action(
+                    rule_id, safe_title, operands, evidence_count=evidence_count
+                ),
                 "rule_id": rule_id,
+                "scope": _safe_code(item.get("scope")) or "fleet",
+                "project_ids": project_ids,
+                "operands": operands,
                 "priority": rank,
-                "state": "waiting",
-                "evidence_ids": _safe_ids(item.get("evidence_ids")),
+                "state": state,
+                "detected_at": _safe_timestamp(item.get("newest_ts")),
+                "evidence_count": evidence_count,
+                "evidence_ids": evidence_ids,
                 "limitations": _safe_limitations(item.get("limitations")),
             }
         )
@@ -425,15 +641,26 @@ def _attention_rows(inspection: Optional[dict[str, Any]]) -> tuple[list[dict[str
             continue
         severity = item.get("severity_advisory")
         state = "alarm" if severity in {"high", "critical"} else "waiting"
+        label = kind.replace("_", " ").title()
+        evidence_ids = _safe_ids(item.get("evidence_ids"))
+        project_id = _safe_id(item.get("project_id"))
         rows.append(
             {
                 "id": item_id,
                 "kind": kind,
-                "label": kind.replace("_", " ").title(),
+                "label": label,
+                "action": _priority_action(
+                    None, label, {}, evidence_count=len(evidence_ids)
+                ),
+                "rule_id": f"attention_{kind}",
+                "scope": "project" if project_id is not None else "fleet",
+                "project_ids": [project_id] if project_id is not None else [],
+                "operands": {},
                 "priority": priority_offset + index,
                 "state": state,
                 "detected_at": _safe_timestamp(item.get("detected_at")),
-                "evidence_ids": _safe_ids(item.get("evidence_ids")),
+                "evidence_count": len(evidence_ids),
+                "evidence_ids": evidence_ids,
                 "limitations": _safe_limitations(item.get("limitations")),
             }
         )
@@ -561,24 +788,296 @@ def _relationship_sources(relationships: Optional[dict[str, Any]]) -> list[dict[
     return rows
 
 
+def _fleet_projects(inspection: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
+    projects: list[dict[str, Any]] = []
+    for raw in _array(_object(inspection).get("fleet")):
+        item = _object(raw)
+        project_id = _safe_id(item.get("project_id"))
+        project_label = _safe_id(item.get("project_name"))
+        if project_id is None or project_label is None:
+            continue
+        roles = []
+        for value in _array(item.get("roles")):
+            role = _safe_code(value)
+            if role is not None and role not in roles:
+                roles.append(role)
+        projects.append(
+            {
+                "project_id": project_id,
+                "project_label": project_label,
+                "project_state": _safe_code(item.get("state")) or "unknown",
+                "roles": roles,
+            }
+        )
+        if len(projects) >= MAX_SCOPE_PROJECTS:
+            break
+    return projects
+
+
+def _safe_coverage_counts(item: dict[str, Any]) -> dict[str, Optional[int]]:
+    result: dict[str, Optional[int]] = {}
+    for key in (
+        "records_total",
+        "records_valid",
+        "records_invalid",
+        "records_out_of_window",
+        "records_unattributed",
+        "records_ambiguous",
+    ):
+        value = _safe_number(item.get(key))
+        result[key] = value if isinstance(value, int) and value >= 0 else None
+    return result
+
+
+def _scope_document(inspection: Optional[dict[str, Any]]) -> dict[str, Any]:
+    projects = _fleet_projects(inspection)
+    coverage = [_object(row) for row in _array(_object(inspection).get("coverage"))]
+    rows = []
+    for project in projects:
+        project_id = project["project_id"]
+        source_rows = [row for row in coverage if _safe_id(row.get("project_id")) == project_id]
+        event_row = next(
+            (row for row in source_rows if _safe_code(row.get("source")) == "events"),
+            {},
+        )
+        inspection_rows = [row for row in source_rows if _safe_code(row.get("source")) != "events"]
+        available_sources = sum(
+            1 for row in inspection_rows if _safe_code(row.get("state")) in {"available", "not_applicable"}
+        )
+        rows.append(
+            {
+                "project_id": project_id,
+                "project_label": project["project_label"],
+                "inspection": {
+                    "state": "available" if inspection is not None else "unknown",
+                    "project_state": project["project_state"],
+                    "sources_available": available_sources,
+                    "sources_total": len(inspection_rows),
+                },
+                "events": {
+                    "state": _safe_code(event_row.get("state")) or "unknown",
+                    "reason": _safe_code(event_row.get("reason")) or "unknown",
+                    **_safe_coverage_counts(event_row),
+                },
+            }
+        )
+    unattributed_row = next(
+        (
+            row
+            for row in coverage
+            if row.get("project_id") is None
+            and _safe_code(row.get("source")) == "events_attribution"
+        ),
+        {},
+    )
+    unattributed_counts = _safe_coverage_counts(unattributed_row)
+    return {
+        "kind": "current_user_fleet",
+        "label": "Current-user Shipyard fleet",
+        "projects": rows,
+        "unattributed": {
+            "state": _safe_code(unattributed_row.get("state")) or "unknown",
+            "records_unattributed": unattributed_counts["records_unattributed"],
+            "records_ambiguous": unattributed_counts["records_ambiguous"],
+        },
+        "limitations": ["scope_projects_truncated"] if len(_array(_object(inspection).get("fleet"))) > len(projects) else [],
+    }
+
+
+def _project_runtime_nodes(
+    declared: dict[str, Any],
+    summary: dict[str, Any],
+    runtime_events: list[dict[str, Any]],
+    inspection: Optional[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    projects = _fleet_projects(inspection)
+    project_by_id = {item["project_id"]: item for item in projects}
+    projects_by_label: dict[str, list[dict[str, Any]]] = {}
+    for project in projects:
+        projects_by_label.setdefault(project["project_label"], []).append(project)
+
+    def resolve_project(item: dict[str, Any]) -> Optional[dict[str, Any]]:
+        explicit = project_by_id.get(_safe_id(item.get("project_id")) or "")
+        if explicit is not None:
+            return explicit
+        matches = projects_by_label.get(_safe_id(item.get("project")) or "", [])
+        return matches[0] if len(matches) == 1 else None
+
+    role_labels = {item["id"]: item["name"] for item in declared["roles"] if item["id"] != "human"}
+    services: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for raw in _array(summary.get("services")):
+        item = _object(raw)
+        project = resolve_project(item)
+        role = _safe_code(item.get("role"))
+        if project is not None and role in role_labels:
+            services.setdefault((project["project_id"], role), []).append(item)
+
+    events: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for raw in runtime_events:
+        item = _object(raw)
+        if _safe_code(item.get("event")) not in {"job.start", "job.end"}:
+            continue
+        project = resolve_project(item)
+        role = _safe_code(item.get("role"))
+        service = _safe_id(item.get("svc"))
+        if project is None or role not in role_labels or service is None:
+            continue
+        bucket = events.setdefault((project["project_id"], role, service), [])
+        if len(bucket) < MAX_RUNTIME_EVENTS_PER_NODE:
+            bucket.append(item)
+
+    nodes: list[dict[str, Any]] = []
+    evidence: list[dict[str, Any]] = []
+    for project in projects:
+        observed_roles = {
+            role
+            for key in (*services.keys(), *events.keys())
+            if key[0] == project["project_id"]
+            for role in [key[1]]
+        }
+        roles = [role for role in role_labels if role in set(project["roles"]) | observed_roles]
+        for role in roles:
+            key = (project["project_id"], role)
+            role_services = services.get(key, [])
+            service_events = {
+                service: rows
+                for (project_id, event_role, service), rows in events.items()
+                if project_id == project["project_id"] and event_role == role
+            }
+            known_services = [
+                item for item in role_services if item.get("state") in _ROLE_STATE_RANK
+            ]
+            controlling_service: dict[str, Any] = {}
+            if known_services:
+                worst_rank = min(_ROLE_STATE_RANK[item["state"]] for item in known_services)
+                controlling_service = max(
+                    (
+                        item
+                        for item in known_services
+                        if _ROLE_STATE_RANK[item["state"]] == worst_rank
+                    ),
+                    key=lambda item: (
+                        _safe_timestamp(item.get("last_activity")) or "",
+                        _safe_id(item.get("svc")) or "",
+                    ),
+                )
+            state = controlling_service.get("state", "unknown")
+            controlling_svc = _safe_id(controlling_service.get("svc"))
+            if controlling_svc is None and len(service_events) == 1:
+                controlling_svc = next(iter(service_events))
+            role_events = service_events.get(controlling_svc, []) if controlling_svc else []
+            terminal_events = [
+                item
+                for item in role_events
+                if _safe_code(item.get("event")) == "job.end"
+            ]
+            terminal = max(
+                terminal_events,
+                key=lambda item: _safe_timestamp(item.get("ts")) or "",
+                default={},
+            )
+            terminal_status = _safe_code(controlling_service.get("terminal_status"))
+            if terminal_status not in _RUNTIME_TERMINAL_STATUSES:
+                terminal_status = _safe_code(terminal.get("status"))
+            terminal_reason = _safe_code(controlling_service.get("terminal_reason"))
+            if terminal_reason not in _RUNTIME_TERMINAL_REASONS:
+                terminal_reason = _safe_code(terminal.get("reason"))
+            if state == "failed":
+                terminal_status = "fail"
+                if _safe_code(controlling_service.get("terminal_status")) != "fail":
+                    terminal_reason = None
+            elif state == "healthy":
+                if terminal_status in {"fail", "abort", "partial", "skipped"}:
+                    state = "failed" if terminal_status == "fail" else "unknown"
+                else:
+                    terminal_status = "ok"
+                    terminal_reason = None
+            elif state in {"running", "stale"}:
+                terminal_status = None
+                terminal_reason = None
+            elif terminal_status not in _RUNTIME_TERMINAL_STATUSES:
+                terminal_status = None
+            if terminal_reason not in _RUNTIME_TERMINAL_REASONS:
+                terminal_reason = None
+            if not known_services and terminal_status == "ok":
+                state = "healthy"
+            elif not known_services and terminal_status == "fail":
+                state = "failed"
+            event_ids = [_event_evidence_id(item) for item in role_events]
+            timestamps = [
+                value
+                for item in role_events
+                if (value := _safe_timestamp(item.get("ts"))) is not None
+            ]
+            controlling_activity = _safe_timestamp(
+                controlling_service.get("last_activity")
+            )
+            if not timestamps and controlling_activity is not None:
+                timestamps.append(controlling_activity)
+            limitations = [] if role_events else ["runtime_lifecycle_unobserved"]
+            if len(service_events) > 1 or len(
+                {
+                    service
+                    for item in known_services
+                    if (service := _safe_id(item.get("svc"))) is not None
+                }
+            ) > 1:
+                limitations.append("runtime_sibling_services_omitted")
+            if any(item.get("runtime_identity_truncated") is True for item in role_events):
+                limitations.append("runtime_identity_truncated")
+            explanation = _controlled_explanation(
+                state,
+                limitations,
+                terminal_status=terminal_status,
+                terminal_reason=terminal_reason,
+            )
+            nodes.append(
+                {
+                    "id": f"runtime:{project['project_id']}:{role}",
+                    "kind": "role_runtime",
+                    "project_id": project["project_id"],
+                    "project_label": project["project_label"],
+                    "role_id": role,
+                    "label": role_labels[role],
+                    "scope": {
+                        "kind": "project",
+                        "project_id": project["project_id"],
+                        "project_label": project["project_label"],
+                    },
+                    "state": state,
+                    "observed_count": len(role_events),
+                    "last_activity": max(timestamps, default=None),
+                    "terminal_status": terminal_status,
+                    "terminal_reason": terminal_reason,
+                    "evidence_count": len(event_ids),
+                    "evidence_ids": event_ids,
+                    "limitations": limitations,
+                    **explanation,
+                }
+            )
+            for item in role_events:
+                evidence_row = _safe_event_evidence(item)
+                evidence_row["project_id"] = project["project_id"]
+                evidence.append(evidence_row)
+    return nodes, evidence
+
+
 def _topology_document(
     declared: dict[str, Any],
     summary: dict[str, Any],
     events: list[dict[str, Any]],
+    runtime_events: list[dict[str, Any]],
+    inspection: Optional[dict[str, Any]],
     relationships: Optional[dict[str, Any]],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     evidence: list[dict[str, Any]] = []
-    events_by_role: dict[str, list[dict[str, Any]]] = {}
-    for event in events:
-        role = _safe_code(event.get("role"))
-        if role is not None:
-            events_by_role.setdefault(role, []).append(event)
-    services_by_role: dict[str, list[dict[str, Any]]] = {}
-    for raw in _array(summary.get("services")):
-        service = _object(raw)
-        role = _safe_code(service.get("role"))
-        if role is not None:
-            services_by_role.setdefault(role, []).append(service)
+    runtime_nodes, runtime_evidence = _project_runtime_nodes(
+        declared, summary, runtime_events, inspection
+    )
+    evidence.extend(runtime_evidence)
+    runtime_by_role: dict[str, list[dict[str, Any]]] = {}
+    for node in runtime_nodes:
+        runtime_by_role.setdefault(node["role_id"], []).append(node)
 
     nodes: list[dict[str, Any]] = []
     for role in declared["roles"]:
@@ -598,23 +1097,33 @@ def _topology_document(
                 }
             )
             continue
-        services = services_by_role.get(role_id, [])
-        states = [item.get("state") for item in services if item.get("state") in _ROLE_STATE_RANK]
+        constituents = runtime_by_role.get(role_id, [])
+        states = [item.get("state") for item in constituents if item.get("state") in _ROLE_STATE_RANK]
         state = min(states, key=lambda value: _ROLE_STATE_RANK[value]) if states else "unknown"
-        role_events = events_by_role.get(role_id, [])
-        ids = [_event_evidence_id(item) for item in role_events[:10]]
-        activity = [timestamp for item in role_events if (timestamp := _safe_timestamp(item.get("ts"))) is not None]
+        ids = [evidence_id for item in constituents for evidence_id in item["evidence_ids"]][:10]
+        activity = [
+            item["last_activity"]
+            for item in constituents
+            if item.get("last_activity") is not None
+        ]
+        observed_count = sum(item["observed_count"] for item in constituents)
+        limitations = [] if observed_count else ["role_runtime_unobserved"]
+        explanation = _controlled_explanation(state, limitations)
         nodes.append(
             {
                 "id": f"role:{role_id}",
                 "kind": "role",
                 "label": role["name"],
                 "loop": role["loop"],
+                "scope": {"kind": "current_user_fleet", "project_id": None, "project_label": None},
                 "state": state,
-                "observed_count": len(role_events),
+                "observed_count": observed_count,
                 "last_activity": max(activity, default=None),
+                "reduction_rule": "worst_known_state_unknown_if_none",
+                "constituent_projects": [item["project_id"] for item in constituents],
                 "evidence_ids": ids,
-                "limitations": [] if services else ["role_runtime_unobserved"],
+                "limitations": limitations,
+                **explanation,
             }
         )
 
@@ -769,12 +1278,719 @@ def _topology_document(
     return (
         {
             "nodes": nodes,
+            "runtime_nodes": runtime_nodes,
             "declared_edges": declared_edges,
             "observed_edges": observed_edges[:MAX_RELATIONSHIP_EDGES],
             "limitations": ["relationship_edges_truncated"] if len(observed_edges) > MAX_RELATIONSHIP_EDGES else [],
         },
         evidence,
     )
+
+
+def _validate_and_rank_graph(
+    graph: dict[str, Any],
+    *,
+    max_nodes: int,
+    max_edges: int,
+) -> dict[str, Any]:
+    """Validate a bounded public DAG and assign deterministic Kahn ranks."""
+    if _safe_id(graph.get("id")) is None:
+        raise GraphValidationError("invalid")
+    if _safe_code(graph.get("kind")) not in {"architecture", "project_runtime", "delivery"}:
+        raise GraphValidationError("invalid")
+    label = graph.get("label")
+    if not isinstance(label, str) or not label or len(label) > 80:
+        raise GraphValidationError("invalid")
+    if _safe_code(graph.get("state")) is None:
+        raise GraphValidationError("invalid")
+    scope = _object(graph.get("scope"))
+    scope_kind = _safe_code(scope.get("kind"))
+    if scope_kind not in {"current_user_fleet", "project", "unattributed"}:
+        raise GraphValidationError("invalid")
+    project_id = _safe_id(scope.get("project_id"))
+    project_label = scope.get("project_label")
+    if scope_kind == "current_user_fleet":
+        if scope.get("project_id") is not None or scope.get("project_label") is not None:
+            raise GraphValidationError("project_isolation")
+    elif project_id is None or not isinstance(project_label, str) or not project_label:
+        raise GraphValidationError("invalid")
+
+    nodes = _array(graph.get("nodes"))
+    edges = _array(graph.get("edges"))
+    if not nodes or len(nodes) > max_nodes or len(edges) > max_edges:
+        raise GraphValidationError("bound")
+    node_by_id: dict[str, dict[str, Any]] = {}
+    node_order: dict[str, int] = {}
+    for ordinal, raw in enumerate(nodes):
+        node = _object(raw)
+        node_id = _safe_id(node.get("id"))
+        node_label = node.get("label")
+        if node_id is None:
+            raise GraphValidationError("invalid")
+        if node_id in node_by_id:
+            raise GraphValidationError("duplicate_id")
+        if _safe_code(node.get("kind")) is None or _safe_code(node.get("state")) is None:
+            raise GraphValidationError("invalid")
+        if not isinstance(node_label, str) or not node_label or len(node_label) > 80:
+            raise GraphValidationError("invalid")
+        if scope_kind != "current_user_fleet" and node.get("project_id") != project_id:
+            raise GraphValidationError("project_isolation")
+        evidence_count = node.get("evidence_count")
+        evidence_ids = _array(node.get("evidence_ids"))
+        if not isinstance(evidence_count, int) or evidence_count < 0:
+            raise GraphValidationError("invalid")
+        if len(evidence_ids) > MAX_GRAPH_EVIDENCE_IDS or any(_safe_id(value) is None for value in evidence_ids):
+            raise GraphValidationError("invalid")
+        if len(_safe_limitations(node.get("limitations"))) != len(_array(node.get("limitations"))):
+            raise GraphValidationError("invalid")
+        node_by_id[node_id] = dict(node)
+        node_order[node_id] = ordinal
+
+    edge_ids: set[str] = set()
+    outgoing: dict[str, list[str]] = {node_id: [] for node_id in node_by_id}
+    indegree = {node_id: 0 for node_id in node_by_id}
+    for raw in edges:
+        edge = _object(raw)
+        edge_id = _safe_id(edge.get("id"))
+        source = _safe_id(edge.get("from"))
+        target = _safe_id(edge.get("to"))
+        if edge_id is None:
+            raise GraphValidationError("invalid")
+        if edge_id in edge_ids:
+            raise GraphValidationError("duplicate_id")
+        if source not in node_by_id or target not in node_by_id:
+            raise GraphValidationError("dangling_endpoint")
+        if source == target:
+            raise GraphValidationError("cycle")
+        if _safe_code(edge.get("kind")) is None or _safe_code(edge.get("state")) is None:
+            raise GraphValidationError("invalid")
+        evidence_count = edge.get("evidence_count")
+        evidence_ids = _array(edge.get("evidence_ids"))
+        if not isinstance(evidence_count, int) or evidence_count < 0:
+            raise GraphValidationError("invalid")
+        if len(evidence_ids) > MAX_GRAPH_EVIDENCE_IDS or any(_safe_id(value) is None for value in evidence_ids):
+            raise GraphValidationError("invalid")
+        if len(_safe_limitations(edge.get("limitations"))) != len(_array(edge.get("limitations"))):
+            raise GraphValidationError("invalid")
+        edge_ids.add(edge_id)
+        outgoing[source].append(target)
+        indegree[target] += 1
+
+    ready = sorted((node_id for node_id, degree in indegree.items() if degree == 0), key=node_order.get)
+    rank_by_node = {node_id: 0 for node_id in node_by_id}
+    visited: list[str] = []
+    while ready:
+        source = ready.pop(0)
+        visited.append(source)
+        for target in outgoing[source]:
+            rank_by_node[target] = max(rank_by_node[target], rank_by_node[source] + 1)
+            indegree[target] -= 1
+            if indegree[target] == 0:
+                ready.append(target)
+                ready.sort(key=node_order.get)
+    if len(visited) != len(node_by_id):
+        raise GraphValidationError("cycle")
+    ranks = [
+        [node_id for node_id in node_by_id if rank_by_node[node_id] == rank]
+        for rank in range(max(rank_by_node.values(), default=0) + 1)
+    ]
+    ordered_ids = [node_id for rank in ranks for node_id in rank]
+    return {
+        **graph,
+        "nodes": [node_by_id[node_id] for node_id in ordered_ids],
+        "edges": [dict(_object(edge)) for edge in edges],
+        "ranks": ranks,
+        "limitations": _safe_limitations(graph.get("limitations")),
+    }
+
+
+def _graph_node(
+    node_id: str,
+    kind: str,
+    label: str,
+    state: str,
+    *,
+    project_id: Optional[str] = None,
+    evidence_ids: Optional[list[str]] = None,
+    limitations: Optional[list[str]] = None,
+    reason: str,
+    **fields: Any,
+) -> dict[str, Any]:
+    safe_evidence = [value for value in (evidence_ids or []) if _safe_id(value) is not None]
+    return {
+        "id": node_id,
+        "kind": kind,
+        "label": label,
+        "state": state,
+        **({"project_id": project_id} if project_id is not None else {}),
+        "reason": reason,
+        "evidence_count": len(safe_evidence),
+        "evidence_ids": safe_evidence[:MAX_GRAPH_EVIDENCE_IDS],
+        "limitations": _safe_limitations(limitations),
+        **fields,
+    }
+
+
+def _graph_edge(
+    edge_id: str,
+    kind: str,
+    source: str,
+    target: str,
+    state: str,
+    *,
+    evidence_ids: Optional[list[str]] = None,
+    reason: str,
+) -> dict[str, Any]:
+    safe_evidence = [value for value in (evidence_ids or []) if _safe_id(value) is not None]
+    return {
+        "id": edge_id,
+        "kind": kind,
+        "from": source,
+        "to": target,
+        "state": state,
+        "reason": reason,
+        "evidence_count": len(safe_evidence),
+        "evidence_ids": safe_evidence[:MAX_GRAPH_EVIDENCE_IDS],
+        "limitations": [],
+    }
+
+
+def _architecture_graph(topology: dict[str, Any]) -> dict[str, Any]:
+    nodes = [
+        _graph_node(
+            item["id"],
+            item["kind"],
+            item["label"],
+            "declared",
+            reason="Declared in the Shipyard architecture contract.",
+        )
+        for item in _array(topology.get("nodes"))
+        if _safe_code(_object(item).get("kind")) in {"human", "role", "skill"}
+        and not (
+            _safe_code(_object(item).get("kind")) == "skill"
+            and _safe_code(_object(item).get("skill_kind")) == "observed"
+        )
+    ]
+    nodes.append(
+        _graph_node(
+            "outcome:delivered-change",
+            "outcome",
+            "Delivered change",
+            "expected",
+            reason="The build workflow is expected to produce a delivered change.",
+        )
+    )
+    edges = [
+        _graph_edge(
+            item["id"],
+            item["kind"],
+            item["from"],
+            item["to"],
+            "declared",
+            reason="This connection is explicitly declared by Shipyard.",
+        )
+        for item in _array(topology.get("declared_edges"))
+    ]
+    if any(node["id"] == "skill:execute-ticket" for node in nodes):
+        edges.append(
+            _graph_edge(
+                "outcome:execute-ticket:delivered-change",
+                "outcome",
+                "skill:execute-ticket",
+                "outcome:delivered-change",
+                "declared",
+                reason="Execute Ticket owns the declared delivery outcome.",
+            )
+        )
+    return _validate_and_rank_graph(
+        {
+            "id": "graph:fleet-architecture",
+            "kind": "architecture",
+            "label": "Fleet architecture",
+            "scope": {"kind": "current_user_fleet", "project_id": None, "project_label": None},
+            "state": "declared",
+            "nodes": nodes,
+            "edges": edges,
+            "limitations": [],
+        },
+        max_nodes=MAX_ARCHITECTURE_GRAPH_NODES,
+        max_edges=MAX_ARCHITECTURE_GRAPH_EDGES,
+    )
+
+
+def _runtime_graphs(
+    topology: dict[str, Any],
+    inspection: Optional[dict[str, Any]],
+    unattributed_delivery_events: Optional[list[dict[str, Any]]] = None,
+) -> list[dict[str, Any]]:
+    runtime_nodes = [_object(item) for item in _array(topology.get("runtime_nodes"))]
+    graph_state_rank = {"failed": 0, "unknown": 1, "stale": 2, "running": 3, "healthy": 4}
+    graphs: list[dict[str, Any]] = []
+    for project in _fleet_projects(inspection):
+        project_id = project["project_id"]
+        project_label = project["project_label"]
+        roles = [item for item in runtime_nodes if item.get("project_id") == project_id]
+        root_id = f"runtime-project:{project_id}"
+        nodes = [
+            _graph_node(
+                root_id,
+                "project",
+                project_label,
+                project["project_state"],
+                project_id=project_id,
+                reason="This project is in the current-user Shipyard fleet.",
+            )
+        ]
+        edges = []
+        for item in roles[: MAX_PROJECT_RUNTIME_GRAPH_NODES - 1]:
+            nodes.append(
+                _graph_node(
+                    item["id"],
+                    "role_runtime",
+                    item["label"],
+                    item["state"],
+                    project_id=project_id,
+                    evidence_ids=_array(item.get("evidence_ids")),
+                    limitations=_safe_limitations(item.get("limitations")),
+                    reason=item.get("reason") if isinstance(item.get("reason"), str) else "Runtime evidence is unavailable.",
+                    impact=item.get("impact"),
+                    action=item.get("action"),
+                    role_id=item.get("role_id"),
+                    last_activity=item.get("last_activity"),
+                )
+            )
+            edges.append(
+                _graph_edge(
+                    f"runtime-scope:{project_id}:{item['role_id']}",
+                    "project_role",
+                    root_id,
+                    item["id"],
+                    "scoped",
+                    reason="This runtime role belongs to the named project.",
+                )
+            )
+        graph_limitations = []
+        if len(roles) > MAX_PROJECT_RUNTIME_GRAPH_NODES - 1:
+            graph_limitations.append("runtime_roles_truncated")
+        graphs.append(
+            _validate_and_rank_graph(
+                {
+                    "id": f"graph:runtime:{project_id}",
+                    "kind": "project_runtime",
+                    "label": f"{project_label} runtime",
+                    "scope": {"kind": "project", "project_id": project_id, "project_label": project_label},
+                    "state": min((item["state"] for item in roles), key=lambda value: graph_state_rank.get(value, 1), default="unknown"),
+                    "nodes": nodes,
+                    "edges": edges,
+                    "limitations": graph_limitations,
+                },
+                max_nodes=MAX_PROJECT_RUNTIME_GRAPH_NODES,
+                max_edges=MAX_PROJECT_RUNTIME_GRAPH_EDGES,
+            )
+        )
+    scope = _scope_document(inspection)
+    unattributed = _object(scope.get("unattributed"))
+    unattributed_count = sum(
+        value for key in ("records_unattributed", "records_ambiguous")
+        if isinstance((value := unattributed.get(key)), int) and value >= 0
+    )
+    unattributed_event_ids = [
+        _event_evidence_id(event)
+        for event in (unattributed_delivery_events or [])
+    ]
+    unattributed_count = max(unattributed_count, len(unattributed_event_ids))
+    unattributed_id = "unattributed"
+    graphs.append(
+        _validate_and_rank_graph(
+            {
+                "id": "graph:runtime:unattributed",
+                "kind": "project_runtime",
+                "label": "Unattributed runtime evidence",
+                "scope": {"kind": "unattributed", "project_id": unattributed_id, "project_label": "Unattributed evidence"},
+                "state": "unknown",
+                "nodes": [
+                    _graph_node(
+                        "runtime-project:unattributed",
+                        "unattributed",
+                        "Unattributed evidence",
+                        "unknown",
+                        project_id=unattributed_id,
+                        reason="These records could not be assigned to exactly one fleet project.",
+                    ),
+                    _graph_node(
+                        "runtime:unattributed:records",
+                        "evidence_bucket",
+                        "Unattributed records",
+                        "unknown",
+                        project_id=unattributed_id,
+                        evidence_ids=unattributed_event_ids,
+                        reason="Project ownership is unavailable for these operator records.",
+                        evidence_count=unattributed_count,
+                    ),
+                ],
+                "edges": [
+                    _graph_edge(
+                        "runtime-scope:unattributed:records",
+                        "unattributed_evidence",
+                        "runtime-project:unattributed",
+                        "runtime:unattributed:records",
+                        "unknown",
+                        reason="The records are explicitly separated from named projects.",
+                    )
+                ],
+                "limitations": ["project_attribution_unavailable"],
+            },
+            max_nodes=MAX_PROJECT_RUNTIME_GRAPH_NODES,
+            max_edges=MAX_PROJECT_RUNTIME_GRAPH_EDGES,
+        )
+    )
+    return graphs
+
+
+def _delivery_graphs(
+    events: list[dict[str, Any]], inspection: Optional[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]]]:
+    projects = _fleet_projects(inspection)
+    by_id = {item["project_id"]: item for item in projects}
+    by_label: dict[str, list[dict[str, Any]]] = {}
+    for project in projects:
+        by_label.setdefault(project["project_label"], []).append(project)
+
+    def direct_project_for(event: dict[str, Any]) -> Optional[tuple[str, str]]:
+        explicit_id = _safe_id(event.get("project_id"))
+        explicit_label = _safe_id(event.get("project"))
+        if explicit_id is not None:
+            installed = by_id.get(explicit_id)
+            return (
+                (installed["project_id"], installed["project_label"])
+                if installed is not None else None
+            )
+        matches = by_label.get(explicit_label or "", [])
+        if len(matches) == 1:
+            return matches[0]["project_id"], matches[0]["project_label"]
+        return None
+
+    run_projects: dict[str, set[tuple[str, str]]] = {}
+    for event in events:
+        run_id = _safe_id(event.get("run_id"))
+        project = direct_project_for(event)
+        if run_id is not None and project is not None:
+            run_projects.setdefault(run_id, set()).add(project)
+
+    def project_for(event: dict[str, Any]) -> Optional[tuple[str, str]]:
+        direct = direct_project_for(event)
+        if direct is not None:
+            return direct
+        if event.get("project_id") not in (None, "") or event.get("project") not in (None, ""):
+            return None
+        run_id = _safe_id(event.get("run_id"))
+        matches = run_projects.get(run_id or "", set())
+        return next(iter(matches)) if len(matches) == 1 else None
+
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    unattributed_events: list[dict[str, Any]] = []
+    for event in events:
+        project = project_for(event)
+        if project is not None:
+            grouped.setdefault(project, []).append(event)
+        elif any(
+            _safe_id(event.get(key)) is not None
+            for key in ("proposal_id", "incident_id", "work_id", "upstream_work_id")
+        ):
+            unattributed_events.append(event)
+
+    graphs: list[dict[str, Any]] = []
+    limitations: list[str] = []
+    for (project_id, project_label), rows in grouped.items():
+        raw_nodes: dict[str, dict[str, Any]] = {}
+        raw_edges: list[dict[str, Any]] = []
+        edge_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+        proposal_ids = {
+            value for event in rows
+            if (value := _safe_id(event.get("proposal_id"))) is not None
+        }
+        incident_ids = {
+            value for event in rows
+            if (value := _safe_id(event.get("incident_id"))) is not None
+        }
+
+        def add_node(node_id: str, kind: str, label: str, evidence_id: str) -> None:
+            existing = raw_nodes.get(node_id)
+            if existing is None:
+                raw_nodes[node_id] = _graph_node(
+                    node_id,
+                    kind,
+                    label,
+                    "observed",
+                    project_id=project_id,
+                    evidence_ids=[evidence_id],
+                    reason="This stage is linked by an explicit event identifier.",
+                )
+            else:
+                if kind in {"proposal", "incident", "ticket"}:
+                    existing["kind"] = kind
+                    existing["label"] = label
+                if evidence_id not in existing["evidence_ids"]:
+                    existing["evidence_ids"].append(evidence_id)
+                    existing["evidence_ids"] = existing["evidence_ids"][:MAX_GRAPH_EVIDENCE_IDS]
+                    existing["evidence_count"] += 1
+
+        def add_edge(source: str, target: str, kind: str, evidence_id: str) -> None:
+            if source == target:
+                return
+            key = (source, target)
+            existing = edge_by_key.get(key)
+            if existing is not None:
+                existing["evidence_count"] += 1
+                if evidence_id not in existing["evidence_ids"] and len(existing["evidence_ids"]) < MAX_GRAPH_EVIDENCE_IDS:
+                    existing["evidence_ids"].append(evidence_id)
+                return
+            digest = hashlib.sha256(f"{source}\0{target}".encode()).hexdigest()[:16]
+            edge = _graph_edge(
+                f"delivery-edge:{digest}",
+                kind,
+                source,
+                target,
+                "observed",
+                evidence_ids=[evidence_id],
+                reason="The source event explicitly links these stages.",
+            )
+            edge_by_key[key] = edge
+            raw_edges.append(edge)
+
+        for event in rows:
+            evidence_id = _event_evidence_id(event)
+            proposal_id = _safe_id(event.get("proposal_id"))
+            incident_id = _safe_id(event.get("incident_id"))
+            work_id = _safe_id(event.get("work_id"))
+            upstream_id = _safe_id(event.get("upstream_work_id"))
+            run_id = _safe_id(event.get("run_id"))
+            event_kind = _safe_code(event.get("event"))
+            if proposal_id is not None:
+                add_node(f"delivery:proposal:{proposal_id}", "proposal", "Proposal", evidence_id)
+            if incident_id is not None:
+                add_node(f"delivery:incident:{incident_id}", "incident", "Incident", evidence_id)
+            if work_id is not None:
+                work_kind = "ticket" if event_kind == "build.ticket.outcome" else "work"
+                work_label = "Ticket" if work_kind == "ticket" else "Work item"
+                add_node(f"delivery:work:{work_id}", work_kind, work_label, evidence_id)
+            if upstream_id is not None:
+                upstream_node = f"delivery:work:{upstream_id}"
+                if upstream_id in proposal_ids:
+                    upstream_node = f"delivery:proposal:{upstream_id}"
+                    add_node(upstream_node, "proposal", "Proposal", evidence_id)
+                elif upstream_id in incident_ids:
+                    upstream_node = f"delivery:incident:{upstream_id}"
+                    add_node(upstream_node, "incident", "Incident", evidence_id)
+                else:
+                    add_node(upstream_node, "work", "Work item", evidence_id)
+                if work_id is not None:
+                    add_edge(upstream_node, f"delivery:work:{work_id}", "explicit_lineage", evidence_id)
+            if work_id is not None and proposal_id is not None:
+                add_edge(f"delivery:proposal:{proposal_id}", f"delivery:work:{work_id}", "explicit_lineage", evidence_id)
+            if work_id is not None and incident_id is not None:
+                add_edge(f"delivery:incident:{incident_id}", f"delivery:work:{work_id}", "explicit_lineage", evidence_id)
+            if run_id is not None and work_id is not None:
+                run_node = f"delivery:run:{run_id}"
+                add_node(run_node, "build_run", "Build run", evidence_id)
+                add_edge(f"delivery:work:{work_id}", run_node, "explicit_run", evidence_id)
+            if work_id is not None and _safe_code(event.get("outcome")) == "pr_opened":
+                pr_digest = hashlib.sha256(work_id.encode()).hexdigest()[:20]
+                pr_node = f"delivery:pr:{pr_digest}"
+                add_node(pr_node, "pull_request", "Pull request", evidence_id)
+                source = f"delivery:run:{run_id}" if run_id is not None else f"delivery:work:{work_id}"
+                add_edge(source, pr_node, "explicit_outcome", evidence_id)
+
+        if not raw_nodes:
+            continue
+        parent = {node_id: node_id for node_id in raw_nodes}
+
+        def find(node_id: str) -> str:
+            while parent[node_id] != node_id:
+                parent[node_id] = parent[parent[node_id]]
+                node_id = parent[node_id]
+            return node_id
+
+        def union(left: str, right: str) -> None:
+            left_root, right_root = find(left), find(right)
+            if left_root != right_root:
+                parent[right_root] = left_root
+
+        for edge in raw_edges:
+            union(edge["from"], edge["to"])
+        components: dict[str, list[str]] = {}
+        for node_id in raw_nodes:
+            components.setdefault(find(node_id), []).append(node_id)
+        for component_ids in components.values():
+            if len(graphs) >= MAX_DELIVERY_GRAPHS:
+                limitations.append("delivery_graphs_truncated")
+                break
+            component_set = set(component_ids)
+            component_edges = [edge for edge in raw_edges if edge["from"] in component_set and edge["to"] in component_set]
+            digest = hashlib.sha256("\0".join(sorted(component_ids)).encode()).hexdigest()[:16]
+            nodes = [raw_nodes[node_id] for node_id in component_ids]
+            indegree = {node_id: 0 for node_id in component_ids}
+            outdegree = {node_id: 0 for node_id in component_ids}
+            for edge in component_edges:
+                indegree[edge["to"]] += 1
+                outdegree[edge["from"]] += 1
+            roots = [node_id for node_id in component_ids if indegree[node_id] == 0]
+            sinks = [node_id for node_id in component_ids if outdegree[node_id] == 0]
+
+            def gap(stage: str, label: str) -> str:
+                node_id = f"delivery:gap:{digest}:{stage}"
+                nodes.append(
+                    _graph_node(
+                        node_id,
+                        "missing_stage",
+                        label,
+                        "unverified",
+                        project_id=project_id,
+                        limitations=[f"{stage}_evidence_missing"],
+                        reason="No explicit correlated evidence is available for this stage.",
+                    )
+                )
+                return node_id
+
+            ask_roots = [
+                node_id for node_id in roots
+                if raw_nodes[node_id]["kind"] in {"proposal", "incident"}
+            ]
+            ask_gap = None if ask_roots else gap("ask", "Ask not linked")
+            has_ticket = any(raw_nodes[node_id]["kind"] == "ticket" for node_id in component_ids)
+            ticket_gap = None if has_ticket else gap("ticket", "Ticket not linked")
+            if ask_gap is not None and ticket_gap is not None:
+                component_edges.append(
+                    _graph_edge(
+                        f"delivery-edge:{digest}:ask-ticket",
+                        "missing_stage",
+                        ask_gap,
+                        ticket_gap,
+                        "expected",
+                        reason="Neither an originating ask nor a ticket is explicitly linked.",
+                    )
+                )
+                for root in roots:
+                    component_edges.append(
+                        _graph_edge(
+                            f"delivery-edge:{digest}:ticket-root:{len(component_edges)}",
+                            "missing_stage",
+                            ticket_gap,
+                            root,
+                            "expected",
+                            reason="The observed lineage begins after the missing ticket stage.",
+                        )
+                    )
+            elif ask_gap is not None:
+                for root in roots:
+                    component_edges.append(
+                        _graph_edge(
+                            f"delivery-edge:{digest}:ask:{len(component_edges)}",
+                            "missing_stage",
+                            ask_gap,
+                            root,
+                            "expected",
+                            reason="The observed lineage has no explicit originating ask.",
+                        )
+                    )
+            elif ticket_gap is not None:
+                ask_targets = [
+                    edge["to"] for edge in component_edges
+                    if edge["from"] in set(ask_roots)
+                ]
+                for ask_root in ask_roots:
+                    component_edges.append(
+                        _graph_edge(
+                            f"delivery-edge:{digest}:ask-ticket:{len(component_edges)}",
+                            "missing_stage",
+                            ask_root,
+                            ticket_gap,
+                            "expected",
+                            reason="The explicit ask has no explicitly linked ticket.",
+                        )
+                    )
+                for target in dict.fromkeys(ask_targets):
+                    component_edges.append(
+                        _graph_edge(
+                            f"delivery-edge:{digest}:ticket-target:{len(component_edges)}",
+                            "missing_stage",
+                            ticket_gap,
+                            target,
+                            "expected",
+                            reason="Observed work continues after the missing ticket stage.",
+                        )
+                    )
+            terminal_sources = [node_id for node_id in sinks if raw_nodes[node_id]["kind"] == "pull_request"]
+            if not terminal_sources:
+                pr_gap = gap("pull-request", "Pull request not linked")
+                for sink in sinks:
+                    component_edges.append(
+                        _graph_edge(
+                            f"delivery-edge:{digest}:pr:{len(component_edges)}",
+                            "missing_stage",
+                            sink,
+                            pr_gap,
+                            "expected",
+                            reason="The observed lineage has no explicit pull-request outcome.",
+                        )
+                    )
+                terminal_sources = [pr_gap]
+            deploy_gap = gap("deploy", "Deploy not linked")
+            usage_gap = gap("usage", "Usage outcome not linked")
+            for source in terminal_sources:
+                component_edges.append(
+                    _graph_edge(
+                        f"delivery-edge:{digest}:deploy:{len(component_edges)}",
+                        "missing_stage",
+                        source,
+                        deploy_gap,
+                        "expected",
+                        reason="No explicit correlated deploy evidence is available.",
+                    )
+                )
+            component_edges.append(
+                _graph_edge(
+                    f"delivery-edge:{digest}:usage",
+                    "missing_stage",
+                    deploy_gap,
+                    usage_gap,
+                    "expected",
+                    reason="No explicit correlated usage outcome is available.",
+                )
+            )
+            try:
+                graphs.append(
+                    _validate_and_rank_graph(
+                        {
+                            "id": f"graph:delivery:{project_id}:{digest}",
+                            "kind": "delivery",
+                            "label": "Project delivery",
+                            "scope": {"kind": "project", "project_id": project_id, "project_label": project_label},
+                            "state": "incomplete",
+                            "nodes": nodes,
+                            "edges": component_edges,
+                            "limitations": ["deploy_evidence_missing", "usage_outcome_evidence_missing"],
+                        },
+                        max_nodes=MAX_DELIVERY_GRAPH_NODES,
+                        max_edges=MAX_DELIVERY_GRAPH_EDGES,
+                    )
+                )
+            except GraphValidationError as error:
+                limitations.append(f"delivery_graph_{error.code}")
+    return graphs, sorted(set(limitations)), unattributed_events
+
+
+def _graphs_document(
+    topology: dict[str, Any],
+    inspection: Optional[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    delivery, limitations, unattributed_events = _delivery_graphs(events, inspection)
+    return [
+        _architecture_graph(topology),
+        *_runtime_graphs(topology, inspection, unattributed_events),
+        *delivery,
+    ], limitations
 
 
 def _outcome_document(
@@ -1206,7 +2422,156 @@ def _coverage_rows(
     return rows
 
 
+def _brief_document(
+    promises: list[dict[str, Any]],
+    attention: list[dict[str, Any]],
+    outcomes: dict[str, Any],
+    *,
+    inspection_state: str,
+    attention_truncated: bool,
+) -> dict[str, Any]:
+    grouped: list[dict[str, Any]] = []
+    group_index: dict[tuple[str, str], int] = {}
+    for item in attention:
+        rule_id = item.get("rule_id") if isinstance(item.get("rule_id"), str) else item["kind"]
+        scope = item.get("scope") if isinstance(item.get("scope"), str) else "fleet"
+        key = (rule_id, scope)
+        if key not in group_index:
+            digest = hashlib.sha256(f"{rule_id}\0{scope}".encode("utf-8")).hexdigest()[:16]
+            group_index[key] = len(grouped)
+            grouped.append(
+                {
+                    "id": f"attention-group:{digest}",
+                    "label": item["label"],
+                    "action": item.get("action") or item["label"],
+                    "state": item["state"],
+                    "item_count": 0,
+                    "evidence_count": 0,
+                    "project_count": None,
+                    "latest_at": item.get("detected_at"),
+                    "evidence_ids": [],
+                    "limitations": [],
+                    "_project_ids": [],
+                    "_failure_records": 0,
+                    "_counts_complete": True,
+                }
+            )
+        group = grouped[group_index[key]]
+        group["item_count"] += 1
+        source_evidence_count = item.get("evidence_count")
+        if not (
+            isinstance(source_evidence_count, int)
+            and not isinstance(source_evidence_count, bool)
+            and source_evidence_count == len(item["evidence_ids"])
+        ):
+            group["_counts_complete"] = False
+        for evidence_id in item["evidence_ids"]:
+            if evidence_id not in group["evidence_ids"]:
+                group["evidence_ids"].append(evidence_id)
+        for project_id in item.get("project_ids", []):
+            if project_id not in group["_project_ids"]:
+                group["_project_ids"].append(project_id)
+        latest = item.get("detected_at")
+        if isinstance(latest, str) and (group["latest_at"] is None or latest > group["latest_at"]):
+            group["latest_at"] = latest
+        group["limitations"].extend(item.get("limitations", []))
+        failure_records = _object(item.get("operands")).get("failure_records")
+        if isinstance(failure_records, int) and not isinstance(failure_records, bool) and failure_records >= 0:
+            group["_failure_records"] += failure_records
+
+    for group in grouped:
+        group["project_count"] = len(group.pop("_project_ids")) or None
+        counts_complete = group.pop("_counts_complete")
+        group["evidence_count"] = len(group["evidence_ids"]) if counts_complete else None
+        failure_records = group.pop("_failure_records")
+        if group["label"] == _PRIORITY_LABELS["core_job_failure_v1"] and failure_records:
+            noun = "failure" if failure_records == 1 else "failures"
+            group["action"] = f"Repair {failure_records} observed Shipyard job {noun}"
+        group["limitations"] = sorted(set(group["limitations"]))
+        if len(group["evidence_ids"]) > 50:
+            group["evidence_ids"] = group["evidence_ids"][:50]
+            group["limitations"].append("evidence_truncated")
+
+    brief_limitations: list[str] = []
+    if inspection_state == "unavailable":
+        brief_limitations.append("inspection_unavailable")
+    elif inspection_state == "stale":
+        brief_limitations.append("inspection_stale")
+    if attention_truncated:
+        brief_limitations.append("attention_truncated")
+    if len(grouped) > MAX_ATTENTION_GROUPS:
+        brief_limitations.append("attention_groups_truncated")
+    bounded_groups = grouped[:MAX_ATTENTION_GROUPS]
+
+    promise_counts = {
+        state: sum(1 for item in promises if item["state"] == state)
+        for state in _STATE_RANK
+    }
+    assessed_promises = promise_counts["verified"] + promise_counts["violated"]
+    promise_state = (
+        "alarm"
+        if promise_counts["violated"]
+        else ("waiting" if promise_counts["unverified"] else "clear")
+    )
+    reliability = _object(outcomes.get("reliability"))
+    completed = _safe_number(reliability.get("completed"))
+    successful = _safe_number(reliability.get("successful"))
+    reliability_state = reliability.get("state")
+    if not isinstance(reliability_state, str):
+        reliability_state = "unknown"
+    signals = [
+        {
+            "id": "promises_verified",
+            "label": "Promises verified",
+            "value": promise_counts["verified"],
+            "unit": "promise" if promise_counts["verified"] == 1 else "promises",
+            "state": promise_state,
+            "observed": assessed_promises,
+            "total": len(promises),
+            "limitations": ["promise_evidence_incomplete"] if promise_counts["unverified"] else [],
+        },
+        {
+            "id": "successful_runs",
+            "label": "Successful runs",
+            "value": successful if successful is not None and successful >= 0 else None,
+            "unit": "completed run" if successful == 1 else "completed runs",
+            "state": reliability_state,
+            "observed": successful if successful is not None and successful >= 0 else None,
+            "total": completed if completed is not None and completed >= 0 else None,
+            "limitations": _safe_limitations(reliability.get("limitations")),
+        },
+        {
+            "id": "attention",
+            "label": "Attention",
+            "value": len(grouped),
+            "unit": "group" if len(grouped) == 1 else "groups",
+            "state": bounded_groups[0]["state"] if bounded_groups else "unknown",
+            "observed": len(bounded_groups),
+            "total": len(grouped),
+            "limitations": ["attention_truncated"] if attention_truncated else [],
+        },
+    ][:MAX_BRIEF_SIGNALS]
+    if bounded_groups:
+        lead = bounded_groups[0]
+        state = lead["state"]
+        takeaway = lead["label"]
+        action = lead["action"]
+    else:
+        state = "unknown" if inspection_state != "stale" else "waiting"
+        takeaway = "No operator action is currently evidenced"
+        action = "Review current evidence coverage"
+    return {
+        "state": state,
+        "takeaway": takeaway,
+        "action": action,
+        "signals": signals,
+        "attention_groups": bounded_groups,
+        "limitations": sorted(set(brief_limitations)),
+    }
+
+
 def _narrative_document(
+    brief: dict[str, Any],
     promises: list[dict[str, Any]],
     attention: list[dict[str, Any]],
     outcomes: dict[str, Any],
@@ -1214,7 +2579,7 @@ def _narrative_document(
     changes: list[dict[str, Any]],
 ) -> dict[str, Any]:
     counts = {state: sum(1 for item in promises if item["state"] == state) for state in _STATE_RANK}
-    focus = attention[0]["label"] if attention else "No operator action is currently evidenced"
+    focus = brief["takeaway"]
     beats = [
         {
             "id": "story:promises",
@@ -1226,9 +2591,9 @@ def _narrative_document(
         {
             "id": "story:attention",
             "heading": "Needs you",
-            "body": focus,
-            "state": attention[0]["state"] if attention else "clear",
-            "evidence_ids": attention[0]["evidence_ids"] if attention else [],
+            "body": brief["action"],
+            "state": brief["state"],
+            "evidence_ids": brief["attention_groups"][0]["evidence_ids"] if brief["attention_groups"] else [],
         },
     ]
     reliability = outcomes["reliability"]
@@ -1275,10 +2640,10 @@ def _narrative_document(
             }
         )
     return {
-        "heading": "Fleet promises",
-        "subline": "What changed, what held, and where evidence stops",
+        "heading": brief["takeaway"],
+        "subline": brief["action"],
         "focus": focus,
-        "operator_action": f"Inspect evidence for {focus}" if attention else "Keep watching the evidence stream",
+        "operator_action": brief["action"],
         "beats": beats[:MAX_STORY_BEATS],
     }
 
@@ -1296,6 +2661,9 @@ def compose_operator_document(
     refresh_age_seconds: Optional[int],
     refresh_limitation: Optional[str] = None,
     event_stream_truncated: bool = False,
+    runtime_events: Optional[list[dict[str, Any]]] = None,
+    runtime_limitations: Optional[list[str]] = None,
+    source_provenance: Optional[dict[str, str]] = None,
     changes: Optional[list[dict[str, Any]]] = None,
     change_limitations: Optional[list[str]] = None,
 ) -> dict[str, Any]:
@@ -1307,6 +2675,12 @@ def compose_operator_document(
     if inspection_state not in {"fresh", "stale", "unavailable"}:
         raise OperatorDataError("invalid inspection state")
     safe_events = [event for event in events if isinstance(event, dict)]
+    safe_runtime_events = [
+        event
+        for event in (runtime_events if runtime_events is not None else safe_events)
+        if isinstance(event, dict)
+    ]
+    safe_runtime_limitations = _safe_limitations(runtime_limitations)
     promises = _promise_rows(inspection)
     attention, attention_truncated = _attention_rows(inspection)
     inspection_attention_count = _safe_number(
@@ -1320,20 +2694,32 @@ def compose_operator_document(
         event_stream_truncated=event_stream_truncated,
     )
     topology_document, relationship_evidence = _topology_document(
-        topology, summary, safe_events, relationships
+        topology, summary, safe_events, safe_runtime_events, inspection, relationships
+    )
+    graphs, graph_limitations = _graphs_document(
+        topology_document, inspection, safe_events
+    )
+    brief = _brief_document(
+        promises,
+        attention,
+        outcomes,
+        inspection_state=inspection_state,
+        attention_truncated=attention_truncated,
     )
     changes = _safe_change_rows(changes)
     safe_change_limitations = _safe_limitations(
         change_limitations if change_limitations is not None else ["explicit_git_range_unavailable"]
     )
-    evidence = _inspection_evidence(inspection) + event_evidence + relationship_evidence
+    # Project-keyed runtime evidence wins over the same globally bounded event
+    # so its controlled project linkage cannot be erased by de-duplication.
+    evidence = _inspection_evidence(inspection) + relationship_evidence + event_evidence
     unique_evidence: list[dict[str, Any]] = []
     seen_evidence: set[str] = set()
     for row in evidence:
         if row["id"] not in seen_evidence:
             unique_evidence.append(row)
             seen_evidence.add(row["id"])
-    consumers = [promises, attention, outcomes, topology_document, changes]
+    consumers = [brief, promises, attention, outcomes, topology_document, graphs, changes]
     unique_evidence, selected_evidence_ids, missing_evidence_ids, evidence_truncated = _bound_evidence(
         unique_evidence, consumers
     )
@@ -1350,11 +2736,23 @@ def compose_operator_document(
         limitations.append("relationship_snapshot_missing")
     if event_stream_truncated:
         limitations.append("event_window_truncated")
+    limitations.extend(safe_runtime_limitations)
+    limitations.extend(graph_limitations)
     if refresh_limitation is not None:
         safe_refresh_limitation = _safe_code(refresh_limitation)
         if safe_refresh_limitation is not None:
             limitations.append(safe_refresh_limitation)
     limitations.extend(_safe_limitations(topology_document.get("limitations")))
+    provenance = _object(source_provenance)
+    source_revision = provenance.get("source_revision")
+    if not isinstance(source_revision, str) or not _SHA_RE.fullmatch(source_revision):
+        source_revision = "unknown"
+    source_state = provenance.get("source_state")
+    if source_state not in {"clean", "modified", "unknown"}:
+        source_state = "unknown"
+    source_digest = provenance.get("source_digest")
+    if not isinstance(source_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", source_digest):
+        source_digest = "unknown"
     metadata = {
         "schema_version": OPERATOR_VIEW_SCHEMA_VERSION,
         "build_version": OPERATOR_BUILD_VERSION,
@@ -1364,6 +2762,10 @@ def compose_operator_document(
         "generated_at": generated_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         "inspection_state": inspection_state,
         "refresh_age_seconds": refresh_age_seconds,
+        "source_revision": source_revision,
+        "source_state": source_state,
+        "source_digest": source_digest,
+        "scope": _scope_document(inspection),
         "limits": {"attention": MAX_ATTENTION, "evidence": MAX_EVIDENCE, "story_beats": MAX_STORY_BEATS},
         "limitations": sorted(set(limitations)),
     }
@@ -1387,16 +2789,27 @@ def compose_operator_document(
             "limitations": ["event_window_truncated"] if event_stream_truncated else [],
         }
     )
+    coverage.append(
+        {
+            "source": "runtime_lifecycle",
+            "state": "partial" if safe_runtime_limitations else "available",
+            "reason": "bounded_at_maximum" if safe_runtime_limitations else "ok",
+            "records_total": len(safe_runtime_events),
+            "limitations": safe_runtime_limitations,
+        }
+    )
     narrative = _narrative_document(
-        promises, attention, outcomes, topology_document, changes
+        brief, promises, attention, outcomes, topology_document, changes
     )
     return {
         "schema_version": OPERATOR_VIEW_SCHEMA_VERSION,
         "kind": "shipyard.operator",
         "metadata": metadata,
+        "brief": brief,
         "narrative": narrative,
         "promises": promises,
         "outcomes": outcomes,
+        "graphs": graphs,
         "topology": topology_document,
         "changes": changes,
         "attention": attention,

@@ -508,12 +508,21 @@ skills/shipyard/shipyard.sh dashboard --open
 
 Adapters consume `GET /api/operator?window=24h|7d|30d`. A successful response
 has `schema_version: 1`, `kind: "shipyard.operator"`, and the public sections
-`metadata`, `narrative`, `promises`, `outcomes`, `topology`, `changes`,
+`metadata`, `brief`, `narrative`, `promises`, `outcomes`, `topology`, `changes`,
 `attention`, `coverage`, and `evidence`. Shipyard core owns every promise/KPI
 meaning, state, threshold, priority, label, limitation, topology relationship,
 and array order. A dashboard may format timestamps and map supplied semantic
 tokens to presentation, but it must not recalculate, reprioritize, or sort the
 document.
+
+`brief` is the core-owned, bounded operator reading order: one state,
+takeaway, and action; at most four qualified signals; at most eight grouped
+attention rows; and explicit limitations. Each signal carries its label, unit,
+state, observed coverage, and total. Each attention group carries item,
+evidence-record, and project counts without replacing the full `attention` and
+`evidence` arrays. Adapters render these strings and arrays in supplied order.
+They show evidence as a counted action such as `Review 18 records` outside the
+Evidence view; opaque evidence IDs are visible only in Evidence/detail.
 
 `metadata.inspection_state` is `fresh`, `stale`, or `unavailable`; stale means
 the last good snapshot is being served. Unknown, partial, unverified, and not

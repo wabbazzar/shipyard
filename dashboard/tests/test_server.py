@@ -12,8 +12,10 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 from unittest import mock
 
+import dashboard.server as server_module
 from dashboard.reader import EventReader
 from dashboard.server import (
     BUILD_VERSION,
@@ -250,6 +252,453 @@ class ServerTest(unittest.TestCase):
                 self.assertEqual(status, 400)
                 self.assertEqual(payload["error"]["code"], code)
 
+    def test_operator_reports_immutable_source_revision(self) -> None:
+        supplied = {
+            "source_revision": "1" * 40,
+            "source_state": "modified",
+            "source_digest": "2" * 64,
+        }
+        replacement = RunningServer(
+            self.root,
+            poll_interval=0.01,
+            heartbeat_interval=0.04,
+            source_provenance=supplied,
+        )
+        previous = self.running
+        self.running = replacement
+        previous.close()
+        supplied["source_revision"] = "3" * 40
+
+        with mock.patch(
+            "dashboard.server.capture_source_provenance",
+            side_effect=AssertionError("source provenance was recomputed per request"),
+        ):
+            for _ in range(2):
+                status, _, payload = self.json_request("GET", "/api/operator?window=24h")
+                self.assertEqual(status, 200)
+                self.assertEqual(payload["metadata"]["source_revision"], "1" * 40)
+                self.assertEqual(payload["metadata"]["source_state"], "modified")
+                self.assertEqual(payload["metadata"]["source_digest"], "2" * 64)
+
+    def test_operator_api_recovers_buried_runtime_lifecycle_beyond_global_cap(self) -> None:
+        target_rows = [
+            row("job.start", seconds_ago=7_200, project="target", role="build", svc="target-build"),
+            row("job.end", seconds_ago=7_199, project="target", role="build", svc="target-build", status="abort", reason="dirty"),
+        ]
+        unrelated_rows = [
+            row("medic.scan", seconds_ago=2_100 - index, project="noise", role="medic", svc="noise-medic")
+            for index in range(2_001)
+        ]
+        with self.today.open("ab") as output:
+            for event in target_rows + unrelated_rows:
+                output.write(encode(event))
+
+        def loader(window: str) -> dict[str, object]:
+            return {
+                "inspection": {
+                    "schema_version": 1,
+                    "meta": {"rule_version": "shipyard-inspect-v1"},
+                    "summary": {},
+                    "fleet": [
+                        {"project_id": "project-target", "project_name": "target", "roles": ["build"], "state": "no_fault_observed"},
+                        {"project_id": "project-noise", "project_name": "noise", "roles": ["medic"], "state": "no_fault_observed"},
+                    ],
+                    "effectiveness": [],
+                    "priorities": [],
+                    "attention": [],
+                    "coverage": [],
+                    "evidence": [],
+                },
+                "relationships": {"schema_version": 1, "kind": "shipyard.operator.relationships", "window": window, "sources": {}},
+            }
+
+        replacement = RunningServer(
+            self.root,
+            poll_interval=0.01,
+            heartbeat_interval=0.04,
+            operator_loader=loader,
+        )
+        previous = self.running
+        self.running = replacement
+        previous.close()
+
+        for _ in range(100):
+            status, _, payload = self.json_request("GET", "/api/operator?window=24h")
+            if payload["metadata"]["inspection_state"] == "fresh":
+                break
+            time.sleep(0.01)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["metadata"]["inspection_state"], "fresh")
+        self.assertIn("event_window_truncated", payload["metadata"]["limitations"])
+        runtime = next(
+            node
+            for node in payload["topology"]["runtime_nodes"]
+            if node["project_id"] == "project-target" and node["role_id"] == "build"
+        )
+        self.assertEqual(runtime["observed_count"], 2)
+        self.assertEqual((runtime["terminal_status"], runtime["terminal_reason"]), ("abort", "dirty"))
+        evidence = {item["id"]: item for item in payload["evidence"]}
+        self.assertEqual(len(runtime["evidence_ids"]), 2)
+        self.assertTrue(
+            all(evidence[evidence_id]["project_id"] == "project-target" for evidence_id in runtime["evidence_ids"])
+        )
+
+    def test_runtime_lifecycle_fanout_is_globally_bounded_and_reported(self) -> None:
+        from dashboard.server import (
+            MAX_RUNTIME_EVENTS_TOTAL,
+            MAX_RUNTIME_IDENTITIES,
+            MAX_RUNTIME_SCAN_REFERENCES,
+        )
+
+        identity_count = max(
+            MAX_RUNTIME_IDENTITIES,
+            MAX_RUNTIME_EVENTS_TOTAL,
+            MAX_RUNTIME_SCAN_REFERENCES,
+        ) + 25
+        fanout_rows = [
+            row(
+                "job.end",
+                seconds_ago=100 + index,
+                project="fanout",
+                role="build",
+                svc=f"fanout-build-{index:06d}",
+                status="ok",
+            )
+            for index in range(identity_count)
+        ]
+        with self.today.open("ab") as output:
+            for event in fanout_rows:
+                output.write(encode(event))
+
+        reader = EventReader(self.root).refresh()
+        summary = {
+            "services": [
+                {
+                    "project": "fanout",
+                    "role": "build",
+                    "svc": event["svc"],
+                }
+                for event in fanout_rows
+            ]
+        }
+        original_window_refs = reader._window_refs
+        scanned_references = 0
+
+        def counted_window_refs(window: str, now: object):
+            nonlocal scanned_references
+            for reference in original_window_refs(window, now):
+                scanned_references += 1
+                yield reference
+
+        with (
+            mock.patch.object(reader, "_window_refs", side_effect=counted_window_refs),
+            mock.patch.object(reader, "read_event", wraps=reader.read_event) as read_event,
+        ):
+            runtime_events = server_module._runtime_lifecycle_events(reader, "24h", summary)
+
+        self.assertLessEqual(scanned_references, MAX_RUNTIME_SCAN_REFERENCES)
+        self.assertLessEqual(read_event.call_count, MAX_RUNTIME_EVENTS_TOTAL)
+        self.assertLessEqual(len(runtime_events), MAX_RUNTIME_EVENTS_TOTAL)
+        self.assertLessEqual(
+            len({(event["project"], event["role"], event["svc"]) for event in runtime_events}),
+            MAX_RUNTIME_IDENTITIES,
+        )
+
+        def loader(window: str) -> dict[str, object]:
+            return {
+                "inspection": {
+                    "schema_version": 1,
+                    "meta": {"rule_version": "shipyard-inspect-v1"},
+                    "summary": {},
+                    "fleet": [
+                        {
+                            "project_id": "project-fanout",
+                            "project_name": "fanout",
+                            "roles": ["build"],
+                            "state": "no_fault_observed",
+                        }
+                    ],
+                    "effectiveness": [],
+                    "priorities": [],
+                    "attention": [],
+                    "coverage": [],
+                    "evidence": [],
+                },
+                "relationships": {
+                    "schema_version": 1,
+                    "kind": "shipyard.operator.relationships",
+                    "window": window,
+                    "sources": {},
+                },
+            }
+
+        replacement = RunningServer(
+            self.root,
+            poll_interval=0.01,
+            heartbeat_interval=0.04,
+            operator_loader=loader,
+        )
+        previous = self.running
+        self.running = replacement
+        previous.close()
+
+        for _ in range(100):
+            status, _, payload = self.json_request("GET", "/api/operator?window=24h")
+            if payload["metadata"]["inspection_state"] == "fresh":
+                break
+            time.sleep(0.01)
+
+        self.assertEqual(status, 200)
+        self.assertIn("runtime_lifecycle_truncated", payload["metadata"]["limitations"])
+        runtime_coverage = next(row for row in payload["coverage"] if row["source"] == "runtime_lifecycle")
+        self.assertEqual(runtime_coverage["state"], "partial")
+        self.assertEqual(runtime_coverage["reason"], "bounded_at_maximum")
+        self.assertIn("runtime_lifecycle_truncated", runtime_coverage["limitations"])
+
+    def test_provenance_covers_producers_and_detects_mutation_on_inspection_refresh(self) -> None:
+        expected_producers = {
+            "skills/shipyard/shipyard.sh",
+            "skills/shipyard/inspect.py",
+            "scripts/delegation-report.py",
+            "docs/shipyard-data.json",
+        }
+        clock = [0.0]
+        loader_calls = 0
+
+        def loader(window: str) -> dict[str, object]:
+            nonlocal loader_calls
+            loader_calls += 1
+            return {
+                "inspection": {
+                    "schema_version": 1,
+                    "meta": {"rule_version": "shipyard-inspect-v1"},
+                    "summary": {},
+                    "fleet": [],
+                    "effectiveness": [],
+                    "priorities": [],
+                    "attention": [],
+                    "coverage": [],
+                    "evidence": [],
+                },
+                "relationships": {"schema_version": 1, "kind": "shipyard.operator.relationships", "window": window, "sources": {}},
+            }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+            repo_root = temporary_root / "repo"
+            event_root = temporary_root / "events"
+            event_root.mkdir()
+            event_file = event_root / (datetime.now(timezone.utc).strftime("%Y-%m-%d") + ".jsonl")
+            event_file.write_bytes(encode(row("job.end", status="ok")))
+            for relative in set(server_module._SOURCE_DIGEST_PATHS) | expected_producers:
+                source = repo_root / relative
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(f"fixture:{relative}\n", encoding="utf-8")
+
+            revision_result = mock.Mock(returncode=0, stdout="a" * 40 + "\n")
+            clean_result = mock.Mock(returncode=0, stdout="")
+            fake_server_file = repo_root / "dashboard" / "server.py"
+            with (
+                mock.patch.object(server_module, "__file__", str(fake_server_file)),
+                mock.patch("dashboard.server._source_git", side_effect=[revision_result, clean_result]) as git_run,
+            ):
+                running = RunningServer(
+                    event_root,
+                    poll_interval=0.01,
+                    heartbeat_interval=0.04,
+                    monotonic=lambda: clock[0],
+                    operator_loader=loader,
+                    operator_topology_path=Path(__file__).resolve().parents[2] / "docs" / "shipyard-data.json",
+                )
+                try:
+                    def operator_request() -> tuple[int, dict[str, object]]:
+                        connection = http.client.HTTPConnection("127.0.0.1", running.port, timeout=2)
+                        connection.request("GET", "/api/operator?window=24h")
+                        response = connection.getresponse()
+                        status = response.status
+                        payload = json.loads(response.read())
+                        connection.close()
+                        return status, payload
+
+                    for _ in range(100):
+                        status, initial = operator_request()
+                        if initial["metadata"]["inspection_state"] == "fresh":
+                            break
+                        time.sleep(0.01)
+                    initial_digest = initial["metadata"]["source_digest"]
+                    self.assertEqual(status, 200)
+                    self.assertEqual(initial["metadata"]["source_state"], "clean")
+                    self.assertEqual(loader_calls, 1)
+
+                    producer = repo_root / "skills" / "shipyard" / "shipyard.sh"
+                    producer.write_text("fixture:mutated-after-start\n", encoding="utf-8")
+                    clock[0] = 301.0
+                    for _ in range(100):
+                        status, refreshed = operator_request()
+                        if refreshed["metadata"]["inspection_state"] == "fresh" and loader_calls >= 2:
+                            break
+                        time.sleep(0.01)
+
+                    with self.subTest(contract="git_is_not_invoked_per_request"):
+                        self.assertEqual(git_run.call_count, 2)
+                    with self.subTest(contract="all_mutable_producers_are_hashed"):
+                        self.assertTrue(expected_producers.issubset(set(server_module._SOURCE_DIGEST_PATHS)))
+                    with self.subTest(contract="refresh_detects_after_start_mutation"):
+                        self.assertEqual(status, 200)
+                        self.assertEqual(refreshed["metadata"]["inspection_state"], "fresh")
+                        self.assertGreaterEqual(loader_calls, 2)
+                        self.assertNotEqual(refreshed["metadata"]["source_state"], "clean")
+                        self.assertNotEqual(refreshed["metadata"]["source_digest"], initial_digest)
+                finally:
+                    running.close()
+
+    def test_operator_serves_last_good_while_index_refreshes(self) -> None:
+        initial_count = 2
+        refreshed = row("dashboard.refreshed", seconds_ago=0, status="ok")
+        with self.today.open("ab") as output:
+            output.write(encode(refreshed))
+        source_checksum = checksum(self.today)
+
+        entered = threading.Event()
+        release = threading.Event()
+        calls_lock = threading.Lock()
+        refresh_calls = 0
+        original_refresh = EventReader.refresh
+
+        def held_refresh(reader: EventReader) -> EventReader:
+            nonlocal refresh_calls
+            with calls_lock:
+                refresh_calls += 1
+            entered.set()
+            self.assertTrue(release.wait(2), "test did not release the held index refresh")
+            return original_refresh(reader)
+
+        results: queue.Queue[tuple[int, dict[str, str], object]] = queue.Queue()
+        request_threads = [
+            threading.Thread(
+                target=lambda: results.put(self.json_request("GET", "/api/operator?window=7d"))
+            )
+            for _ in range(6)
+        ]
+        with mock.patch.object(EventReader, "refresh", autospec=True, side_effect=held_refresh):
+            try:
+                for thread in request_threads:
+                    thread.start()
+                self.assertTrue(entered.wait(1), "changed event signature did not start a refresh")
+                response_deadline = time.monotonic() + 0.5
+                while results.qsize() < len(request_threads) and time.monotonic() < response_deadline:
+                    time.sleep(0.005)
+                self.assertTrue(
+                    results.qsize() == len(request_threads),
+                    "operator requests blocked behind the event-index rebuild",
+                )
+                for _ in request_threads:
+                    status, _, payload = results.get_nowait()
+                    self.assertEqual(status, 200)
+                    self.assertIn("event_index_refreshing", payload["metadata"]["limitations"])
+                    coverage = next(row for row in payload["coverage"] if row["source"] == "operator_events")
+                    self.assertEqual(coverage["records_total"], initial_count)
+                self.assertEqual(refresh_calls, 1, "concurrent requests started more than one rebuild")
+            finally:
+                release.set()
+                for thread in request_threads:
+                    thread.join(2)
+
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                status, _, payload = self.json_request("GET", "/api/operator?window=7d")
+                coverage = next(row for row in payload["coverage"] if row["source"] == "operator_events")
+                if coverage["records_total"] == initial_count + 1:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(status, 200)
+            self.assertEqual(coverage["records_total"], initial_count + 1)
+            self.assertNotIn("event_index_refreshing", payload["metadata"]["limitations"])
+        self.assertEqual(checksum(self.today), source_checksum)
+
+        failed = row("dashboard.failed-refresh", seconds_ago=0, status="error")
+        with self.today.open("ab") as output:
+            output.write(encode(failed))
+        failed_checksum = checksum(self.today)
+        failure_entered = threading.Event()
+
+        def failed_refresh(_reader: EventReader) -> EventReader:
+            failure_entered.set()
+            raise OSError("deliberate replacement-reader failure")
+
+        with mock.patch.object(EventReader, "refresh", autospec=True, side_effect=failed_refresh):
+            status, _, payload = self.json_request("GET", "/api/operator?window=7d")
+            self.assertEqual(status, 200)
+            self.assertTrue(failure_entered.wait(1), "failed refresh was not attempted")
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                status, _, payload = self.json_request("GET", "/api/operator?window=7d")
+                if "event_index_refresh_failed" in payload["metadata"]["limitations"]:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(status, 200)
+            self.assertIn("event_index_refresh_failed", payload["metadata"]["limitations"])
+            coverage = next(row for row in payload["coverage"] if row["source"] == "operator_events")
+            self.assertEqual(coverage["records_total"], initial_count + 1)
+        self.assertEqual(checksum(self.today), failed_checksum)
+
+    def test_operator_uses_last_good_document_during_rotation_and_truncation(self) -> None:
+        status, _, initial = self.json_request("GET", "/api/operator?window=7d")
+        self.assertEqual(status, 200)
+        initial_coverage = next(row for row in initial["coverage"] if row["source"] == "operator_events")
+        self.assertEqual(initial_coverage["records_total"], 2)
+
+        def assert_transition(mutate: Callable[[], None], expected_event: str, stale_count: int) -> None:
+            entered = threading.Event()
+            release = threading.Event()
+            original_refresh = EventReader.refresh
+
+            def held_refresh(reader: EventReader) -> EventReader:
+                entered.set()
+                self.assertTrue(release.wait(2), "test did not release the held index refresh")
+                return original_refresh(reader)
+
+            mutate()
+            with mock.patch.object(EventReader, "refresh", autospec=True, side_effect=held_refresh):
+                try:
+                    started = time.monotonic()
+                    status, _, stale = self.json_request("GET", "/api/operator?window=7d")
+                    elapsed = time.monotonic() - started
+                    self.assertTrue(entered.wait(1), "changed source did not start a rebuild")
+                    self.assertEqual(status, 200)
+                    self.assertLess(elapsed, 0.5)
+                    self.assertIn("event_index_refreshing", stale["metadata"]["limitations"])
+                    stale_coverage = next(
+                        row for row in stale["coverage"] if row["source"] == "operator_events"
+                    )
+                    self.assertEqual(stale_coverage["records_total"], stale_count)
+                finally:
+                    release.set()
+
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    status, _, fresh = self.json_request("GET", "/api/operator?window=7d")
+                    if any(item.get("fields", {}).get("event") == expected_event for item in fresh["evidence"]):
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(status, 200)
+                self.assertTrue(
+                    any(item.get("fields", {}).get("event") == expected_event for item in fresh["evidence"]),
+                    f"replacement index did not expose {expected_event}",
+                )
+
+        rotated = row("dashboard.rotation", seconds_ago=0, status="ok")
+
+        def rotate() -> None:
+            self.today.rename(self.today.with_suffix(".rotated"))
+            self.today.write_bytes(encode(rotated))
+
+        assert_transition(rotate, "dashboard.rotation", 2)
+
+        truncated = row("dashboard.truncation", seconds_ago=0, status="ok")
+        assert_transition(lambda: self.today.write_bytes(encode(truncated)), "dashboard.truncation", 1)
+
     def test_event_details_are_lazily_read_and_limit_is_enforced(self) -> None:
         with mock.patch.object(EventReader, "read_event", wraps=self.running.server.reader.read_event) as read:
             status, _, payload = self.json_request("GET", "/api/events?window=24h&limit=1")
@@ -262,21 +711,47 @@ class ServerTest(unittest.TestCase):
         appended = row("dashboard.append", seconds_ago=0, status="ok")
         with self.today.open("ab") as output:
             output.write(encode(appended))
-        _, _, advanced = self.json_request("GET", "/api/health")
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            _, _, advanced = self.json_request("GET", "/api/health")
+            if advanced["row_count"] == initial["row_count"] + 1:
+                break
+            time.sleep(0.01)
         self.assertEqual(advanced["row_count"], initial["row_count"] + 1)
         self.assertEqual(advanced["latest_timestamp"], appended["ts"])
         replacement = row("dashboard.rotation", seconds_ago=0, status="ok")
         self.today.rename(self.today.with_suffix(".old"))
         self.today.write_bytes(encode(replacement))
-        _, _, events = self.json_request("GET", "/api/events?window=24h")
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            _, _, events = self.json_request("GET", "/api/events?window=24h")
+            if events.get("count") == 1 and events["events"][0]["event"] == "dashboard.rotation":
+                break
+            time.sleep(0.01)
         self.assertEqual(events["count"], 1)
         self.assertEqual(events["events"][0]["event"], "dashboard.rotation")
+
+        truncated = row("dashboard.truncation", seconds_ago=0, status="ok")
+        self.today.write_bytes(encode(truncated))
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            _, _, events = self.json_request("GET", "/api/events?window=24h")
+            if events.get("count") == 1 and events["events"][0]["event"] == "dashboard.truncation":
+                break
+            time.sleep(0.01)
+        self.assertEqual(events["count"], 1)
+        self.assertEqual(events["events"][0]["event"], "dashboard.truncation")
 
     def test_api_escapes_lone_surrogates_without_crashing(self) -> None:
         hostile = row("dashboard.hostile", seconds_ago=0, detail="\ud800")
         with self.today.open("ab") as output:
             output.write(encode(hostile))
-        status, _, body = self.request("GET", "/api/events?window=24h&event=dashboard.hostile")
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            status, _, body = self.request("GET", "/api/events?window=24h&event=dashboard.hostile")
+            if json.loads(body)["count"] == 1:
+                break
+            time.sleep(0.01)
         self.assertEqual(status, 200)
         self.assertIn(b"\\ud800", body)
         self.assertEqual(json.loads(body)["events"][0]["detail"], "\ud800")
