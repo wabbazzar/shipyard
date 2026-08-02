@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -14,6 +15,7 @@ from unittest import mock
 from dashboard.operator import (
     MAX_ATTENTION,
     MAX_EVIDENCE,
+    MAX_RUNTIME_EVENTS_PER_NODE,
     MAX_STORY_BEATS,
     OPERATOR_VIEW_SCHEMA_VERSION,
     InspectionCache,
@@ -261,6 +263,421 @@ class OperatorComposerTest(unittest.TestCase):
         self.assertLessEqual(len(document["attention"]), MAX_ATTENTION)
         self.assertLessEqual(len(document["evidence"]), MAX_EVIDENCE)
         self.assertLessEqual(len(document["narrative"]["beats"]), MAX_STORY_BEATS)
+
+    def test_nonverified_states_explain_reason_impact_and_action(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {
+                "project_id": "project-safe",
+                "project_name": "demo",
+                "roles": ["build"],
+                "state": "no_fault_observed",
+            }
+        ]
+        runtime_events = [
+            {
+                "project": "demo",
+                "role": "build",
+                "svc": "demo-helldiver",
+                "ts": "2026-08-01T10:00:00Z",
+                "event": "job.start",
+            },
+            {
+                "project": "demo",
+                "role": "build",
+                "svc": "demo-helldiver",
+                "ts": "2026-08-01T10:01:00Z",
+                "event": "job.end",
+                "status": "abort",
+                "reason": "dirty",
+            },
+        ]
+
+        document = self.compose(
+            summary={
+                "counts": {"healthy": 0, "running": 0, "stale": 0, "failed": 0, "actionable": 0},
+                "latest_timestamp": "2026-08-01T10:01:00Z",
+                "services": [
+                    {
+                        "project": "demo",
+                        "role": "build",
+                        "svc": "demo-helldiver",
+                        "state": "unknown",
+                        "last_activity": "2026-08-01T10:01:00Z",
+                        "terminal_status": "abort",
+                        "terminal_reason": "dirty",
+                    }
+                ],
+                "actionables": [],
+            },
+            inspection=inspection,
+            runtime_events=runtime_events,
+        )
+
+        for promise in document["promises"]:
+            if promise["state"] != "verified":
+                self.assertRegex(promise["reason_code"], r"^[a-z0-9_]+$")
+                self.assertTrue(promise["reason"])
+                self.assertTrue(promise["impact"])
+                self.assertTrue(promise["action"])
+        runtime = next(node for node in document["topology"]["runtime_nodes"] if node["project_id"] == "project-safe")
+        self.assertEqual((runtime["terminal_status"], runtime["terminal_reason"]), ("abort", "dirty"))
+        self.assertEqual(runtime["reason_code"], "recorded_early_stop")
+        self.assertIn("not an outage", runtime["impact"].lower())
+        self.assertNotIn("dirty", runtime["reason"].lower())
+
+    def test_project_role_runtime_survives_global_event_cap(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {
+                "project_id": "project-safe",
+                "project_name": "demo",
+                "roles": ["build"],
+                "state": "no_fault_observed",
+            },
+            {
+                "project_id": "project-other",
+                "project_name": "other",
+                "roles": ["medic"],
+                "state": "no_fault_observed",
+            },
+        ]
+        unrelated = [
+            {
+                "project": "other",
+                "role": "medic",
+                "svc": "other-suk",
+                "ts": f"2026-08-01T11:{index // 60:02d}:{index % 60:02d}Z",
+                "event": "medic.scan",
+            }
+            for index in range(2_000)
+        ]
+        runtime_events = [
+            {
+                "project": "demo",
+                "role": "build",
+                "svc": "demo-helldiver",
+                "ts": "2026-08-01T10:00:00Z",
+                "event": "job.start",
+            },
+            {
+                "project": "demo",
+                "role": "build",
+                "svc": "demo-helldiver",
+                "ts": "2026-08-01T10:01:00Z",
+                "event": "job.end",
+                "status": "abort",
+                "reason": "dirty",
+            },
+        ]
+        document = self.compose(
+            events=unrelated,
+            inspection=inspection,
+            runtime_events=runtime_events,
+            event_stream_truncated=True,
+        )
+
+        runtime = next(node for node in document["topology"]["runtime_nodes"] if node["project_id"] == "project-safe")
+        self.assertEqual(runtime["observed_count"], 2)
+        self.assertEqual(runtime["last_activity"], "2026-08-01T10:01:00Z")
+        self.assertEqual((runtime["terminal_status"], runtime["terminal_reason"]), ("abort", "dirty"))
+        self.assertEqual(runtime["evidence_count"], 2)
+        evidence = {row["id"]: row for row in document["evidence"]}
+        self.assertTrue(
+            all(evidence[evidence_id]["project_id"] == "project-safe" for evidence_id in runtime["evidence_ids"])
+        )
+        other = next(node for node in document["topology"]["runtime_nodes"] if node["project_id"] == "project-other")
+        self.assertFalse(set(other["evidence_ids"]) & set(runtime["evidence_ids"]))
+
+    def test_scope_separates_fleet_projects_event_coverage_and_unattributed(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {
+                "project_id": "project-safe",
+                "project_name": "demo",
+                "roles": ["build"],
+                "state": "no_fault_observed",
+            },
+            {
+                "project_id": "project-other",
+                "project_name": "other",
+                "roles": ["medic"],
+                "state": "degraded_observed",
+            },
+        ]
+        inspection["coverage"] = [
+            {
+                "project_id": "project-safe",
+                "source": "events",
+                "state": "available",
+                "reason": "ok",
+                "records_total": 4,
+                "records_valid": 4,
+                "records_invalid": 0,
+                "records_out_of_window": 0,
+                "limitations": [],
+            },
+            {
+                "project_id": "project-other",
+                "source": "events",
+                "state": "partial",
+                "reason": "malformed",
+                "records_total": 7,
+                "records_valid": 5,
+                "records_invalid": 2,
+                "records_out_of_window": 0,
+                "limitations": [],
+            },
+            {
+                "project_id": None,
+                "source": "events_attribution",
+                "state": "available",
+                "reason": "ok",
+                "records_total": 20,
+                "records_valid": 11,
+                "records_unattributed": 8,
+                "records_ambiguous": 1,
+                "records_out_of_window": 0,
+                "limitations": [],
+            },
+        ]
+
+        scope = self.compose(inspection=inspection)["metadata"]["scope"]
+        self.assertEqual((scope["kind"], scope["label"]), ("current_user_fleet", "Current-user Shipyard fleet"))
+        self.assertEqual(
+            [(row["project_id"], row["project_label"]) for row in scope["projects"]],
+            [("project-safe", "demo"), ("project-other", "other")],
+        )
+        by_project = {row["project_id"]: row for row in scope["projects"]}
+        self.assertEqual(by_project["project-safe"]["events"]["records_valid"], 4)
+        self.assertEqual(by_project["project-other"]["events"]["records_invalid"], 2)
+        self.assertEqual(scope["unattributed"]["records_unattributed"], 8)
+        self.assertEqual(scope["unattributed"]["records_ambiguous"], 1)
+        self.assertNotIn("event_root", json.dumps(scope))
+
+    def test_fleet_role_reduction_uses_only_installed_project_constituents(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {
+                "project_id": "project-alpha",
+                "project_name": "alpha",
+                "roles": ["build"],
+                "state": "no_fault_observed",
+            },
+            {
+                "project_id": "project-beta",
+                "project_name": "beta",
+                "roles": ["build"],
+                "state": "degraded_observed",
+            },
+        ]
+        summary = {
+            "counts": {"healthy": 1, "running": 0, "stale": 1, "failed": 2, "actionable": 0},
+            "latest_timestamp": "2026-08-01T11:01:00Z",
+            "services": [
+                {"project": "alpha", "role": "build", "svc": "alpha-build", "state": "healthy", "last_activity": "2026-08-01T10:01:00Z"},
+                {"project": "beta", "role": "build", "svc": "beta-build", "state": "stale", "last_activity": "2026-08-01T10:02:00Z"},
+                {"project": "outside", "role": "build", "svc": "outside-build", "state": "failed", "last_activity": "2026-08-01T11:00:00Z"},
+                {"project": None, "role": "build", "svc": "unattributed-build", "state": "failed", "last_activity": "2026-08-01T11:01:00Z"},
+            ],
+            "actionables": [],
+        }
+        runtime_events = [
+            {"project_id": "project-alpha", "project": "alpha", "role": "build", "svc": "alpha-build", "ts": "2026-08-01T10:01:00Z", "event": "job.end", "status": "ok"},
+            {"project_id": "project-beta", "project": "beta", "role": "build", "svc": "beta-build", "ts": "2026-08-01T10:02:00Z", "event": "job.start"},
+            {"project": "outside", "role": "build", "svc": "outside-build", "ts": "2026-08-01T11:00:00Z", "event": "job.end", "status": "fail"},
+            {"role": "build", "svc": "unattributed-build", "ts": "2026-08-01T11:01:00Z", "event": "job.end", "status": "fail"},
+        ]
+
+        document = self.compose(inspection=inspection, summary=summary, runtime_events=runtime_events)
+        role = next(node for node in document["topology"]["nodes"] if node["id"] == "role:build")
+        constituents = [
+            node for node in document["topology"]["runtime_nodes"] if node["role_id"] == "build"
+        ]
+        constituent_ids = [node["project_id"] for node in constituents]
+        expected_state = min(
+            (node["state"] for node in constituents),
+            key={"failed": 0, "stale": 1, "running": 2, "healthy": 3, "unknown": 4}.__getitem__,
+        )
+
+        self.assertEqual(constituent_ids, ["project-alpha", "project-beta"])
+        self.assertEqual(role["constituent_projects"], constituent_ids)
+        self.assertEqual(role["reduction_rule"], "worst_known_state_unknown_if_none")
+        self.assertEqual(role["state"], expected_state)
+        self.assertEqual(role["observed_count"], sum(node["observed_count"] for node in constituents))
+        self.assertEqual(role["last_activity"], "2026-08-01T10:02:00Z")
+        self.assertEqual(
+            set(role["evidence_ids"]),
+            {evidence_id for node in constituents for evidence_id in node["evidence_ids"]},
+        )
+
+    def test_failed_runtime_is_not_reclassified_by_newer_abort(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {
+                "project_id": "project-safe",
+                "project_name": "demo",
+                "roles": ["build"],
+                "state": "degraded_observed",
+            }
+        ]
+        summary = {
+            "counts": {"healthy": 0, "running": 0, "stale": 0, "failed": 1, "actionable": 1},
+            "latest_timestamp": "2026-08-01T10:03:00Z",
+            "services": [
+                {
+                    "project": "demo",
+                    "role": "build",
+                    "svc": "demo-failed",
+                    "state": "failed",
+                    "last_activity": "2026-08-01T10:01:00Z",
+                    "terminal_status": "fail",
+                    "terminal_reason": None,
+                },
+                {
+                    "project": "demo",
+                    "role": "build",
+                    "svc": "demo-aborted",
+                    "state": "unknown",
+                    "last_activity": "2026-08-01T10:03:00Z",
+                    "terminal_status": "abort",
+                    "terminal_reason": "dirty",
+                },
+            ],
+            "actionables": [],
+        }
+        runtime_events = [
+            {"project_id": "project-safe", "project": "demo", "role": "build", "svc": "demo-failed", "ts": "2026-08-01T10:01:00Z", "event": "job.end", "status": "fail"},
+            {"project_id": "project-safe", "project": "demo", "role": "build", "svc": "demo-aborted", "ts": "2026-08-01T10:03:00Z", "event": "job.end", "status": "abort", "reason": "dirty"},
+        ]
+
+        document = self.compose(inspection=inspection, summary=summary, runtime_events=runtime_events)
+        runtime = next(node for node in document["topology"]["runtime_nodes"] if node["project_id"] == "project-safe")
+
+        self.assertEqual(runtime["state"], "failed")
+        self.assertEqual(runtime["reason_code"], "runtime_failed")
+        self.assertNotEqual(runtime["reason_code"], "recorded_early_stop")
+        self.assertNotIn("not an outage", runtime["impact"].lower())
+        self.assertEqual(runtime["terminal_status"], "fail")
+        self.assertIsNone(runtime["terminal_reason"])
+
+    def test_project_runtime_evidence_is_coherent_with_controlling_service(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {
+                "project_id": "project-safe",
+                "project_name": "demo",
+                "roles": ["build"],
+                "state": "degraded_observed",
+            }
+        ]
+        sibling_events = [
+            {
+                "project_id": "project-safe",
+                "project": "demo",
+                "role": "build",
+                "svc": "demo-aaa-sibling",
+                "ts": f"2026-08-01T10:00:{index:02d}Z",
+                "event": "job.start",
+            }
+            for index in range(MAX_RUNTIME_EVENTS_PER_NODE + 1)
+        ]
+        controlling_event = {
+            "project_id": "project-safe",
+            "project": "demo",
+            "role": "build",
+            "svc": "demo-zzz-controlling",
+            "ts": "2026-08-01T10:59:00Z",
+            "event": "job.end",
+            "status": "fail",
+        }
+        summary = {
+            "counts": {"healthy": 1, "running": 0, "stale": 0, "failed": 1, "actionable": 1},
+            "latest_timestamp": controlling_event["ts"],
+            "services": [
+                {
+                    "project": "demo",
+                    "role": "build",
+                    "svc": "demo-aaa-sibling",
+                    "state": "healthy",
+                    "last_activity": sibling_events[-1]["ts"],
+                    "terminal_status": None,
+                    "terminal_reason": None,
+                },
+                {
+                    "project": "demo",
+                    "role": "build",
+                    "svc": "demo-zzz-controlling",
+                    "state": "failed",
+                    "last_activity": controlling_event["ts"],
+                    "terminal_status": "fail",
+                    "terminal_reason": None,
+                },
+            ],
+            "actionables": [],
+        }
+
+        document = self.compose(
+            inspection=inspection,
+            summary=summary,
+            runtime_events=[*sibling_events, controlling_event],
+        )
+        runtime = next(
+            node
+            for node in document["topology"]["runtime_nodes"]
+            if node["project_id"] == "project-safe" and node["role_id"] == "build"
+        )
+        expected_id = "event:" + hashlib.sha256(
+            json.dumps(
+                controlling_event,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+
+        self.assertEqual(runtime["state"], "failed")
+        self.assertEqual((runtime["terminal_status"], runtime["terminal_reason"]), ("fail", None))
+        self.assertEqual(runtime["last_activity"], controlling_event["ts"])
+        self.assertEqual(runtime["observed_count"], 1)
+        self.assertEqual(runtime["evidence_count"], 1)
+        self.assertEqual(runtime["evidence_ids"], [expected_id])
+        self.assertEqual(runtime["reason_code"], "runtime_failed")
+        linked = {row["id"]: row for row in document["evidence"]}
+        self.assertEqual(linked[expected_id]["observed_at"], controlling_event["ts"])
+        self.assertEqual(linked[expected_id]["fields"]["status"], "fail")
+
+    def test_duplicate_project_labels_require_explicit_project_id(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {"project_id": "project-first", "project_name": "duplicate", "roles": ["build"], "state": "no_fault_observed"},
+            {"project_id": "project-second", "project_name": "duplicate", "roles": ["build"], "state": "no_fault_observed"},
+        ]
+        runtime_events = [
+            {"project_id": "project-first", "project": "duplicate", "role": "build", "svc": "explicit-build", "ts": "2026-08-01T10:00:00Z", "event": "job.end", "status": "ok"},
+            {"project": "duplicate", "role": "build", "svc": "ambiguous-build", "ts": "2026-08-01T10:01:00Z", "event": "job.end", "status": "fail"},
+        ]
+
+        document = self.compose(
+            inspection=inspection,
+            summary={
+                "counts": {"healthy": 0, "running": 0, "stale": 0, "failed": 0, "actionable": 0},
+                "latest_timestamp": "2026-08-01T10:01:00Z",
+                "services": [],
+                "actionables": [],
+            },
+            runtime_events=runtime_events,
+        )
+        by_project = {
+            node["project_id"]: node
+            for node in document["topology"]["runtime_nodes"]
+            if node["role_id"] == "build"
+        }
+
+        self.assertEqual(by_project["project-first"]["observed_count"], 1)
+        self.assertEqual(by_project["project-first"]["state"], "healthy")
+        self.assertEqual(by_project["project-second"]["observed_count"], 0)
+        self.assertEqual(by_project["project-second"]["state"], "unknown")
+        self.assertFalse(by_project["project-second"]["evidence_ids"])
 
     def test_brief_preserves_controlled_action_and_qualified_counts(self) -> None:
         inspection = inspection_fixture()
@@ -578,6 +995,13 @@ class OperatorFixtureContractTest(unittest.TestCase):
         self.assertEqual(self.document["schema_version"], 1)
         self.assertEqual(self.document["kind"], "shipyard.operator")
         self.assertEqual(self.document["metadata"]["schema_version"], 1)
+        self.assertRegex(self.document["metadata"]["source_revision"], r"^[0-9a-f]{40}$")
+        self.assertIn(self.document["metadata"]["source_state"], {"clean", "modified", "unknown"})
+        self.assertRegex(self.document["metadata"]["source_digest"], r"^[0-9a-f]{64}$")
+        scope = self.document["metadata"]["scope"]
+        self.assertEqual(scope["kind"], "current_user_fleet")
+        self.assertTrue(scope["projects"])
+        self.assertIn("unattributed", scope)
         self.assertIn(self.document["metadata"]["window"], {"24h", "7d", "30d"})
         self.assertEqual(
             self.document["metadata"]["limits"],
@@ -596,6 +1020,8 @@ class OperatorFixtureContractTest(unittest.TestCase):
             {row["state"] for row in self.document["promises"]}
             <= {"verified", "violated", "unverified", "not_applicable"}
         )
+        for row in self.document["promises"]:
+            self.assertTrue(all(row[key] for key in ("reason_code", "reason", "impact", "action")))
         self.assertIn(
             self.document["metadata"]["inspection_state"],
             {"fresh", "stale", "unavailable"},
@@ -676,6 +1102,12 @@ class OperatorFixtureContractTest(unittest.TestCase):
         self.assertTrue(
             {node["state"] for node in nodes}
             <= {"declared", "healthy", "running", "stale", "failed", "unknown", "observed"}
+        )
+        runtime_nodes = self.document["topology"]["runtime_nodes"]
+        self.assertTrue(runtime_nodes)
+        self.assertTrue(all(node["scope"]["kind"] == "project" for node in runtime_nodes))
+        self.assertTrue(
+            all(all(node[key] for key in ("reason_code", "reason", "impact", "action")) for node in runtime_nodes)
         )
         self.assertTrue(
             {row["durability"] for row in self.document["changes"]} <= {"unknown"}

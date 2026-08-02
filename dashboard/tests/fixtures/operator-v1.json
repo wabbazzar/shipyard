@@ -10,6 +10,41 @@
     "generated_at": "2026-08-01T12:00:00Z",
     "inspection_state": "stale",
     "refresh_age_seconds": 420,
+    "source_revision": "1111111111111111111111111111111111111111",
+    "source_state": "modified",
+    "source_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+    "scope": {
+      "kind": "current_user_fleet",
+      "label": "Current-user Shipyard fleet",
+      "projects": [
+        {
+          "project_id": "project-safe",
+          "project_label": "demo",
+          "inspection": {
+            "state": "available",
+            "project_state": "no_fault_observed",
+            "sources_available": 5,
+            "sources_total": 6
+          },
+          "events": {
+            "state": "partial",
+            "reason": "malformed",
+            "records_total": 12,
+            "records_valid": 11,
+            "records_invalid": 1,
+            "records_out_of_window": 0,
+            "records_unattributed": 0,
+            "records_ambiguous": 0
+          }
+        }
+      ],
+      "unattributed": {
+        "state": "available",
+        "records_unattributed": 2,
+        "records_ambiguous": 0
+      },
+      "limitations": []
+    },
     "limits": {
       "attention": 200,
       "evidence": 500,
@@ -130,6 +165,10 @@
         "unit": "bugs"
       },
       "observed_value": null,
+      "reason_code": "evidence_incomplete",
+      "reason": "Required evidence is missing or incomplete for this measurement.",
+      "impact": "The state remains unknown rather than being counted as success.",
+      "action": "Close the named evidence coverage gap and reassess.",
       "evidence_ids": [
         "inspect:summary"
       ],
@@ -147,6 +186,10 @@
         "unit": "projects"
       },
       "observed_value": 2,
+      "reason_code": "target_met",
+      "reason": "The observed evidence meets the configured target.",
+      "impact": "No promise gap is evidenced in this window.",
+      "action": "Keep monitoring the next evidence window.",
       "evidence_ids": [
         "inspect:summary"
       ],
@@ -162,6 +205,10 @@
         "unit": "features"
       },
       "observed_value": 1,
+      "reason_code": "target_met",
+      "reason": "The observed evidence meets the configured target.",
+      "impact": "No promise gap is evidenced in this window.",
+      "action": "Keep monitoring the next evidence window.",
       "evidence_ids": [
         "event:work-outcome"
       ],
@@ -177,6 +224,10 @@
         "unit": "decisions"
       },
       "observed_value": 0,
+      "reason_code": "target_missed",
+      "reason": "The observed evidence does not meet the configured target.",
+      "impact": "The promised outcome is below its target in this window.",
+      "action": "Review the linked evidence and restore the target.",
       "evidence_ids": [
         "inspect:attention-1"
       ],
@@ -192,6 +243,10 @@
         "unit": null
       },
       "observed_value": null,
+      "reason_code": "not_applicable",
+      "reason": "This measurement does not apply to the current population.",
+      "impact": "It is excluded from the verified total rather than counted as success or failure.",
+      "action": "No action is required unless the population changes.",
       "evidence_ids": [],
       "limitations": [
         "no_explicit_critique_lineage"
@@ -207,6 +262,10 @@
         "unit": "calls"
       },
       "observed_value": 1,
+      "reason_code": "target_met",
+      "reason": "The observed evidence meets the configured target.",
+      "impact": "No promise gap is evidenced in this window.",
+      "action": "Keep monitoring the next evidence window.",
       "evidence_ids": [
         "relationship:call-1"
       ],
@@ -222,6 +281,10 @@
         "unit": "calls"
       },
       "observed_value": null,
+      "reason_code": "evidence_incomplete",
+      "reason": "Required evidence is missing or incomplete for this measurement.",
+      "impact": "The state remains unknown rather than being counted as success.",
+      "action": "Close the named evidence coverage gap and reassess.",
       "evidence_ids": [],
       "limitations": [
         "skill_marker_coverage_partial"
@@ -237,6 +300,10 @@
         "unit": "calls"
       },
       "observed_value": null,
+      "reason_code": "unsupported_in_v1",
+      "reason": "This measurement is not supported by the current evidence contract.",
+      "impact": "No success or failure conclusion can be drawn from this source.",
+      "action": "Add supported evidence before evaluating this promise.",
       "evidence_ids": [],
       "limitations": [
         "unsupported_provider"
@@ -371,12 +438,22 @@
         "kind": "role",
         "label": "build",
         "loop": "build",
+        "scope": {
+          "kind": "current_user_fleet",
+          "project_id": null,
+          "project_label": null
+        },
         "state": "healthy",
-        "observed_count": 3,
+        "observed_count": 2,
         "last_activity": "2026-08-01T10:02:00Z",
+        "reduction_rule": "worst_known_state_unknown_if_none",
+        "constituent_projects": ["project-safe"],
+        "reason_code": "runtime_healthy",
+        "reason": "The latest recorded run completed successfully.",
+        "impact": "No runtime failure is evidenced for this role in the selected window.",
+        "action": "Keep monitoring the next scheduled run.",
         "evidence_ids": [
           "event:run-start",
-          "event:work-outcome",
           "event:run-end"
         ],
         "limitations": []
@@ -414,6 +491,36 @@
         "evidence_ids": [
           "relationship:call-1"
         ]
+      }
+    ],
+    "runtime_nodes": [
+      {
+        "id": "runtime:project-safe:build",
+        "kind": "role_runtime",
+        "project_id": "project-safe",
+        "project_label": "demo",
+        "role_id": "build",
+        "label": "build",
+        "scope": {
+          "kind": "project",
+          "project_id": "project-safe",
+          "project_label": "demo"
+        },
+        "state": "healthy",
+        "observed_count": 2,
+        "last_activity": "2026-08-01T10:02:00Z",
+        "terminal_status": "ok",
+        "terminal_reason": null,
+        "reason_code": "runtime_healthy",
+        "reason": "The latest recorded run completed successfully.",
+        "impact": "No runtime failure is evidenced for this role in the selected window.",
+        "action": "Keep monitoring the next scheduled run.",
+        "evidence_count": 2,
+        "evidence_ids": [
+          "event:run-start",
+          "event:run-end"
+        ],
+        "limitations": []
       }
     ],
     "declared_edges": [

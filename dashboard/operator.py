@@ -31,6 +31,8 @@ MAX_ATTENTION_GROUPS = 8
 MAX_RELATIONSHIP_EDGES = 500
 MAX_OUTCOME_CHAINS = 500
 MAX_CHANGE_RANGES = 50
+MAX_SCOPE_PROJECTS = 50
+MAX_RUNTIME_EVENTS_PER_NODE = 20
 WINDOW_DAYS = {"24h": 1, "7d": 7, "30d": 30}
 PROMISE_DEFINITIONS = (
     ("bugs_caught_and_fixed", "Bugs caught and fixed"),
@@ -48,6 +50,14 @@ _CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,127}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _STATE_RANK = {"violated": 0, "unverified": 1, "verified": 2, "not_applicable": 3}
 _ROLE_STATE_RANK = {"failed": 0, "stale": 1, "running": 2, "healthy": 3, "unknown": 4}
+_RUNTIME_TERMINAL_STATUSES = {"ok", "fail", "abort", "partial", "skipped"}
+_RUNTIME_TERMINAL_REASONS = {
+    "dirty",
+    "not_trunk",
+    "open_cap",
+    "budget",
+    "budget_deferred",
+}
 _TOKEN_FIELDS = (
     "input_tokens",
     "cache_read_tokens",
@@ -240,6 +250,106 @@ def _safe_ids(values: Any, *, limit: int = 50) -> list[str]:
     return result
 
 
+def _controlled_explanation(
+    state: str,
+    limitations: list[str],
+    *,
+    terminal_status: Optional[str] = None,
+    terminal_reason: Optional[str] = None,
+) -> dict[str, str]:
+    """Return bounded public copy without forwarding source prose or codes."""
+    if state == "verified":
+        return {
+            "reason_code": "target_met",
+            "reason": "The observed evidence meets the configured target.",
+            "impact": "No promise gap is evidenced in this window.",
+            "action": "Keep monitoring the next evidence window.",
+        }
+    if state == "violated":
+        return {
+            "reason_code": "target_missed",
+            "reason": "The observed evidence does not meet the configured target.",
+            "impact": "The promised outcome is below its target in this window.",
+            "action": "Review the linked evidence and restore the target.",
+        }
+    if state == "not_applicable":
+        return {
+            "reason_code": "not_applicable",
+            "reason": "This measurement does not apply to the current population.",
+            "impact": "It is excluded from the verified total rather than counted as success or failure.",
+            "action": "No action is required unless the population changes.",
+        }
+    if terminal_status == "fail" or state == "failed":
+        return {
+            "reason_code": "runtime_failed",
+            "reason": "The latest recorded run ended in failure.",
+            "impact": "This role did not complete its scheduled work.",
+            "action": "Review the linked runtime evidence and repair the failing run.",
+        }
+    if terminal_status == "abort":
+        return {
+            "reason_code": "recorded_early_stop",
+            "reason": "The scheduled run stopped before producing a result.",
+            "impact": "This recorded early stop is not an outage; no completed result was produced.",
+            "action": "Review the run preconditions before the next scheduled attempt.",
+        }
+    if state == "healthy":
+        return {
+            "reason_code": "runtime_healthy",
+            "reason": "The latest recorded run completed successfully.",
+            "impact": "No runtime failure is evidenced for this role in the selected window.",
+            "action": "Keep monitoring the next scheduled run.",
+        }
+    if state == "running":
+        return {
+            "reason_code": "runtime_in_progress",
+            "reason": "A run started and has not recorded a terminal result yet.",
+            "impact": "The outcome is pending rather than successful or failed.",
+            "action": "Wait for the terminal event or investigate if the run becomes stale.",
+        }
+    if state == "stale":
+        return {
+            "reason_code": "runtime_stale",
+            "reason": "A run started but no timely terminal result was recorded.",
+            "impact": "The role may be stuck or its terminal telemetry may be missing.",
+            "action": "Inspect the latest run and its event coverage.",
+        }
+    if any(code == "unsupported_in_v1" or code.startswith("unsupported_") for code in limitations):
+        return {
+            "reason_code": "unsupported_in_v1",
+            "reason": "This measurement is not supported by the current evidence contract.",
+            "impact": "No success or failure conclusion can be drawn from this source.",
+            "action": "Add supported evidence before evaluating this promise.",
+        }
+    if "event_window_truncated" in limitations:
+        return {
+            "reason_code": "event_window_truncated",
+            "reason": "The selected event window exceeded the bounded outcome page.",
+            "impact": "The visible evidence may not contain the complete denominator.",
+            "action": "Use project runtime evidence or a narrower window before drawing a conclusion.",
+        }
+    if "inspection_unavailable" in limitations:
+        return {
+            "reason_code": "inspection_unavailable",
+            "reason": "The fleet inspection snapshot is unavailable.",
+            "impact": "This state cannot be verified from the current inspection.",
+            "action": "Restore inspection coverage and reassess the promise.",
+        }
+    if any("missing" in code or "partial" in code or "gap" in code for code in limitations):
+        return {
+            "reason_code": "evidence_incomplete",
+            "reason": "Required evidence is missing or incomplete for this measurement.",
+            "impact": "The state remains unknown rather than being counted as success.",
+            "action": "Close the named evidence coverage gap and reassess.",
+        }
+    return {
+        "reason_code": "evidence_unknown",
+        "reason": "Available evidence does not establish a verified state.",
+        "impact": "No success or failure conclusion is justified.",
+        "action": "Review evidence coverage before acting on this state.",
+    }
+
+
 def _event_evidence_id(event: dict[str, Any]) -> str:
     safe = {
         key: event.get(key)
@@ -373,6 +483,7 @@ def _promise_rows(inspection: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
     for key, label in PROMISE_DEFINITIONS:
         item = measured.get(key)
         if item is None:
+            limitations = ["inspection_unavailable" if inspection is None else "promise_evidence_missing"]
             rows.append(
                 {
                     "id": f"promise:{key}",
@@ -381,7 +492,8 @@ def _promise_rows(inspection: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
                     "target": {"operator": None, "value": None, "unit": None},
                     "observed_value": None,
                     "evidence_ids": [],
-                    "limitations": ["inspection_unavailable" if inspection is None else "promise_evidence_missing"],
+                    "limitations": limitations,
+                    **_controlled_explanation("unverified", limitations),
                 }
             )
             continue
@@ -401,6 +513,7 @@ def _promise_rows(inspection: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
             }[operator]
             state = "verified" if met else "violated"
         unit = _safe_code(item.get("unit"))
+        limitations = _safe_limitations(item.get("limitations"))
         rows.append(
             {
                 "id": f"promise:{key}",
@@ -409,7 +522,8 @@ def _promise_rows(inspection: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
                 "target": {"operator": operator, "value": target_value, "unit": unit},
                 "observed_value": observed,
                 "evidence_ids": _safe_ids(item.get("evidence_ids")),
-                "limitations": _safe_limitations(item.get("limitations")),
+                "limitations": limitations,
+                **_controlled_explanation(state, limitations),
             }
         )
     return sorted(rows, key=lambda row: (_STATE_RANK[row["state"]], row["id"]))
@@ -645,24 +759,296 @@ def _relationship_sources(relationships: Optional[dict[str, Any]]) -> list[dict[
     return rows
 
 
+def _fleet_projects(inspection: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
+    projects: list[dict[str, Any]] = []
+    for raw in _array(_object(inspection).get("fleet")):
+        item = _object(raw)
+        project_id = _safe_id(item.get("project_id"))
+        project_label = _safe_id(item.get("project_name"))
+        if project_id is None or project_label is None:
+            continue
+        roles = []
+        for value in _array(item.get("roles")):
+            role = _safe_code(value)
+            if role is not None and role not in roles:
+                roles.append(role)
+        projects.append(
+            {
+                "project_id": project_id,
+                "project_label": project_label,
+                "project_state": _safe_code(item.get("state")) or "unknown",
+                "roles": roles,
+            }
+        )
+        if len(projects) >= MAX_SCOPE_PROJECTS:
+            break
+    return projects
+
+
+def _safe_coverage_counts(item: dict[str, Any]) -> dict[str, Optional[int]]:
+    result: dict[str, Optional[int]] = {}
+    for key in (
+        "records_total",
+        "records_valid",
+        "records_invalid",
+        "records_out_of_window",
+        "records_unattributed",
+        "records_ambiguous",
+    ):
+        value = _safe_number(item.get(key))
+        result[key] = value if isinstance(value, int) and value >= 0 else None
+    return result
+
+
+def _scope_document(inspection: Optional[dict[str, Any]]) -> dict[str, Any]:
+    projects = _fleet_projects(inspection)
+    coverage = [_object(row) for row in _array(_object(inspection).get("coverage"))]
+    rows = []
+    for project in projects:
+        project_id = project["project_id"]
+        source_rows = [row for row in coverage if _safe_id(row.get("project_id")) == project_id]
+        event_row = next(
+            (row for row in source_rows if _safe_code(row.get("source")) == "events"),
+            {},
+        )
+        inspection_rows = [row for row in source_rows if _safe_code(row.get("source")) != "events"]
+        available_sources = sum(
+            1 for row in inspection_rows if _safe_code(row.get("state")) in {"available", "not_applicable"}
+        )
+        rows.append(
+            {
+                "project_id": project_id,
+                "project_label": project["project_label"],
+                "inspection": {
+                    "state": "available" if inspection is not None else "unknown",
+                    "project_state": project["project_state"],
+                    "sources_available": available_sources,
+                    "sources_total": len(inspection_rows),
+                },
+                "events": {
+                    "state": _safe_code(event_row.get("state")) or "unknown",
+                    "reason": _safe_code(event_row.get("reason")) or "unknown",
+                    **_safe_coverage_counts(event_row),
+                },
+            }
+        )
+    unattributed_row = next(
+        (
+            row
+            for row in coverage
+            if row.get("project_id") is None
+            and _safe_code(row.get("source")) == "events_attribution"
+        ),
+        {},
+    )
+    unattributed_counts = _safe_coverage_counts(unattributed_row)
+    return {
+        "kind": "current_user_fleet",
+        "label": "Current-user Shipyard fleet",
+        "projects": rows,
+        "unattributed": {
+            "state": _safe_code(unattributed_row.get("state")) or "unknown",
+            "records_unattributed": unattributed_counts["records_unattributed"],
+            "records_ambiguous": unattributed_counts["records_ambiguous"],
+        },
+        "limitations": ["scope_projects_truncated"] if len(_array(_object(inspection).get("fleet"))) > len(projects) else [],
+    }
+
+
+def _project_runtime_nodes(
+    declared: dict[str, Any],
+    summary: dict[str, Any],
+    runtime_events: list[dict[str, Any]],
+    inspection: Optional[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    projects = _fleet_projects(inspection)
+    project_by_id = {item["project_id"]: item for item in projects}
+    projects_by_label: dict[str, list[dict[str, Any]]] = {}
+    for project in projects:
+        projects_by_label.setdefault(project["project_label"], []).append(project)
+
+    def resolve_project(item: dict[str, Any]) -> Optional[dict[str, Any]]:
+        explicit = project_by_id.get(_safe_id(item.get("project_id")) or "")
+        if explicit is not None:
+            return explicit
+        matches = projects_by_label.get(_safe_id(item.get("project")) or "", [])
+        return matches[0] if len(matches) == 1 else None
+
+    role_labels = {item["id"]: item["name"] for item in declared["roles"] if item["id"] != "human"}
+    services: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for raw in _array(summary.get("services")):
+        item = _object(raw)
+        project = resolve_project(item)
+        role = _safe_code(item.get("role"))
+        if project is not None and role in role_labels:
+            services.setdefault((project["project_id"], role), []).append(item)
+
+    events: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for raw in runtime_events:
+        item = _object(raw)
+        if _safe_code(item.get("event")) not in {"job.start", "job.end"}:
+            continue
+        project = resolve_project(item)
+        role = _safe_code(item.get("role"))
+        service = _safe_id(item.get("svc"))
+        if project is None or role not in role_labels or service is None:
+            continue
+        bucket = events.setdefault((project["project_id"], role, service), [])
+        if len(bucket) < MAX_RUNTIME_EVENTS_PER_NODE:
+            bucket.append(item)
+
+    nodes: list[dict[str, Any]] = []
+    evidence: list[dict[str, Any]] = []
+    for project in projects:
+        observed_roles = {
+            role
+            for key in (*services.keys(), *events.keys())
+            if key[0] == project["project_id"]
+            for role in [key[1]]
+        }
+        roles = [role for role in role_labels if role in set(project["roles"]) | observed_roles]
+        for role in roles:
+            key = (project["project_id"], role)
+            role_services = services.get(key, [])
+            service_events = {
+                service: rows
+                for (project_id, event_role, service), rows in events.items()
+                if project_id == project["project_id"] and event_role == role
+            }
+            known_services = [
+                item for item in role_services if item.get("state") in _ROLE_STATE_RANK
+            ]
+            controlling_service: dict[str, Any] = {}
+            if known_services:
+                worst_rank = min(_ROLE_STATE_RANK[item["state"]] for item in known_services)
+                controlling_service = max(
+                    (
+                        item
+                        for item in known_services
+                        if _ROLE_STATE_RANK[item["state"]] == worst_rank
+                    ),
+                    key=lambda item: (
+                        _safe_timestamp(item.get("last_activity")) or "",
+                        _safe_id(item.get("svc")) or "",
+                    ),
+                )
+            state = controlling_service.get("state", "unknown")
+            controlling_svc = _safe_id(controlling_service.get("svc"))
+            if controlling_svc is None and len(service_events) == 1:
+                controlling_svc = next(iter(service_events))
+            role_events = service_events.get(controlling_svc, []) if controlling_svc else []
+            terminal_events = [
+                item
+                for item in role_events
+                if _safe_code(item.get("event")) == "job.end"
+            ]
+            terminal = max(
+                terminal_events,
+                key=lambda item: _safe_timestamp(item.get("ts")) or "",
+                default={},
+            )
+            terminal_status = _safe_code(controlling_service.get("terminal_status"))
+            if terminal_status not in _RUNTIME_TERMINAL_STATUSES:
+                terminal_status = _safe_code(terminal.get("status"))
+            terminal_reason = _safe_code(controlling_service.get("terminal_reason"))
+            if terminal_reason not in _RUNTIME_TERMINAL_REASONS:
+                terminal_reason = _safe_code(terminal.get("reason"))
+            if state == "failed":
+                terminal_status = "fail"
+                if _safe_code(controlling_service.get("terminal_status")) != "fail":
+                    terminal_reason = None
+            elif state == "healthy":
+                if terminal_status in {"fail", "abort", "partial", "skipped"}:
+                    state = "failed" if terminal_status == "fail" else "unknown"
+                else:
+                    terminal_status = "ok"
+                    terminal_reason = None
+            elif state in {"running", "stale"}:
+                terminal_status = None
+                terminal_reason = None
+            elif terminal_status not in _RUNTIME_TERMINAL_STATUSES:
+                terminal_status = None
+            if terminal_reason not in _RUNTIME_TERMINAL_REASONS:
+                terminal_reason = None
+            if not known_services and terminal_status == "ok":
+                state = "healthy"
+            elif not known_services and terminal_status == "fail":
+                state = "failed"
+            event_ids = [_event_evidence_id(item) for item in role_events]
+            timestamps = [
+                value
+                for item in role_events
+                if (value := _safe_timestamp(item.get("ts"))) is not None
+            ]
+            controlling_activity = _safe_timestamp(
+                controlling_service.get("last_activity")
+            )
+            if not timestamps and controlling_activity is not None:
+                timestamps.append(controlling_activity)
+            limitations = [] if role_events else ["runtime_lifecycle_unobserved"]
+            if len(service_events) > 1 or len(
+                {
+                    service
+                    for item in known_services
+                    if (service := _safe_id(item.get("svc"))) is not None
+                }
+            ) > 1:
+                limitations.append("runtime_sibling_services_omitted")
+            if any(item.get("runtime_identity_truncated") is True for item in role_events):
+                limitations.append("runtime_identity_truncated")
+            explanation = _controlled_explanation(
+                state,
+                limitations,
+                terminal_status=terminal_status,
+                terminal_reason=terminal_reason,
+            )
+            nodes.append(
+                {
+                    "id": f"runtime:{project['project_id']}:{role}",
+                    "kind": "role_runtime",
+                    "project_id": project["project_id"],
+                    "project_label": project["project_label"],
+                    "role_id": role,
+                    "label": role_labels[role],
+                    "scope": {
+                        "kind": "project",
+                        "project_id": project["project_id"],
+                        "project_label": project["project_label"],
+                    },
+                    "state": state,
+                    "observed_count": len(role_events),
+                    "last_activity": max(timestamps, default=None),
+                    "terminal_status": terminal_status,
+                    "terminal_reason": terminal_reason,
+                    "evidence_count": len(event_ids),
+                    "evidence_ids": event_ids,
+                    "limitations": limitations,
+                    **explanation,
+                }
+            )
+            for item in role_events:
+                evidence_row = _safe_event_evidence(item)
+                evidence_row["project_id"] = project["project_id"]
+                evidence.append(evidence_row)
+    return nodes, evidence
+
+
 def _topology_document(
     declared: dict[str, Any],
     summary: dict[str, Any],
     events: list[dict[str, Any]],
+    runtime_events: list[dict[str, Any]],
+    inspection: Optional[dict[str, Any]],
     relationships: Optional[dict[str, Any]],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     evidence: list[dict[str, Any]] = []
-    events_by_role: dict[str, list[dict[str, Any]]] = {}
-    for event in events:
-        role = _safe_code(event.get("role"))
-        if role is not None:
-            events_by_role.setdefault(role, []).append(event)
-    services_by_role: dict[str, list[dict[str, Any]]] = {}
-    for raw in _array(summary.get("services")):
-        service = _object(raw)
-        role = _safe_code(service.get("role"))
-        if role is not None:
-            services_by_role.setdefault(role, []).append(service)
+    runtime_nodes, runtime_evidence = _project_runtime_nodes(
+        declared, summary, runtime_events, inspection
+    )
+    evidence.extend(runtime_evidence)
+    runtime_by_role: dict[str, list[dict[str, Any]]] = {}
+    for node in runtime_nodes:
+        runtime_by_role.setdefault(node["role_id"], []).append(node)
 
     nodes: list[dict[str, Any]] = []
     for role in declared["roles"]:
@@ -682,23 +1068,33 @@ def _topology_document(
                 }
             )
             continue
-        services = services_by_role.get(role_id, [])
-        states = [item.get("state") for item in services if item.get("state") in _ROLE_STATE_RANK]
+        constituents = runtime_by_role.get(role_id, [])
+        states = [item.get("state") for item in constituents if item.get("state") in _ROLE_STATE_RANK]
         state = min(states, key=lambda value: _ROLE_STATE_RANK[value]) if states else "unknown"
-        role_events = events_by_role.get(role_id, [])
-        ids = [_event_evidence_id(item) for item in role_events[:10]]
-        activity = [timestamp for item in role_events if (timestamp := _safe_timestamp(item.get("ts"))) is not None]
+        ids = [evidence_id for item in constituents for evidence_id in item["evidence_ids"]][:10]
+        activity = [
+            item["last_activity"]
+            for item in constituents
+            if item.get("last_activity") is not None
+        ]
+        observed_count = sum(item["observed_count"] for item in constituents)
+        limitations = [] if observed_count else ["role_runtime_unobserved"]
+        explanation = _controlled_explanation(state, limitations)
         nodes.append(
             {
                 "id": f"role:{role_id}",
                 "kind": "role",
                 "label": role["name"],
                 "loop": role["loop"],
+                "scope": {"kind": "current_user_fleet", "project_id": None, "project_label": None},
                 "state": state,
-                "observed_count": len(role_events),
+                "observed_count": observed_count,
                 "last_activity": max(activity, default=None),
+                "reduction_rule": "worst_known_state_unknown_if_none",
+                "constituent_projects": [item["project_id"] for item in constituents],
                 "evidence_ids": ids,
-                "limitations": [] if services else ["role_runtime_unobserved"],
+                "limitations": limitations,
+                **explanation,
             }
         )
 
@@ -853,6 +1249,7 @@ def _topology_document(
     return (
         {
             "nodes": nodes,
+            "runtime_nodes": runtime_nodes,
             "declared_edges": declared_edges,
             "observed_edges": observed_edges[:MAX_RELATIONSHIP_EDGES],
             "limitations": ["relationship_edges_truncated"] if len(observed_edges) > MAX_RELATIONSHIP_EDGES else [],
@@ -1529,6 +1926,9 @@ def compose_operator_document(
     refresh_age_seconds: Optional[int],
     refresh_limitation: Optional[str] = None,
     event_stream_truncated: bool = False,
+    runtime_events: Optional[list[dict[str, Any]]] = None,
+    runtime_limitations: Optional[list[str]] = None,
+    source_provenance: Optional[dict[str, str]] = None,
     changes: Optional[list[dict[str, Any]]] = None,
     change_limitations: Optional[list[str]] = None,
 ) -> dict[str, Any]:
@@ -1540,6 +1940,12 @@ def compose_operator_document(
     if inspection_state not in {"fresh", "stale", "unavailable"}:
         raise OperatorDataError("invalid inspection state")
     safe_events = [event for event in events if isinstance(event, dict)]
+    safe_runtime_events = [
+        event
+        for event in (runtime_events if runtime_events is not None else safe_events)
+        if isinstance(event, dict)
+    ]
+    safe_runtime_limitations = _safe_limitations(runtime_limitations)
     promises = _promise_rows(inspection)
     attention, attention_truncated = _attention_rows(inspection)
     inspection_attention_count = _safe_number(
@@ -1553,7 +1959,7 @@ def compose_operator_document(
         event_stream_truncated=event_stream_truncated,
     )
     topology_document, relationship_evidence = _topology_document(
-        topology, summary, safe_events, relationships
+        topology, summary, safe_events, safe_runtime_events, inspection, relationships
     )
     brief = _brief_document(
         promises,
@@ -1566,7 +1972,9 @@ def compose_operator_document(
     safe_change_limitations = _safe_limitations(
         change_limitations if change_limitations is not None else ["explicit_git_range_unavailable"]
     )
-    evidence = _inspection_evidence(inspection) + event_evidence + relationship_evidence
+    # Project-keyed runtime evidence wins over the same globally bounded event
+    # so its controlled project linkage cannot be erased by de-duplication.
+    evidence = _inspection_evidence(inspection) + relationship_evidence + event_evidence
     unique_evidence: list[dict[str, Any]] = []
     seen_evidence: set[str] = set()
     for row in evidence:
@@ -1590,11 +1998,22 @@ def compose_operator_document(
         limitations.append("relationship_snapshot_missing")
     if event_stream_truncated:
         limitations.append("event_window_truncated")
+    limitations.extend(safe_runtime_limitations)
     if refresh_limitation is not None:
         safe_refresh_limitation = _safe_code(refresh_limitation)
         if safe_refresh_limitation is not None:
             limitations.append(safe_refresh_limitation)
     limitations.extend(_safe_limitations(topology_document.get("limitations")))
+    provenance = _object(source_provenance)
+    source_revision = provenance.get("source_revision")
+    if not isinstance(source_revision, str) or not _SHA_RE.fullmatch(source_revision):
+        source_revision = "unknown"
+    source_state = provenance.get("source_state")
+    if source_state not in {"clean", "modified", "unknown"}:
+        source_state = "unknown"
+    source_digest = provenance.get("source_digest")
+    if not isinstance(source_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", source_digest):
+        source_digest = "unknown"
     metadata = {
         "schema_version": OPERATOR_VIEW_SCHEMA_VERSION,
         "build_version": OPERATOR_BUILD_VERSION,
@@ -1604,6 +2023,10 @@ def compose_operator_document(
         "generated_at": generated_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         "inspection_state": inspection_state,
         "refresh_age_seconds": refresh_age_seconds,
+        "source_revision": source_revision,
+        "source_state": source_state,
+        "source_digest": source_digest,
+        "scope": _scope_document(inspection),
         "limits": {"attention": MAX_ATTENTION, "evidence": MAX_EVIDENCE, "story_beats": MAX_STORY_BEATS},
         "limitations": sorted(set(limitations)),
     }
@@ -1625,6 +2048,15 @@ def compose_operator_document(
             "reason": "bounded_at_maximum" if event_stream_truncated else "ok",
             "records_total": len(safe_events),
             "limitations": ["event_window_truncated"] if event_stream_truncated else [],
+        }
+    )
+    coverage.append(
+        {
+            "source": "runtime_lifecycle",
+            "state": "partial" if safe_runtime_limitations else "available",
+            "reason": "bounded_at_maximum" if safe_runtime_limitations else "ok",
+            "records_total": len(safe_runtime_events),
+            "limitations": safe_runtime_limitations,
         }
     )
     narrative = _narrative_document(

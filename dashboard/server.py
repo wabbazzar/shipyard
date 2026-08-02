@@ -16,12 +16,15 @@ if __package__ in {None, ""}:
         sys.path.insert(0, _package_root)
 
 import argparse
+import hashlib
+import itertools
 import json
 import os
 import re
 import select
 import socket
 import stat
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -35,6 +38,7 @@ from urllib.parse import parse_qsl, urlsplit
 from dashboard.reader import DEFAULT_LIMIT, MAX_LIMIT, EventReader, StaleReferenceError
 from dashboard.operator import (
     InspectionCache,
+    MAX_RUNTIME_EVENTS_PER_NODE,
     OperatorDataError,
     collect_change_metrics,
     compose_operator_document,
@@ -69,6 +73,22 @@ STATIC_FILES = {
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
 }
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+_SOURCE_DIGEST_PATHS = (
+    "dashboard/operator.py",
+    "dashboard/reader.py",
+    "dashboard/server.py",
+    "dashboard/static/app.js",
+    "dashboard/static/index.html",
+    "dashboard/static/styles.css",
+    "skills/shipyard/shipyard.sh",
+    "skills/shipyard/inspect.py",
+    "scripts/delegation-report.py",
+    "docs/shipyard-data.json",
+)
+_TERMINAL_REASONS = {"dirty", "not_trunk", "open_cap", "budget", "budget_deferred"}
+MAX_RUNTIME_IDENTITIES = 512
+MAX_RUNTIME_EVENTS_TOTAL = 4096
+MAX_RUNTIME_SCAN_REFERENCES = 50_000
 
 
 class RequestError(ValueError):
@@ -167,21 +187,84 @@ def _reference_location(reader: EventReader, reference: Any) -> dict[str, Any]:
     return {"file": reader.filename(reference), "byte_offset": reference.byte_offset}
 
 
+def _source_content_digest(repo_root: Path, topology_path: Optional[Path] = None) -> str:
+    """Hash every mutable producer directly, without invoking a command."""
+    sources = [(relative, repo_root / relative) for relative in _SOURCE_DIGEST_PATHS]
+    if topology_path is not None:
+        topology = Path(topology_path)
+        if all(path != topology for _label, path in sources):
+            sources.append(("operator_topology", topology))
+    digest = hashlib.sha256()
+    for label, path in sources:
+        digest.update(label.encode("utf-8"))
+        digest.update(b"\0")
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            digest.update(b"source_unavailable")
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _source_git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repo_root), *args],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+
+def capture_source_provenance(
+    repo_root: Path, topology_path: Optional[Path] = None
+) -> dict[str, str]:
+    """Capture deployed source identity once; requests only read the snapshot."""
+    revision = "unknown"
+    state = "unknown"
+    try:
+        revision_result = _source_git(repo_root, "rev-parse", "HEAD")
+        candidate = revision_result.stdout.strip()
+        if revision_result.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", candidate):
+            revision = candidate
+        status_result = _source_git(
+            repo_root, "status", "--porcelain", "--untracked-files=normal"
+        )
+        if status_result.returncode == 0:
+            state = "modified" if status_result.stdout else "clean"
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    return {
+        "source_revision": revision,
+        "source_state": state,
+        "source_digest": _source_content_digest(repo_root, topology_path),
+    }
+
+
 def _summary_payload(reader: EventReader, window: str) -> dict[str, Any]:
     summary = reader.summarize(window=window)
-    services = [
-        {
-            "project": item.project,
-            "role": item.role,
-            "svc": item.svc,
-            "state": item.state,
-            "last_activity": item.last_activity,
-            "terminal_status": item.terminal_status,
-            "duration_s": item.duration_s,
-            **_reference_location(reader, item.reference),
-        }
-        for item in summary["services"]
-    ]
+    services = []
+    for item in summary["services"]:
+        terminal = reader.read_event(item.reference)
+        terminal_reason = terminal.get("reason")
+        if terminal_reason not in _TERMINAL_REASONS:
+            terminal_reason = None
+        services.append(
+            {
+                "project": item.project,
+                "role": item.role,
+                "svc": item.svc,
+                "state": item.state,
+                "last_activity": item.last_activity,
+                "terminal_status": item.terminal_status,
+                "terminal_reason": terminal_reason,
+                "duration_s": item.duration_s,
+                **_reference_location(reader, item.reference),
+            }
+        )
     actionables = []
     for item in summary["actionables"]:
         row = reader.read_event(item.reference)
@@ -200,6 +283,74 @@ def _summary_payload(reader: EventReader, window: str) -> dict[str, Any]:
             for problem in reader.problems
         ],
     }
+
+
+class RuntimeLifecycleEvents(list[dict[str, Any]]):
+    """List-compatible bounded runtime page with controlled limitations."""
+
+    def __init__(self, rows: list[dict[str, Any]], limitations: list[str]):
+        super().__init__(rows)
+        self.limitations = limitations
+
+
+def _runtime_lifecycle_events(
+    reader: EventReader, window: str, summary: dict[str, Any]
+) -> RuntimeLifecycleEvents:
+    """Read a globally and per-identity bounded runtime lifecycle page."""
+    limitations: set[str] = set()
+    identity_projects: dict[tuple[str, str], Optional[str]] = {}
+    raw_services = summary.get("services", [])
+    services = raw_services if isinstance(raw_services, list) else []
+    if len(services) > MAX_RUNTIME_IDENTITIES:
+        limitations.add("runtime_identities_truncated")
+    for raw in services[:MAX_RUNTIME_IDENTITIES]:
+        if not isinstance(raw, dict):
+            continue
+        role, svc, project = raw.get("role"), raw.get("svc"), raw.get("project")
+        if not all(isinstance(value, str) for value in (role, svc, project)):
+            continue
+        key = (role, svc)
+        if key not in identity_projects:
+            identity_projects[key] = project
+        elif identity_projects[key] != project:
+            identity_projects[key] = None
+    buckets: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    scanned = 0
+    retained = 0
+    for reference in itertools.islice(
+        reader._window_refs(window, None), MAX_RUNTIME_SCAN_REFERENCES
+    ):
+        scanned += 1
+        if reference.event not in {"job.start", "job.end"}:
+            continue
+        project = reference.project or identity_projects.get((reference.role, reference.svc))
+        if not project:
+            continue
+        key = (project, reference.role, reference.svc)
+        if key not in buckets and len(buckets) >= MAX_RUNTIME_IDENTITIES:
+            limitations.add("runtime_identities_truncated")
+            continue
+        bucket = buckets.setdefault(key, [])
+        if len(bucket) >= MAX_RUNTIME_EVENTS_PER_NODE:
+            if bucket:
+                bucket[0]["runtime_identity_truncated"] = True
+            limitations.add("runtime_identity_events_truncated")
+            continue
+        if retained >= MAX_RUNTIME_EVENTS_TOTAL:
+            limitations.add("runtime_events_total_truncated")
+            continue
+        row = reader.read_event(reference)
+        row["project"] = project
+        row["role"] = reference.role
+        row["svc"] = reference.svc
+        bucket.append(row)
+        retained += 1
+    if scanned == MAX_RUNTIME_SCAN_REFERENCES:
+        limitations.add("runtime_scan_truncated")
+    if limitations:
+        limitations.add("runtime_lifecycle_truncated")
+    rows = [row for key in sorted(buckets) for row in buckets[key]]
+    return RuntimeLifecycleEvents(rows, sorted(limitations))
 
 
 def _with_event_index_limitation(payload: dict[str, Any], limitation: Optional[str]) -> dict[str, Any]:
@@ -252,6 +403,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         utc_now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         operator_loader: Optional[Callable[[str], dict[str, Any]]] = None,
         operator_topology_path: Optional[Path] = None,
+        source_provenance: Optional[dict[str, str]] = None,
     ):
         host, port = address
         validate_bind_host(host)
@@ -280,17 +432,65 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.utc_now = utc_now
         self.repo_root = Path(__file__).resolve().parents[1]
         topology_path = operator_topology_path or self.repo_root / "docs" / "shipyard-data.json"
+        self._source_topology_path = Path(topology_path)
+        self._source_start_digest = _source_content_digest(
+            self.repo_root, self._source_topology_path
+        )
+        self._track_source_mutations = source_provenance is None
+        self._source_provenance_lock = threading.Lock()
+        self._source_changed_after_start = False
+        self._source_observed_digest = self._source_start_digest
+        captured_provenance = source_provenance or capture_source_provenance(
+            self.repo_root, self._source_topology_path
+        )
+        self.source_provenance = {
+            "source_revision": captured_provenance.get("source_revision", "unknown"),
+            "source_state": captured_provenance.get("source_state", "unknown"),
+            "source_digest": captured_provenance.get("source_digest", "unknown"),
+        }
         try:
-            self.operator_topology = load_presentation_topology(topology_path)
+            self.operator_topology = load_presentation_topology(self._source_topology_path)
         except OperatorDataError:
             self.operator_topology = {"roles": [], "skills": [], "edges": []}
+        operator_loader = operator_loader or make_expensive_loader(self.repo_root)
+        if self._track_source_mutations:
+            raw_loader = operator_loader
+
+            def tracked_loader(window: str) -> dict[str, Any]:
+                self._observe_source_digest()
+                loaded = raw_loader(window)
+                self._observe_source_digest()
+                return loaded
+
+            operator_loader = tracked_loader
         self.operator_cache = InspectionCache(
-            operator_loader or make_expensive_loader(self.repo_root),
+            operator_loader,
             monotonic=monotonic,
         )
         self.stream_slots = threading.BoundedSemaphore(max_stream_clients)
         self.stop_event = threading.Event()
         super().__init__((host, port), DashboardRequestHandler)
+
+    def _observe_source_digest(self) -> None:
+        current_digest = _source_content_digest(
+            self.repo_root, self._source_topology_path
+        )
+        with self._source_provenance_lock:
+            if current_digest != self._source_start_digest:
+                self._source_changed_after_start = True
+                self._source_observed_digest = current_digest
+
+    def current_source_provenance(self) -> dict[str, str]:
+        """Return request-time file truth without Git, a shell, or network I/O."""
+        provenance = dict(self.source_provenance)
+        if not self._track_source_mutations:
+            return provenance
+        self._observe_source_digest()
+        with self._source_provenance_lock:
+            if self._source_changed_after_start:
+                provenance["source_state"] = "modified"
+                provenance["source_digest"] = self._source_observed_digest
+        return provenance
 
     def _event_signature(self) -> tuple[tuple[str, int, int, int, int], ...]:
         signature = []
@@ -538,6 +738,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 summary = _summary_payload(reader, window)
                 refs = reader.query_refs(window=window, limit=MAX_LIMIT)
                 events = [reader.read_event(ref) for ref in refs]
+                runtime_events = _runtime_lifecycle_events(reader, window, summary)
                 event_stream_truncated = len(refs) == MAX_LIMIT
             except StaleReferenceError:
                 cached_payload = self.dashboard._operator_documents.get(window)
@@ -562,6 +763,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             refresh_age_seconds=snapshot.age_seconds,
             refresh_limitation=snapshot.limitation,
             event_stream_truncated=event_stream_truncated,
+            runtime_events=runtime_events,
+            runtime_limitations=runtime_events.limitations,
+            source_provenance=self.dashboard.current_source_provenance(),
             changes=changes,
             change_limitations=change_limitations,
         )
