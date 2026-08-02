@@ -210,6 +210,90 @@ function sha256(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
+function graphNode(id, kind, label, state, projectId = null, limitations = [], reason = null) {
+  return {
+    id, kind, label, state,
+    ...(projectId ? {project_id: projectId} : {}),
+    reason: reason || (limitations.length ? "No explicit correlated evidence is available for this stage." : "This node is supplied by the operator graph contract."),
+    evidence_count: 0,
+    evidence_ids: [],
+    limitations,
+  };
+}
+
+function graphEdge(id, from, to, kind = "explicit_lineage", state = "observed") {
+  return {
+    id, kind, from, to, state,
+    reason: "This exact connection is supplied by the operator graph contract.",
+    evidence_count: 0,
+    evidence_ids: [],
+    limitations: [],
+  };
+}
+
+function browserGraphs() {
+  const project = {kind: "project", project_id: "project-safe", project_label: "demo"};
+  return [
+    {
+      id: "graph:architecture", kind: "architecture", label: "Fleet architecture",
+      scope: {kind: "current_user_fleet", project_id: null, project_label: null}, state: "declared",
+      nodes: [
+        graphNode("role:human", "human", "Human", "declared"),
+        graphNode("skill:polish-ticket", "skill", "<img src=x onerror=window.__hostileGraph=1>", "unknown"),
+        graphNode("role:build", "role", "Helldiver", "unknown"),
+        graphNode("skill:execute-ticket", "skill", "Execute Ticket", "observed"),
+      ],
+      edges: [
+        graphEdge("edge:human:polish", "role:human", "skill:polish-ticket", "membership", "declared"),
+        graphEdge("edge:human:build", "role:human", "role:build", "membership", "declared"),
+        graphEdge("edge:build:execute", "role:build", "skill:execute-ticket", "pipeline", "declared"),
+      ],
+      ranks: [["role:human"], ["skill:polish-ticket", "role:build"], ["skill:execute-ticket"]], limitations: [],
+    },
+    {
+      id: "graph:runtime:demo", kind: "project_runtime", label: "demo runtime", scope: project, state: "unknown",
+      nodes: [
+        graphNode("runtime-project:demo", "project", "demo", "observed", "project-safe"),
+        graphNode("runtime:demo:build", "role_runtime", "Helldiver", "unknown", "project-safe", ["runtime_lifecycle_unobserved"], "No runtime lifecycle event was observed for Helldiver in this window."),
+        graphNode("runtime:demo:release", "role_runtime", "Release", "healthy", "project-safe"),
+      ],
+      edges: [
+        graphEdge("runtime:demo:build", "runtime-project:demo", "runtime:demo:build", "project_role", "scoped"),
+        graphEdge("runtime:demo:release", "runtime-project:demo", "runtime:demo:release", "project_role", "scoped"),
+      ],
+      ranks: [["runtime-project:demo"], ["runtime:demo:build", "runtime:demo:release"]], limitations: [],
+    },
+    {
+      id: "graph:delivery:demo", kind: "delivery", label: "demo delivery", scope: project, state: "incomplete",
+      nodes: [
+        graphNode("delivery:gap:ask", "missing_stage", "Ask not linked", "unverified", "project-safe", ["ask_evidence_missing"]),
+        graphNode("delivery:work:ticket", "ticket", "Ticket", "observed", "project-safe"),
+        graphNode("delivery:work:left", "work", "Left branch", "observed", "project-safe"),
+        graphNode("delivery:work:right", "work", "Right branch", "observed", "project-safe"),
+        graphNode("delivery:work:joined", "work", "Converged work", "observed", "project-safe"),
+        graphNode("delivery:pr:safe", "pull_request", "Pull request", "observed", "project-safe"),
+        graphNode("delivery:gap:deploy", "missing_stage", "Deploy not linked", "unverified", "project-safe", ["deploy_evidence_missing"]),
+        graphNode("delivery:gap:usage", "missing_stage", "Usage outcome not linked", "unverified", "project-safe", ["usage_evidence_missing"]),
+      ],
+      edges: [
+        graphEdge("delivery:ask:ticket", "delivery:gap:ask", "delivery:work:ticket", "missing_stage", "expected"),
+        graphEdge("delivery:ticket:left", "delivery:work:ticket", "delivery:work:left"),
+        graphEdge("delivery:ticket:right", "delivery:work:ticket", "delivery:work:right"),
+        graphEdge("delivery:left:joined", "delivery:work:left", "delivery:work:joined"),
+        graphEdge("delivery:right:joined", "delivery:work:right", "delivery:work:joined"),
+        graphEdge("delivery:joined:pr", "delivery:work:joined", "delivery:pr:safe", "explicit_outcome"),
+        graphEdge("delivery:pr:deploy", "delivery:pr:safe", "delivery:gap:deploy", "missing_stage", "expected"),
+        graphEdge("delivery:deploy:usage", "delivery:gap:deploy", "delivery:gap:usage", "missing_stage", "expected"),
+      ],
+      ranks: [
+        ["delivery:gap:ask"], ["delivery:work:ticket"], ["delivery:work:left", "delivery:work:right"],
+        ["delivery:work:joined"], ["delivery:pr:safe"], ["delivery:gap:deploy"], ["delivery:gap:usage"],
+      ],
+      limitations: ["deploy_evidence_missing", "usage_outcome_evidence_missing"],
+    },
+  ];
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const work = await mkdtemp(join(tmpdir(), "shipyard-dashboard-browser-"));
@@ -219,6 +303,8 @@ async function main() {
   await mkdir(eventsDir);
   await mkdir(options.screenshotDir, {recursive: true});
   const sentinel = JSON.parse(await readFile(join(here, "fixtures", "operator-sentinel.json"), "utf8"));
+  sentinel.operator.graphs = browserGraphs();
+  sentinel.unavailable.graphs = browserGraphs();
   const seed = JSON.parse(await readFile(join(here, "fixtures", "browser-seed.json"), "utf8"));
   const rows = seed.map(({seconds_ago: secondsAgo, ...event}) => ({
     ts: new Date(Date.now() - secondsAgo * 1000).toISOString(),
@@ -388,39 +474,93 @@ async function main() {
     await press(browser, "ArrowRight", "ArrowRight", 39);
     verify.equal(await evaluate(browser, "document.activeElement.id"), "tab-crew", "right arrow did not focus Crew");
     verify.equal(await evaluate(browser, "document.getElementById('mode-crew').hidden"), false, "Crew mode did not activate");
+    await waitFor(browser, "document.querySelectorAll('#graph-edges > path').length === 3", "architecture paths");
     const topology = await evaluate(browser, `({
-      nodes: [...document.querySelectorAll('.topology-node')].map(item => [item.dataset.nodeId, item.dataset.order, item.querySelector('.node-card').dataset.sourceState]),
-      edges: [...document.querySelectorAll('.route-card')].map(item => [item.dataset.edgeId, item.dataset.order, item.dataset.sourceState]),
-      treeRole: document.getElementById('topology-nodes').getAttribute('role'),
-      svg: document.querySelectorAll('#mode-crew svg').length,
-      display: getComputedStyle(document.getElementById('topology-nodes')).display,
+      nodes: [...document.querySelectorAll('.topology-node')].map(item => [item.dataset.nodeId, item.dataset.rank, item.querySelector('.node-card').dataset.sourceState]),
+      supplied: state.document.graphs[0].edges.map(edge => [edge.id, edge.from, edge.to]),
+      paths: [...document.querySelectorAll('#graph-edges > path')].map(path => [path.dataset.edgeId, path.dataset.from, path.dataset.to]),
+      semantic: [...document.querySelectorAll('.route-card')].map(item => [item.dataset.edgeId, item.dataset.from, item.dataset.to]),
+      options: [...document.getElementById('graph-select').options].map(option => option.value),
+      scope: document.getElementById('graph-scope').textContent,
+      adjacentNonedge: Boolean(document.querySelector('#graph-edges > path[data-from="skill:polish-ticket"][data-to="role:build"]')),
       firstWidth: document.querySelector('.node-card').getBoundingClientRect().width,
+      firstHeight: document.querySelector('.node-card').getBoundingClientRect().height,
       activityDisplay: getComputedStyle(document.querySelector('[data-node-id="role:build"] .activity-mark')).display,
       activityAnimation: getComputedStyle(document.querySelector('[data-node-id="skill:execute-ticket"] .activity-mark')).animationName
     })`);
     verify.deepEqual(topology.nodes, [
-      ["skill:polish-ticket", "0", "unknown"], ["role:human", "1", "declared"],
-      ["role:build", "2", "alarm"], ["skill:execute-ticket", "3", "observed"],
-    ], "node order/state was inferred");
-    verify.deepEqual(topology.edges, [
-      ["edge:zeta", "0", "declared"], ["edge:alpha", "1", "declared"], ["edge:observed", "2", "observed"],
-    ], "edge order/state was inferred");
-    verify.equal(topology.treeRole, "tree");
-    verify.equal(topology.svg, 0, "narrow map must not rely on squeezed SVG");
-    if (options.width <= 700) {
-      verify.equal(topology.display, "block", "narrow topology is not a vertical route");
-      verify.ok(topology.firstWidth >= 280, `narrow node was squeezed to ${topology.firstWidth}px`);
-    } else {
-      verify.equal(topology.display, "grid", "wide topology lost its map composition");
-    }
+      ["role:human", "0", "declared"], ["skill:polish-ticket", "1", "unknown"],
+      ["role:build", "1", "unknown"], ["skill:execute-ticket", "2", "observed"],
+    ], "supplied graph ranks or states were re-derived");
+    verify.deepEqual(topology.paths, topology.supplied, "rendered architecture paths differ from supplied endpoints");
+    verify.deepEqual(topology.semantic, topology.supplied, "semantic connections differ from supplied endpoints");
+    verify.deepEqual(topology.options, ["graph:architecture", "graph:runtime:demo", "graph:delivery:demo"], "graph selector lost supplied graphs");
+    verify.equal(topology.scope, "Scope · current-user Shipyard fleet", "fleet scope is ambiguous");
+    verify.equal(topology.adjacentNonedge, false, "an adjacent non-edge was drawn");
+    verify.ok(topology.firstWidth >= 44 && topology.firstHeight >= 44, "graph node target is below 44px");
     verify.notEqual(topology.activityDisplay, "none", "reduced motion removed the static activity mark");
     verify.equal(topology.activityAnimation, "none", "reduced motion retained an activity pulse");
+    verify.deepEqual(await evaluate(browser, `(() => {
+      const vertical = innerWidth <= 700;
+      return [...document.querySelectorAll('#graph-edges > path')].map(path => {
+        const from = document.querySelector('[data-node-id="' + CSS.escape(path.dataset.from) + '"] .node-card').getBoundingClientRect();
+        const to = document.querySelector('[data-node-id="' + CSS.escape(path.dataset.to) + '"] .node-card').getBoundingClientRect();
+        return vertical ? from.bottom <= to.top : from.right <= to.left;
+      });
+    })()`), [true, true, true], "architecture did not follow viewport direction");
 
     await evaluate(browser, "document.querySelector('[data-node-id=\"role:build\"] .node-card').focus()");
     focusOutline = await evaluate(browser, "getComputedStyle(document.activeElement).outlineWidth");
     verify.notEqual(focusOutline, "0px", "crew focus indicator is invisible");
     await press(browser, "Enter", "Enter", 13);
     verify.equal(await evaluate(browser, "document.querySelector('[data-node-id=\"role:build\"] .node-card').getAttribute('aria-pressed')"), "true", "keyboard node selection failed");
+
+    await evaluate(browser, `(() => {
+      const select = document.getElementById('graph-select');
+      select.value = 'graph:runtime:demo';
+      select.dispatchEvent(new Event('change', {bubbles: true}));
+    })()`);
+    await waitFor(browser, "document.querySelectorAll('#graph-edges > path').length === 2", "runtime graph paths");
+    verify.equal(await evaluate(browser, "document.getElementById('graph-scope').textContent"), "Scope · project demo (project-safe)", "runtime project scope is ambiguous");
+    await evaluate(browser, "document.querySelector('[data-node-id=\"runtime:demo:build\"] .node-card').click()");
+    verify.equal(await evaluate(browser, "document.getElementById('crew-selection').textContent.includes('No runtime lifecycle event was observed')"), true, "Helldiver unknown lacks its controlled explanation");
+
+    await evaluate(browser, `(() => {
+      const select = document.getElementById('graph-select');
+      select.value = 'graph:delivery:demo';
+      select.dispatchEvent(new Event('change', {bubbles: true}));
+    })()`);
+    await waitFor(browser, "document.querySelectorAll('#graph-edges > path').length === 8", "delivery graph paths");
+    const deliveryGraph = await evaluate(browser, `({
+      supplied: state.document.graphs.find(graph => graph.id === 'graph:delivery:demo').edges.map(edge => [edge.id, edge.from, edge.to]),
+      paths: [...document.querySelectorAll('#graph-edges > path')].map(path => [path.dataset.edgeId, path.dataset.from, path.dataset.to]),
+      semantic: [...document.querySelectorAll('.route-card')].map(row => [row.dataset.edgeId, row.dataset.from, row.dataset.to]),
+      gaps: [...document.querySelectorAll('[data-node-id] .node-kind')].filter(node => node.textContent === 'missing_stage').length,
+      scope: document.getElementById('graph-scope').textContent,
+      hostileExecuted: window.__hostileGraph === 1,
+      hostileElement: Boolean(document.querySelector('#mode-crew img, #mode-crew script'))
+    })`);
+    verify.deepEqual(deliveryGraph.paths, deliveryGraph.supplied, "branched delivery paths differ from supplied endpoints");
+    verify.deepEqual(deliveryGraph.semantic, deliveryGraph.supplied, "delivery semantic connections differ from paths");
+    verify.equal(deliveryGraph.gaps, 3, "controlled missing-stage gaps were not visible");
+    verify.equal(deliveryGraph.scope, "Scope · project demo (project-safe)", "delivery project scope is ambiguous");
+    verify.equal(deliveryGraph.hostileExecuted, false, "hostile graph label executed");
+    verify.equal(deliveryGraph.hostileElement, false, "hostile graph label created an element");
+    verify.deepEqual(await evaluate(browser, `(() => {
+      const endpoints = [...document.querySelectorAll('#graph-edges > path')].map(path => path.dataset.from + '>' + path.dataset.to);
+      return {
+        branch: endpoints.filter(value => value.startsWith('delivery:work:ticket>')).sort(),
+        converge: endpoints.filter(value => value.endsWith('>delivery:work:joined')).sort(),
+        adjacentNonedge: endpoints.includes('delivery:work:left>delivery:work:right')
+      };
+    })()`), {
+      branch: ["delivery:work:ticket>delivery:work:left", "delivery:work:ticket>delivery:work:right"],
+      converge: ["delivery:work:left>delivery:work:joined", "delivery:work:right>delivery:work:joined"],
+      adjacentNonedge: false,
+    }, "branch, convergence, or non-edge semantics drifted");
+    await evaluate(browser, "renderDocument()");
+    await waitFor(browser, "document.querySelectorAll('#graph-edges > path').length === 8", "stable graph selection after refresh");
+    verify.equal(await evaluate(browser, "document.getElementById('graph-select').value"), "graph:delivery:demo", "graph selection changed across refresh");
 
     await evaluate(browser, "document.querySelector('.attention-summary button').click()");
     await waitFor(browser, "document.getElementById('raw-event-count').textContent === '19 raw events'", "lazy raw evidence fetch");
@@ -482,11 +622,12 @@ async function main() {
     const responsive = await evaluate(browser, `({
       overflow: document.documentElement.scrollWidth - window.innerWidth,
       reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
-      controls: [...document.querySelectorAll('button')].map(item => item.textContent.trim()).filter(text => /restart|trigger|merge|deploy/i.test(text)),
+      controls: [...document.querySelectorAll('button:not(.node-card)')].map(item => item.textContent.trim()).filter(text => /restart|trigger|merge|deploy/i.test(text)),
       mutationForms: document.querySelectorAll('form[method="post"], form[method="put"], form[method="delete"]').length,
       panels: [...document.querySelectorAll('[role=tabpanel]')].map(item => [item.id, item.hidden]),
       headings: [...document.querySelectorAll('h1,h2,h3')].map(item => item.textContent.trim()),
-      treeItems: document.querySelectorAll('#topology-nodes [role=treeitem]').length,
+      graphItems: document.querySelectorAll('#topology-nodes [role=listitem]').length,
+      graphTargets: [...document.querySelectorAll('#mode-crew button, #mode-crew select')].every(item => parseFloat(getComputedStyle(item).minHeight) >= 44),
       promiseChildrenContained: [...document.querySelectorAll('.promise-card')].every(card => {
         const bounds = card.getBoundingClientRect();
         return [...card.children].every(child => child.getBoundingClientRect().right <= bounds.right + 1);
@@ -498,8 +639,9 @@ async function main() {
     verify.deepEqual(responsive.controls, [], "mutation-like controls appeared");
     verify.equal(responsive.mutationForms, 0, "mutation form appeared");
     verify.deepEqual(responsive.panels, [["mode-outcomes", true], ["mode-crew", true], ["mode-evidence", false], ["mode-story", true]], "mode visibility is ambiguous");
-    verify.deepEqual(responsive.headings, ["Shipyard", "Repair observed Shipyard core job failure", "Needs you", "Crew", "Skills", "Evidence", "Story"], "heading hierarchy drifted or retained a redundant Outcomes label");
-    verify.equal(responsive.treeItems, 4, "semantic narrow tree is incomplete");
+    verify.deepEqual(responsive.headings, ["Shipyard", "Repair observed Shipyard core job failure", "Needs you", "Crew", "Connections", "Selection", "Evidence", "Story"], "heading hierarchy drifted or retained a redundant Outcomes label");
+    verify.equal(responsive.graphItems, 8, "semantic delivery graph is incomplete");
+    verify.equal(responsive.graphTargets, true, "crew controls are below 44px");
     verify.equal(responsive.promiseChildrenContained, true, "promise content escaped its card");
 
     const contrast = await evaluate(browser, `(() => {
@@ -517,7 +659,7 @@ async function main() {
     verify.equal(responseStatuses.some(item => item === "/api/events:200"), true, "events HTTP 200 not observed");
     verify.deepEqual(pageErrors, [], `page errors: ${pageErrors.join(" | ")}`);
 
-    await evaluate(browser, "document.getElementById('tab-outcomes').focus(); document.getElementById('tab-outcomes').click()");
+    await evaluate(browser, "document.getElementById('tab-crew').focus(); document.getElementById('tab-crew').click()");
     screenshotPath = join(resolve(options.screenshotDir), `dashboard-${options.width}x${options.height}.png`);
     await screenshot(browser, screenshotPath);
     server.kill("SIGTERM");
@@ -530,7 +672,7 @@ async function main() {
     console.log(`viewport=${options.width}x${options.height} overflow=${overflow}px outcomes_height=${outcomesHeight}px`);
     console.log(`operator_requests=${operatorRequests} unavailable_poll=true final_inspection_state=stale operator_wins=true`);
     console.log(`modes=Outcomes,Crew,Evidence,Story keyboard=skip,tabs,node,story focus_outline=${focusOutline}`);
-    console.log(`topology=nodes:4,edges:3 supplied_order=true narrow_tree=${options.width <= 700}`);
+    console.log(`graphs=architecture,runtime,branched_delivery paths_equal_supplied=true semantic_equal=true vertical=${options.width <= 700}`);
     console.log(`reduced_motion=static_activity_mark contrast=${JSON.stringify(contrast)}`);
     console.log(`hostile_text_inert=true mutation_controls=0 request_origins=${[...requestOrigins].join(",")}`);
     console.log(`network=operator:200,events:200 raw_only_in_evidence=true`);

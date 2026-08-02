@@ -208,7 +208,7 @@ printf '%s' '$(usage_envelope)'"
   printf '\n[telemetry]\noutcome_lineage = true\n' >>"$p/.agents/config.toml"
   git -C "$p" add -A && git -C "$p" commit -qm "fixture: pin lineage"
   make_stub_script claude \
-    "printf '%s' '{\"pass\":true,\"items\":[{\"id\":\"fyi_opaque_1\",\"classification\":\"ATTEMPT\",\"outcome\":\"pr_opened\",\"pr_url\":\"https://example.invalid/pull/7\",\"branch\":\"build/fyi_opaque_1\",\"commit_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"files_planned\":[\"PRIVATE_FILE\"],\"reason\":\"PRIVATE_RESULT_BODY\"}]}' >'$p/tmp/toklineage-build-result.json'
+    "printf '%s' '{\"pass\":true,\"items\":[{\"id\":\"fyi_opaque_1\",\"classification\":\"ATTEMPT\",\"outcome\":\"pr_opened\",\"upstream_work_id\":\"ticket:opaque-parent\",\"pr_url\":\"https://example.invalid/pull/7\",\"branch\":\"build/fyi_opaque_1\",\"commit_sha\":\"0123456789abcdef0123456789abcdef01234567\",\"files_planned\":[\"PRIVATE_FILE\"],\"reason\":\"PRIVATE_RESULT_BODY\"}]}' >'$p/tmp/toklineage-build-result.json'
 printf '%s' '{\"result\":\"PRIVATE_MESSAGE\",\"usage\":{\"input_tokens\":1000,\"cache_read_input_tokens\":300,\"cache_creation_input_tokens\":40,\"output_tokens\":200,\"reasoning_output_tokens\":20}}'"
   make_stub gh 0
 
@@ -217,11 +217,12 @@ printf '%s' '{\"result\":\"PRIVATE_MESSAGE\",\"usage\":{\"input_tokens\":1000,\"
   work="$(events_json | jq -c 'select(.event=="build.work.outcome")')"
   jq -e '
     .work_id=="fyi_opaque_1" and .classification=="ATTEMPT"
+    and .upstream_work_id=="ticket:opaque-parent"
     and .outcome=="pr_opened" and .pr_url=="https://example.invalid/pull/7"
     and .branch=="build/fyi_opaque_1"
     and .commit_sha=="0123456789abcdef0123456789abcdef01234567"
-    and ([keys[]] | any(.=="prompt" or .=="message" or .=="diff" or
-      .=="filename" or .=="files_planned" or .=="reason" or .=="result")) | not
+    and (([keys[]] | any(.=="prompt" or .=="message" or .=="diff" or
+      .=="filename" or .=="files_planned" or .=="reason" or .=="result")) | not)
   ' <<<"$work" >/dev/null
   last_job_end | jq -e '
     .provider=="claude" and .model=="sonnet"
@@ -229,6 +230,22 @@ printf '%s' '{\"result\":\"PRIVATE_MESSAGE\",\"usage\":{\"input_tokens\":1000,\"
     and .cache_write_tokens==40 and .output_tokens==200
     and .reasoning_tokens==20 and .tokens==1200
   ' >/dev/null
+}
+
+@test "outcome lineage: unsafe upstream work id rejects the work event without leaking result content" {
+  p="$(make_fixture_project tokbadupstream absent-keys.toml)"
+  fix_trunk "$p"
+  printf '\n[telemetry]\noutcome_lineage = true\n' >>"$p/.agents/config.toml"
+  git -C "$p" add -A && git -C "$p" commit -qm "fixture: pin lineage"
+  make_stub_script claude \
+    "printf '%s' '{\"pass\":true,\"items\":[{\"id\":\"safe-work\",\"classification\":\"ATTEMPT\",\"outcome\":\"pr_opened\",\"upstream_work_id\":\"../../PRIVATE_UPSTREAM\",\"reason\":\"PRIVATE_RESULT_BODY\"}]}' >'$p/tmp/tokbadupstream-build-result.json'
+printf '%s' '{\"result\":\"PRIVATE_MESSAGE\",\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}'"
+  make_stub gh 0
+
+  run run_runner build "$p" --mode live
+  [ "$status" -eq 0 ]
+  ! events_json | jq -e 'select(.event=="build.work.outcome")' >/dev/null
+  ! events_json | grep -qE 'PRIVATE_UPSTREAM|PRIVATE_RESULT_BODY|PRIVATE_MESSAGE|\.\./'
 }
 
 @test "outcome lineage: malformed token classes are omitted rather than stringified" {

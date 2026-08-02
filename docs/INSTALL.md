@@ -141,7 +141,7 @@ GET /api/operator?window=30d
 ```
 
 Schema v1 returns `kind: "shipyard.operator"` plus `metadata`, `brief`, `narrative`,
-`promises`, `outcomes`, `topology`, `changes`, `attention`, `coverage`, and
+`promises`, `outcomes`, `graphs`, `topology`, `changes`, `attention`, `coverage`, and
 `evidence`. The committed, deterministic example is
 [`dashboard/tests/fixtures/operator-v1.json`](../dashboard/tests/fixtures/operator-v1.json).
 It is a contract fixture, not evidence that a dashboard is installed or
@@ -164,6 +164,28 @@ always retain their unit, state, and observed/total coverage. Summary modes use
 counted controls such as `Review 18 records`; only Evidence/detail renders the
 opaque IDs carried by `evidence_ids`. Clients must not regroup attention,
 rewrite the takeaway, or infer success from missing data.
+
+`graphs` is the bounded, additive visualization surface. It separates fleet
+architecture, each named project's runtime, unattributed evidence, and each
+project's delivery lineage. Its nodes are grouped into producer-supplied Kahn
+`ranks`; its exact edges are repeated in the browser's semantic connection
+table. Named graphs can use only installed inspection project IDs and their
+controlled installed labels. Unknown, ambiguous, or invalid event project
+claims remain unattributed; event data cannot invent a project graph. A
+projectless event can join an installed project only through an unambiguous
+explicit run ID. Delivery edges require explicit event identifiers. The build
+outcome emitter accepts an optional, bounded opaque `upstream_work_id` and
+emits no result prose or file data with it. Missing correlated
+ask, ticket, pull-request, deploy, or usage evidence is shown as a controlled
+gap, never filled from timestamp adjacency, titles, paths, or prose. The legacy
+`topology` member remains available for schema-v1 readers.
+
+An open branch or pull request is not automatically live in the installed
+dashboard. Check `metadata.source_revision`, `source_state`, and
+`source_digest` against the intended checkout. Producer changes take effect
+only when that checkout is installed and the dashboard service is restarted;
+the running server reports later on-disk drift as modified rather than silently
+claiming the new revision.
 
 Compatibility within schema v1 is additive. Readers ignore unknown object
 members, retain supplied array order, and display an unrecognized enum as

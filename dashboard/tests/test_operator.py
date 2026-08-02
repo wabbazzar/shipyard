@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -12,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+from dashboard import operator as operator_module
 from dashboard.operator import (
     MAX_ATTENTION,
     MAX_EVIDENCE,
@@ -19,6 +21,7 @@ from dashboard.operator import (
     MAX_STORY_BEATS,
     OPERATOR_VIEW_SCHEMA_VERSION,
     InspectionCache,
+    OperatorDataError,
     collect_change_metrics,
     compose_operator_document,
     load_presentation_topology,
@@ -799,6 +802,337 @@ class OperatorComposerTest(unittest.TestCase):
         self.assertEqual(observed[0]["count"], 2)
         self.assertEqual(observed[0]["completion"], "completed")
 
+    def test_architecture_graph_uses_declared_edges_and_core_ranks(self) -> None:
+        document = self.compose()
+        architecture = next(
+            graph for graph in document["graphs"] if graph["kind"] == "architecture"
+        )
+        self.assertEqual(
+            architecture["scope"],
+            {"kind": "current_user_fleet", "project_id": None, "project_label": None},
+        )
+        self.assertEqual(
+            [(edge["from"], edge["to"]) for edge in architecture["edges"]],
+            [
+                (edge["from"], edge["to"])
+                for edge in document["topology"]["declared_edges"]
+            ]
+            + [("skill:execute-ticket", "outcome:delivered-change")],
+        )
+        ranked = [node_id for rank in architecture["ranks"] for node_id in rank]
+        self.assertEqual(ranked, [node["id"] for node in architecture["nodes"]])
+        rank_by_node = {
+            node_id: rank_index
+            for rank_index, rank in enumerate(architecture["ranks"])
+            for node_id in rank
+        }
+        self.assertTrue(
+            all(rank_by_node[edge["from"]] < rank_by_node[edge["to"]] for edge in architecture["edges"])
+        )
+        css = (self.repo_root / "dashboard" / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertNotRegex(css, r"topology-node(?::not\([^)]*\)|:last-child)?::(?:before|after)")
+
+    def test_project_delivery_graph_preserves_branch_convergence_and_gaps(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {
+                "project_id": "project-safe",
+                "project_name": "demo",
+                "roles": ["design", "build", "release"],
+                "state": "no_fault_observed",
+            }
+        ]
+        delivery_events = [
+            {
+                "ts": "2026-08-01T09:00:00Z",
+                "event": "design.proposal.opened",
+                "project": "demo",
+                "role": "design",
+                "proposal_id": "proposal-graph",
+                "type": "feature",
+            },
+            {
+                "ts": "2026-08-01T09:10:00Z",
+                "event": "build.ticket.outcome",
+                "project": "demo",
+                "role": "build",
+                "work_id": "ticket-graph",
+                "upstream_work_id": "proposal-graph",
+                "outcome": "ok",
+            },
+            {
+                "ts": "2026-08-01T09:20:00Z",
+                "event": "build.work.outcome",
+                "project": "demo",
+                "role": "build",
+                "work_id": "work-left",
+                "upstream_work_id": "ticket-graph",
+                "outcome": "ok",
+            },
+            {
+                "ts": "2026-08-01T09:21:00Z",
+                "event": "build.work.outcome",
+                "project": "demo",
+                "role": "build",
+                "work_id": "work-right",
+                "upstream_work_id": "ticket-graph",
+                "outcome": "ok",
+            },
+            {
+                "ts": "2026-08-01T09:30:00Z",
+                "event": "build.work.outcome",
+                "project": "demo",
+                "role": "build",
+                "work_id": "work-converged",
+                "upstream_work_id": "work-left",
+                "outcome": "pr_opened",
+            },
+            {
+                "ts": "2026-08-01T09:31:00Z",
+                "event": "build.work.outcome",
+                "project": "demo",
+                "role": "build",
+                "work_id": "work-converged",
+                "upstream_work_id": "work-right",
+                "outcome": "pr_opened",
+            },
+        ]
+        document = self.compose(inspection=inspection, events=delivery_events)
+        graph = next(graph for graph in document["graphs"] if graph["kind"] == "delivery")
+        self.assertEqual(graph["scope"]["project_label"], "demo")
+        edges = {(edge["from"], edge["to"]) for edge in graph["edges"]}
+        self.assertEqual(
+            {target for source, target in edges if source == "delivery:work:ticket-graph"},
+            {"delivery:work:work-left", "delivery:work:work-right"},
+        )
+        self.assertEqual(
+            {source for source, target in edges if target == "delivery:work:work-converged"},
+            {"delivery:work:work-left", "delivery:work:work-right"},
+        )
+        self.assertTrue(any(node["kind"] == "missing_stage" for node in graph["nodes"]))
+        self.assertNotIn(("delivery:work:work-left", "delivery:work:work-right"), edges)
+
+    def test_delivery_graphs_require_installed_scope_and_quarantine_unknown_events(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {"project_id": "project-safe", "project_name": "demo", "roles": ["build"], "state": "no_fault_observed"},
+            {"project_id": "project-other", "project_name": "duplicate", "roles": ["build"], "state": "no_fault_observed"},
+            {"project_id": "project-third", "project_name": "duplicate", "roles": ["build"], "state": "no_fault_observed"},
+        ]
+        events = [
+            {"ts": "2026-08-01T08:59:00Z", "event": "job.start", "project_id": "project-safe", "project": "demo", "run_id": "known-run"},
+            {"ts": "2026-08-01T09:00:00Z", "event": "build.work.outcome", "project_id": "project-safe", "project": "EVENT-LABEL-MUST-NOT-WIN", "work_id": "known-work", "outcome": "pr_opened"},
+            {"ts": "2026-08-01T09:01:00Z", "event": "build.work.outcome", "project_id": "project-invented", "project": "demo", "run_id": "known-run", "work_id": "invented-id-work", "outcome": "pr_opened"},
+            {"ts": "2026-08-01T09:02:00Z", "event": "build.work.outcome", "project": "not-installed", "work_id": "invented-label-work", "outcome": "pr_opened"},
+            {"ts": "2026-08-01T09:03:00Z", "event": "build.work.outcome", "project": "duplicate", "work_id": "ambiguous-label-work", "outcome": "pr_opened"},
+            {"ts": "2026-08-01T09:04:00Z", "event": "build.work.outcome", "project": "not installed with spaces", "run_id": "known-run", "work_id": "invalid-label-work", "outcome": "pr_opened"},
+        ]
+        document = self.compose(inspection=inspection, events=events)
+        delivery = [graph for graph in document["graphs"] if graph["kind"] == "delivery"]
+        self.assertEqual(
+            [(graph["scope"]["project_id"], graph["scope"]["project_label"]) for graph in delivery],
+            [("project-safe", "demo")],
+        )
+        encoded_delivery = json.dumps(delivery, sort_keys=True)
+        for forbidden in ("project-invented", "invented-id-work", "invented-label-work", "ambiguous-label-work", "invalid-label-work", "EVENT-LABEL-MUST-NOT-WIN"):
+            self.assertNotIn(forbidden, encoded_delivery)
+        unattributed = next(graph for graph in document["graphs"] if graph["scope"]["kind"] == "unattributed")
+        bucket = next(node for node in unattributed["nodes"] if node["kind"] == "evidence_bucket")
+        self.assertEqual(bucket["evidence_count"], 4)
+        self.assertEqual(len(bucket["evidence_ids"]), 4)
+
+    def test_architecture_ignores_telemetry_only_skills(self) -> None:
+        baseline = next(graph for graph in self.compose()["graphs"] if graph["kind"] == "architecture")
+        relationships = json.loads(json.dumps(relationships_fixture()))
+        invocations = relationships["sources"]["claude"]["skill_invocations"]
+        for index in range(40):
+            invocations.append(
+                {
+                    "provider": "claude",
+                    "bucket": "2026-08-01T10:00:00Z",
+                    "actor_id": "actor-safe",
+                    "skill_id": f"telemetry-only-{index}",
+                    "first_timestamp": "2026-08-01T10:00:00Z",
+                    "last_timestamp": "2026-08-01T10:00:00Z",
+                    "count": 1,
+                }
+            )
+        noisy = next(
+            graph for graph in self.compose(relationships=relationships)["graphs"]
+            if graph["kind"] == "architecture"
+        )
+        self.assertEqual(noisy, baseline)
+        self.assertFalse(any("telemetry-only" in node["id"] for node in noisy["nodes"]))
+
+    def test_duplicate_delivery_edges_aggregate_bounded_evidence(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {"project_id": "project-safe", "project_name": "demo", "roles": ["build"], "state": "no_fault_observed"}
+        ]
+        events = [
+            {
+                "ts": f"2026-08-01T09:{index:02d}:00Z",
+                "event": "build.work.outcome",
+                "project_id": "project-safe",
+                "project": "demo",
+                "work_id": "child-work",
+                "upstream_work_id": "parent-work",
+                "outcome": "tests_failed",
+            }
+            for index in range(25)
+        ]
+        graph = next(graph for graph in self.compose(inspection=inspection, events=events)["graphs"] if graph["kind"] == "delivery")
+        edge = next(
+            edge for edge in graph["edges"]
+            if edge["from"] == "delivery:work:parent-work" and edge["to"] == "delivery:work:child-work"
+        )
+        self.assertEqual(edge["evidence_count"], 25)
+        self.assertEqual(
+            edge["evidence_ids"],
+            [operator_module._event_evidence_id(event) for event in events[:20]],
+        )
+
+    def test_real_build_emitter_upstream_lineage_reaches_composer(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {"project_id": "project-safe", "project_name": "demo", "roles": ["build"], "state": "no_fault_observed"}
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_path = Path(temporary)
+            events_dir = temporary_path / "events"
+            events_dir.mkdir()
+            result_file = temporary_path / "result.json"
+            result_file.write_text(
+                json.dumps(
+                    {
+                        "pass": True,
+                        "items": [
+                            {
+                                "id": "emitted-work",
+                                "classification": "ATTEMPT",
+                                "outcome": "pr_opened",
+                                "upstream_work_id": "proposal:emitted",
+                                "reason": "PRIVATE RESULT PROSE",
+                                "files_planned": ["PRIVATE_FILE.py"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            emitter = self.repo_root / "agents" / "lib" / "outcome-lineage.sh"
+            logger = self.repo_root / "agents" / "lib" / "log_event.sh"
+            script = r'''
+source "$1"
+export QUARTET_OUTCOME_LINEAGE=true QUARTET_RUN_ID=0123456789abcdef0123456789abcdef QUARTET_ROLE=build
+"$2" demo-build job.start project=demo
+outcome_lineage_emit_build_items "$2" demo-build "$3"
+'''
+            result = subprocess.run(
+                ["bash", "-c", script, "_", str(emitter), str(logger), str(result_file)],
+                env={**os.environ, "QUARTET_EVENTS_DIR": str(events_dir)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            emitted = [
+                json.loads(line)
+                for path in sorted(events_dir.glob("*.jsonl"))
+                for line in path.read_text(encoding="utf-8").splitlines()
+            ]
+        work = next(event for event in emitted if event["event"] == "build.work.outcome")
+        self.assertEqual(work["upstream_work_id"], "proposal:emitted")
+        self.assertFalse({"reason", "files_planned", "filename", "message", "result"} & set(work))
+        document = self.compose(inspection=inspection, events=emitted)
+        graph = next(graph for graph in document["graphs"] if graph["kind"] == "delivery")
+        self.assertIn(
+            ("delivery:work:proposal:emitted", "delivery:work:emitted-work"),
+            {(edge["from"], edge["to"]) for edge in graph["edges"]},
+        )
+
+    def test_delivery_graph_rejection_limitations_are_precise(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {"project_id": "project-safe", "project_name": "demo", "roles": ["build"], "state": "no_fault_observed"}
+        ]
+        cycle_events = [
+            {"ts": "2026-08-01T09:00:00Z", "event": "build.work.outcome", "project_id": "project-safe", "work_id": "cycle-a", "upstream_work_id": "cycle-b", "outcome": "tests_failed"},
+            {"ts": "2026-08-01T09:01:00Z", "event": "build.work.outcome", "project_id": "project-safe", "work_id": "cycle-b", "upstream_work_id": "cycle-a", "outcome": "tests_failed"},
+        ]
+        cycle = self.compose(inspection=inspection, events=cycle_events)
+        self.assertIn("delivery_graph_cycle", cycle["metadata"]["limitations"])
+        self.assertNotIn("delivery_graph_over_bound", cycle["metadata"]["limitations"])
+
+        bound_events = [
+            {"ts": f"2026-08-01T09:{index:02d}:00Z", "event": "build.work.outcome", "project_id": "project-safe", "work_id": f"wide-{index}", "upstream_work_id": "wide-root", "outcome": "tests_failed"}
+            for index in range(12)
+        ]
+        bounded = self.compose(inspection=inspection, events=bound_events)
+        self.assertIn("delivery_graph_bound", bounded["metadata"]["limitations"])
+        self.assertNotIn("delivery_graph_cycle", bounded["metadata"]["limitations"])
+
+    def test_composed_document_maps_every_delivery_rejection_class_without_detail(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {"project_id": "project-safe", "project_name": "demo", "roles": ["build"], "state": "no_fault_observed"}
+        ]
+        events = [
+            {"ts": "2026-08-01T09:00:00Z", "event": "build.work.outcome", "project_id": "project-safe", "work_id": "safe-work", "outcome": "tests_failed"}
+        ]
+        original = operator_module._validate_and_rank_graph
+        for code in ("cycle", "dangling_endpoint", "duplicate_id", "project_isolation", "bound"):
+            def validate(graph: dict[str, object], *, max_nodes: int, max_edges: int, rejection: str = code) -> dict[str, object]:
+                if graph.get("kind") == "delivery":
+                    raise operator_module.GraphValidationError(rejection)
+                return original(graph, max_nodes=max_nodes, max_edges=max_edges)
+
+            with self.subTest(code=code), mock.patch(
+                "dashboard.operator._validate_and_rank_graph", side_effect=validate
+            ):
+                document = self.compose(inspection=inspection, events=events)
+            self.assertIn(f"delivery_graph_{code}", document["metadata"]["limitations"])
+            self.assertNotIn("safe-work", json.dumps(document["metadata"]["limitations"]))
+
+    def test_graph_rejects_cycle_dangling_duplicate_cross_project_and_over_bound(self) -> None:
+        validate = getattr(operator_module, "_validate_and_rank_graph", None)
+        self.assertIsNotNone(validate)
+        base = {
+            "id": "graph:test",
+            "kind": "delivery",
+            "label": "Test delivery",
+            "scope": {"kind": "project", "project_id": "project-safe", "project_label": "demo"},
+            "state": "observed",
+            "nodes": [
+                {"id": "node:a", "kind": "work", "label": "A", "state": "observed", "project_id": "project-safe", "evidence_count": 0, "evidence_ids": [], "limitations": []},
+                {"id": "node:b", "kind": "work", "label": "B", "state": "observed", "project_id": "project-safe", "evidence_count": 0, "evidence_ids": [], "limitations": []},
+            ],
+            "edges": [
+                {"id": "edge:a:b", "kind": "dependency", "from": "node:a", "to": "node:b", "state": "observed", "evidence_count": 0, "evidence_ids": [], "limitations": []}
+            ],
+            "limitations": [],
+        }
+        invalid = {
+            "duplicate": {**base, "nodes": [base["nodes"][0], dict(base["nodes"][0])]},
+            "dangling": {**base, "edges": [{**base["edges"][0], "to": "node:missing"}]},
+            "cycle": {**base, "edges": [base["edges"][0], {**base["edges"][0], "id": "edge:b:a", "from": "node:b", "to": "node:a"}]},
+            "cross_project": {**base, "nodes": [base["nodes"][0], {**base["nodes"][1], "project_id": "project-other"}]},
+            "over_bound": {**base, "nodes": [{**base["nodes"][0], "id": f"node:{index}"} for index in range(13)], "edges": []},
+        }
+        expected_codes = {
+            "duplicate": "duplicate_id",
+            "dangling": "dangling_endpoint",
+            "cycle": "cycle",
+            "cross_project": "project_isolation",
+            "over_bound": "bound",
+        }
+        graph_error = getattr(operator_module, "GraphValidationError", None)
+        self.assertIsNotNone(graph_error)
+        for name, graph in invalid.items():
+            with self.subTest(name=name), self.assertRaises(graph_error) as caught:
+                validate(graph, max_nodes=12, max_edges=16)
+            self.assertEqual(caught.exception.code, expected_codes[name])
+
     def test_run_outcomes_tokens_and_shoulder_delivery_use_explicit_ids(self) -> None:
         outcomes = self.compose()["outcomes"]
         self.assertEqual(outcomes["reliability"]["completed"], 1)
@@ -1173,6 +1507,47 @@ class OperatorFixtureContractTest(unittest.TestCase):
                 )
 
         assert_safe(self.document)
+
+    def test_fixture_graphs_are_bounded_acyclic_and_content_safe(self) -> None:
+        graphs = self.document["graphs"]
+        self.assertEqual(graphs[0]["kind"], "architecture")
+        self.assertTrue(any(graph["kind"] == "project_runtime" for graph in graphs))
+        self.assertTrue(any(graph["kind"] == "delivery" for graph in graphs))
+        kind_bounds = {
+            "architecture": (32, 64),
+            "project_runtime": (8, 8),
+            "delivery": (12, 16),
+        }
+        for graph in graphs:
+            max_nodes, max_edges = kind_bounds[graph["kind"]]
+            self.assertLessEqual(len(graph["nodes"]), max_nodes)
+            self.assertLessEqual(len(graph["edges"]), max_edges)
+            node_ids = [node["id"] for node in graph["nodes"]]
+            self.assertEqual(len(node_ids), len(set(node_ids)))
+            edge_ids = [edge["id"] for edge in graph["edges"]]
+            self.assertEqual(len(edge_ids), len(set(edge_ids)))
+            self.assertEqual(
+                [node_id for rank in graph["ranks"] for node_id in rank],
+                node_ids,
+            )
+            rank_by_node = {
+                node_id: rank_index
+                for rank_index, rank in enumerate(graph["ranks"])
+                for node_id in rank
+            }
+            for edge in graph["edges"]:
+                self.assertIn(edge["from"], rank_by_node)
+                self.assertIn(edge["to"], rank_by_node)
+                self.assertLess(rank_by_node[edge["from"]], rank_by_node[edge["to"]])
+            if graph["scope"]["kind"] != "current_user_fleet":
+                self.assertTrue(graph["scope"]["project_id"])
+                self.assertTrue(graph["scope"]["project_label"])
+                self.assertTrue(
+                    all(
+                        node.get("project_id") == graph["scope"]["project_id"]
+                        for node in graph["nodes"]
+                    )
+                )
 
 
 class InspectionCacheTest(unittest.TestCase):

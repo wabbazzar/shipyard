@@ -68,7 +68,9 @@
         "state": "alarm",
         "observed": 4,
         "total": 8,
-        "limitations": ["promise_evidence_incomplete"]
+        "limitations": [
+          "promise_evidence_incomplete"
+        ]
       },
       {
         "id": "successful_runs",
@@ -101,11 +103,15 @@
         "evidence_count": 18,
         "project_count": 1,
         "latest_at": "2026-08-01T10:05:00Z",
-        "evidence_ids": ["inspect:attention-1"],
+        "evidence_ids": [
+          "inspect:attention-1"
+        ],
         "limitations": []
       }
     ],
-    "limitations": ["inspection_stale"]
+    "limitations": [
+      "inspection_stale"
+    ]
   },
   "narrative": {
     "heading": "Repair observed Shipyard core job failure",
@@ -447,7 +453,9 @@
         "observed_count": 2,
         "last_activity": "2026-08-01T10:02:00Z",
         "reduction_rule": "worst_known_state_unknown_if_none",
-        "constituent_projects": ["project-safe"],
+        "constituent_projects": [
+          "project-safe"
+        ],
         "reason_code": "runtime_healthy",
         "reason": "The latest recorded run completed successfully.",
         "impact": "No runtime failure is evidenced for this role in the selected window.",
@@ -752,6 +760,409 @@
         "count": 1
       },
       "limitations": []
+    }
+  ],
+  "graphs": [
+    {
+      "id": "graph:fleet-architecture",
+      "kind": "architecture",
+      "label": "Fleet architecture",
+      "scope": {
+        "kind": "current_user_fleet",
+        "project_id": null,
+        "project_label": null
+      },
+      "state": "declared",
+      "nodes": [
+        {
+          "id": "role:human",
+          "kind": "human",
+          "label": "operator",
+          "state": "declared",
+          "reason": "Declared in the Shipyard architecture contract.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": []
+        },
+        {
+          "id": "role:build",
+          "kind": "role",
+          "label": "build",
+          "state": "declared",
+          "reason": "Declared in the Shipyard architecture contract.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": []
+        },
+        {
+          "id": "skill:execute-ticket",
+          "kind": "skill",
+          "label": "execute-ticket",
+          "state": "declared",
+          "reason": "Declared in the Shipyard architecture contract.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": []
+        },
+        {
+          "id": "outcome:delivered-change",
+          "kind": "outcome",
+          "label": "Delivered change",
+          "state": "expected",
+          "reason": "The build workflow is expected to produce a delivered change.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "membership:build:execute-ticket",
+          "kind": "membership",
+          "from": "role:build",
+          "to": "skill:execute-ticket",
+          "state": "declared",
+          "reason": "This connection is explicitly declared by Shipyard.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": []
+        },
+        {
+          "id": "membership:human:execute-ticket",
+          "kind": "membership",
+          "from": "role:human",
+          "to": "skill:execute-ticket",
+          "state": "declared",
+          "reason": "This connection is explicitly declared by Shipyard.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": []
+        },
+        {
+          "id": "outcome:execute-ticket:delivered-change",
+          "kind": "outcome",
+          "from": "skill:execute-ticket",
+          "to": "outcome:delivered-change",
+          "state": "declared",
+          "reason": "Execute Ticket owns the declared delivery outcome.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": []
+        }
+      ],
+      "limitations": [],
+      "ranks": [
+        [
+          "role:human",
+          "role:build"
+        ],
+        [
+          "skill:execute-ticket"
+        ],
+        [
+          "outcome:delivered-change"
+        ]
+      ]
+    },
+    {
+      "id": "graph:runtime:project-safe",
+      "kind": "project_runtime",
+      "label": "demo runtime",
+      "scope": {
+        "kind": "project",
+        "project_id": "project-safe",
+        "project_label": "demo"
+      },
+      "state": "healthy",
+      "nodes": [
+        {
+          "id": "runtime-project:project-safe",
+          "kind": "project",
+          "label": "demo",
+          "state": "no_fault_observed",
+          "project_id": "project-safe",
+          "reason": "This project is in the current-user Shipyard fleet.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": []
+        },
+        {
+          "id": "runtime:project-safe:build",
+          "kind": "role_runtime",
+          "label": "build",
+          "state": "healthy",
+          "project_id": "project-safe",
+          "reason": "The latest recorded run completed successfully.",
+          "evidence_count": 2,
+          "evidence_ids": [
+            "event:work-outcome"
+          ],
+          "limitations": [],
+          "impact": "No runtime failure is evidenced for this role in the selected window.",
+          "action": "Keep monitoring the next scheduled run.",
+          "role_id": "build",
+          "last_activity": "2026-08-01T10:02:00Z"
+        }
+      ],
+      "edges": [
+        {
+          "id": "runtime-scope:project-safe:build",
+          "kind": "project_role",
+          "from": "runtime-project:project-safe",
+          "to": "runtime:project-safe:build",
+          "state": "scoped",
+          "reason": "This runtime role belongs to the named project.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": []
+        }
+      ],
+      "limitations": [],
+      "ranks": [
+        [
+          "runtime-project:project-safe"
+        ],
+        [
+          "runtime:project-safe:build"
+        ]
+      ]
+    },
+    {
+      "id": "graph:runtime:unattributed",
+      "kind": "project_runtime",
+      "label": "Unattributed runtime evidence",
+      "scope": {
+        "kind": "unattributed",
+        "project_id": "unattributed",
+        "project_label": "Unattributed evidence"
+      },
+      "state": "unknown",
+      "nodes": [
+        {
+          "id": "runtime-project:unattributed",
+          "kind": "unattributed",
+          "label": "Unattributed evidence",
+          "state": "unknown",
+          "project_id": "unattributed",
+          "reason": "These records could not be assigned to exactly one fleet project.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": []
+        },
+        {
+          "id": "runtime:unattributed:records",
+          "kind": "evidence_bucket",
+          "label": "Unattributed records",
+          "state": "unknown",
+          "project_id": "unattributed",
+          "reason": "Project ownership is unavailable for these operator records.",
+          "evidence_count": 2,
+          "evidence_ids": [],
+          "limitations": []
+        }
+      ],
+      "edges": [
+        {
+          "id": "runtime-scope:unattributed:records",
+          "kind": "unattributed_evidence",
+          "from": "runtime-project:unattributed",
+          "to": "runtime:unattributed:records",
+          "state": "unknown",
+          "reason": "The records are explicitly separated from named projects.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": []
+        }
+      ],
+      "limitations": [
+        "project_attribution_unavailable"
+      ],
+      "ranks": [
+        [
+          "runtime-project:unattributed"
+        ],
+        [
+          "runtime:unattributed:records"
+        ]
+      ]
+    },
+    {
+      "id": "graph:delivery:project-safe:a2389d1cc5e0754f",
+      "kind": "delivery",
+      "label": "Project delivery",
+      "scope": {
+        "kind": "project",
+        "project_id": "project-safe",
+        "project_label": "demo"
+      },
+      "state": "incomplete",
+      "nodes": [
+        {
+          "id": "delivery:proposal:proposal-01",
+          "kind": "proposal",
+          "label": "Proposal",
+          "state": "observed",
+          "project_id": "project-safe",
+          "reason": "This stage is linked by an explicit event identifier.",
+          "evidence_count": 2,
+          "evidence_ids": [
+            "event:work-outcome"
+          ],
+          "limitations": []
+        },
+        {
+          "id": "delivery:work:ticket-01",
+          "kind": "ticket",
+          "label": "Ticket",
+          "state": "observed",
+          "project_id": "project-safe",
+          "reason": "This stage is linked by an explicit event identifier.",
+          "evidence_count": 2,
+          "evidence_ids": [
+            "event:work-outcome"
+          ],
+          "limitations": []
+        },
+        {
+          "id": "delivery:work:work-01",
+          "kind": "work",
+          "label": "Work item",
+          "state": "observed",
+          "project_id": "project-safe",
+          "reason": "This stage is linked by an explicit event identifier.",
+          "evidence_count": 1,
+          "evidence_ids": [
+            "event:work-outcome"
+          ],
+          "limitations": []
+        },
+        {
+          "id": "delivery:pr:96582c373f46cd95bb58",
+          "kind": "pull_request",
+          "label": "Pull request",
+          "state": "observed",
+          "project_id": "project-safe",
+          "reason": "This stage is linked by an explicit event identifier.",
+          "evidence_count": 1,
+          "evidence_ids": [
+            "event:work-outcome"
+          ],
+          "limitations": []
+        },
+        {
+          "id": "delivery:gap:a2389d1cc5e0754f:deploy",
+          "kind": "missing_stage",
+          "label": "Deploy not linked",
+          "state": "unverified",
+          "project_id": "project-safe",
+          "reason": "No explicit correlated evidence is available for this stage.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": [
+            "deploy_evidence_missing"
+          ]
+        },
+        {
+          "id": "delivery:gap:a2389d1cc5e0754f:usage",
+          "kind": "missing_stage",
+          "label": "Usage outcome not linked",
+          "state": "unverified",
+          "project_id": "project-safe",
+          "reason": "No explicit correlated evidence is available for this stage.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": [
+            "usage_evidence_missing"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "id": "delivery-edge:ec4b5ab032a1a3de",
+          "kind": "explicit_lineage",
+          "from": "delivery:proposal:proposal-01",
+          "to": "delivery:work:ticket-01",
+          "state": "observed",
+          "reason": "The source event explicitly links these stages.",
+          "evidence_count": 1,
+          "evidence_ids": [
+            "event:work-outcome"
+          ],
+          "limitations": []
+        },
+        {
+          "id": "delivery-edge:c97a1b3c5b03c617",
+          "kind": "explicit_lineage",
+          "from": "delivery:work:ticket-01",
+          "to": "delivery:work:work-01",
+          "state": "observed",
+          "reason": "The source event explicitly links these stages.",
+          "evidence_count": 1,
+          "evidence_ids": [
+            "event:work-outcome"
+          ],
+          "limitations": []
+        },
+        {
+          "id": "delivery-edge:1981bd4c8b4ccf64",
+          "kind": "explicit_outcome",
+          "from": "delivery:work:work-01",
+          "to": "delivery:pr:96582c373f46cd95bb58",
+          "state": "observed",
+          "reason": "The source event explicitly links these stages.",
+          "evidence_count": 1,
+          "evidence_ids": [
+            "event:work-outcome"
+          ],
+          "limitations": []
+        },
+        {
+          "id": "delivery-edge:a2389d1cc5e0754f:deploy:3",
+          "kind": "missing_stage",
+          "from": "delivery:pr:96582c373f46cd95bb58",
+          "to": "delivery:gap:a2389d1cc5e0754f:deploy",
+          "state": "expected",
+          "reason": "No explicit correlated deploy evidence is available.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": []
+        },
+        {
+          "id": "delivery-edge:a2389d1cc5e0754f:usage",
+          "kind": "missing_stage",
+          "from": "delivery:gap:a2389d1cc5e0754f:deploy",
+          "to": "delivery:gap:a2389d1cc5e0754f:usage",
+          "state": "expected",
+          "reason": "No explicit correlated usage outcome is available.",
+          "evidence_count": 0,
+          "evidence_ids": [],
+          "limitations": []
+        }
+      ],
+      "limitations": [
+        "deploy_evidence_missing",
+        "usage_outcome_evidence_missing"
+      ],
+      "ranks": [
+        [
+          "delivery:proposal:proposal-01"
+        ],
+        [
+          "delivery:work:ticket-01"
+        ],
+        [
+          "delivery:work:work-01"
+        ],
+        [
+          "delivery:pr:96582c373f46cd95bb58"
+        ],
+        [
+          "delivery:gap:a2389d1cc5e0754f:deploy"
+        ],
+        [
+          "delivery:gap:a2389d1cc5e0754f:usage"
+        ]
+      ]
     }
   ]
 }

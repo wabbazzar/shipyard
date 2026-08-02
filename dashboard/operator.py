@@ -33,6 +33,14 @@ MAX_OUTCOME_CHAINS = 500
 MAX_CHANGE_RANGES = 50
 MAX_SCOPE_PROJECTS = 50
 MAX_RUNTIME_EVENTS_PER_NODE = 20
+MAX_ARCHITECTURE_GRAPH_NODES = 32
+MAX_ARCHITECTURE_GRAPH_EDGES = 64
+MAX_PROJECT_RUNTIME_GRAPH_NODES = 8
+MAX_PROJECT_RUNTIME_GRAPH_EDGES = 8
+MAX_DELIVERY_GRAPHS = 50
+MAX_DELIVERY_GRAPH_NODES = 12
+MAX_DELIVERY_GRAPH_EDGES = 16
+MAX_GRAPH_EVIDENCE_IDS = 20
 WINDOW_DAYS = {"24h": 1, "7d": 7, "30d": 30}
 PROMISE_DEFINITIONS = (
     ("bugs_caught_and_fixed", "Bugs caught and fixed"),
@@ -96,6 +104,25 @@ _PRIORITY_NUMERIC_OPERANDS = {
 
 class OperatorDataError(ValueError):
     """Raised when a core data source does not satisfy its public contract."""
+
+
+class GraphValidationError(OperatorDataError):
+    """Controlled graph rejection whose code is safe for public limitations."""
+
+    _CODES = {
+        "bound",
+        "cycle",
+        "dangling_endpoint",
+        "duplicate_id",
+        "invalid",
+        "project_isolation",
+    }
+
+    def __init__(self, code: str):
+        if code not in self._CODES:
+            code = "invalid"
+        self.code = code
+        super().__init__(f"graph validation failed: {code}")
 
 
 @dataclass(frozen=True)
@@ -362,6 +389,7 @@ def _event_evidence_id(event: dict[str, Any]) -> str:
             "disposition",
             "run_id",
             "work_id",
+            "upstream_work_id",
             "proposal_id",
             "incident_id",
             "critique_id",
@@ -387,6 +415,7 @@ def _safe_event_evidence(event: dict[str, Any]) -> dict[str, Any]:
         "disposition",
         "run_id",
         "work_id",
+        "upstream_work_id",
         "proposal_id",
         "incident_id",
         "critique_id",
@@ -1258,6 +1287,712 @@ def _topology_document(
     )
 
 
+def _validate_and_rank_graph(
+    graph: dict[str, Any],
+    *,
+    max_nodes: int,
+    max_edges: int,
+) -> dict[str, Any]:
+    """Validate a bounded public DAG and assign deterministic Kahn ranks."""
+    if _safe_id(graph.get("id")) is None:
+        raise GraphValidationError("invalid")
+    if _safe_code(graph.get("kind")) not in {"architecture", "project_runtime", "delivery"}:
+        raise GraphValidationError("invalid")
+    label = graph.get("label")
+    if not isinstance(label, str) or not label or len(label) > 80:
+        raise GraphValidationError("invalid")
+    if _safe_code(graph.get("state")) is None:
+        raise GraphValidationError("invalid")
+    scope = _object(graph.get("scope"))
+    scope_kind = _safe_code(scope.get("kind"))
+    if scope_kind not in {"current_user_fleet", "project", "unattributed"}:
+        raise GraphValidationError("invalid")
+    project_id = _safe_id(scope.get("project_id"))
+    project_label = scope.get("project_label")
+    if scope_kind == "current_user_fleet":
+        if scope.get("project_id") is not None or scope.get("project_label") is not None:
+            raise GraphValidationError("project_isolation")
+    elif project_id is None or not isinstance(project_label, str) or not project_label:
+        raise GraphValidationError("invalid")
+
+    nodes = _array(graph.get("nodes"))
+    edges = _array(graph.get("edges"))
+    if not nodes or len(nodes) > max_nodes or len(edges) > max_edges:
+        raise GraphValidationError("bound")
+    node_by_id: dict[str, dict[str, Any]] = {}
+    node_order: dict[str, int] = {}
+    for ordinal, raw in enumerate(nodes):
+        node = _object(raw)
+        node_id = _safe_id(node.get("id"))
+        node_label = node.get("label")
+        if node_id is None:
+            raise GraphValidationError("invalid")
+        if node_id in node_by_id:
+            raise GraphValidationError("duplicate_id")
+        if _safe_code(node.get("kind")) is None or _safe_code(node.get("state")) is None:
+            raise GraphValidationError("invalid")
+        if not isinstance(node_label, str) or not node_label or len(node_label) > 80:
+            raise GraphValidationError("invalid")
+        if scope_kind != "current_user_fleet" and node.get("project_id") != project_id:
+            raise GraphValidationError("project_isolation")
+        evidence_count = node.get("evidence_count")
+        evidence_ids = _array(node.get("evidence_ids"))
+        if not isinstance(evidence_count, int) or evidence_count < 0:
+            raise GraphValidationError("invalid")
+        if len(evidence_ids) > MAX_GRAPH_EVIDENCE_IDS or any(_safe_id(value) is None for value in evidence_ids):
+            raise GraphValidationError("invalid")
+        if len(_safe_limitations(node.get("limitations"))) != len(_array(node.get("limitations"))):
+            raise GraphValidationError("invalid")
+        node_by_id[node_id] = dict(node)
+        node_order[node_id] = ordinal
+
+    edge_ids: set[str] = set()
+    outgoing: dict[str, list[str]] = {node_id: [] for node_id in node_by_id}
+    indegree = {node_id: 0 for node_id in node_by_id}
+    for raw in edges:
+        edge = _object(raw)
+        edge_id = _safe_id(edge.get("id"))
+        source = _safe_id(edge.get("from"))
+        target = _safe_id(edge.get("to"))
+        if edge_id is None:
+            raise GraphValidationError("invalid")
+        if edge_id in edge_ids:
+            raise GraphValidationError("duplicate_id")
+        if source not in node_by_id or target not in node_by_id:
+            raise GraphValidationError("dangling_endpoint")
+        if source == target:
+            raise GraphValidationError("cycle")
+        if _safe_code(edge.get("kind")) is None or _safe_code(edge.get("state")) is None:
+            raise GraphValidationError("invalid")
+        evidence_count = edge.get("evidence_count")
+        evidence_ids = _array(edge.get("evidence_ids"))
+        if not isinstance(evidence_count, int) or evidence_count < 0:
+            raise GraphValidationError("invalid")
+        if len(evidence_ids) > MAX_GRAPH_EVIDENCE_IDS or any(_safe_id(value) is None for value in evidence_ids):
+            raise GraphValidationError("invalid")
+        if len(_safe_limitations(edge.get("limitations"))) != len(_array(edge.get("limitations"))):
+            raise GraphValidationError("invalid")
+        edge_ids.add(edge_id)
+        outgoing[source].append(target)
+        indegree[target] += 1
+
+    ready = sorted((node_id for node_id, degree in indegree.items() if degree == 0), key=node_order.get)
+    rank_by_node = {node_id: 0 for node_id in node_by_id}
+    visited: list[str] = []
+    while ready:
+        source = ready.pop(0)
+        visited.append(source)
+        for target in outgoing[source]:
+            rank_by_node[target] = max(rank_by_node[target], rank_by_node[source] + 1)
+            indegree[target] -= 1
+            if indegree[target] == 0:
+                ready.append(target)
+                ready.sort(key=node_order.get)
+    if len(visited) != len(node_by_id):
+        raise GraphValidationError("cycle")
+    ranks = [
+        [node_id for node_id in node_by_id if rank_by_node[node_id] == rank]
+        for rank in range(max(rank_by_node.values(), default=0) + 1)
+    ]
+    ordered_ids = [node_id for rank in ranks for node_id in rank]
+    return {
+        **graph,
+        "nodes": [node_by_id[node_id] for node_id in ordered_ids],
+        "edges": [dict(_object(edge)) for edge in edges],
+        "ranks": ranks,
+        "limitations": _safe_limitations(graph.get("limitations")),
+    }
+
+
+def _graph_node(
+    node_id: str,
+    kind: str,
+    label: str,
+    state: str,
+    *,
+    project_id: Optional[str] = None,
+    evidence_ids: Optional[list[str]] = None,
+    limitations: Optional[list[str]] = None,
+    reason: str,
+    **fields: Any,
+) -> dict[str, Any]:
+    safe_evidence = [value for value in (evidence_ids or []) if _safe_id(value) is not None]
+    return {
+        "id": node_id,
+        "kind": kind,
+        "label": label,
+        "state": state,
+        **({"project_id": project_id} if project_id is not None else {}),
+        "reason": reason,
+        "evidence_count": len(safe_evidence),
+        "evidence_ids": safe_evidence[:MAX_GRAPH_EVIDENCE_IDS],
+        "limitations": _safe_limitations(limitations),
+        **fields,
+    }
+
+
+def _graph_edge(
+    edge_id: str,
+    kind: str,
+    source: str,
+    target: str,
+    state: str,
+    *,
+    evidence_ids: Optional[list[str]] = None,
+    reason: str,
+) -> dict[str, Any]:
+    safe_evidence = [value for value in (evidence_ids or []) if _safe_id(value) is not None]
+    return {
+        "id": edge_id,
+        "kind": kind,
+        "from": source,
+        "to": target,
+        "state": state,
+        "reason": reason,
+        "evidence_count": len(safe_evidence),
+        "evidence_ids": safe_evidence[:MAX_GRAPH_EVIDENCE_IDS],
+        "limitations": [],
+    }
+
+
+def _architecture_graph(topology: dict[str, Any]) -> dict[str, Any]:
+    nodes = [
+        _graph_node(
+            item["id"],
+            item["kind"],
+            item["label"],
+            "declared",
+            reason="Declared in the Shipyard architecture contract.",
+        )
+        for item in _array(topology.get("nodes"))
+        if _safe_code(_object(item).get("kind")) in {"human", "role", "skill"}
+        and not (
+            _safe_code(_object(item).get("kind")) == "skill"
+            and _safe_code(_object(item).get("skill_kind")) == "observed"
+        )
+    ]
+    nodes.append(
+        _graph_node(
+            "outcome:delivered-change",
+            "outcome",
+            "Delivered change",
+            "expected",
+            reason="The build workflow is expected to produce a delivered change.",
+        )
+    )
+    edges = [
+        _graph_edge(
+            item["id"],
+            item["kind"],
+            item["from"],
+            item["to"],
+            "declared",
+            reason="This connection is explicitly declared by Shipyard.",
+        )
+        for item in _array(topology.get("declared_edges"))
+    ]
+    if any(node["id"] == "skill:execute-ticket" for node in nodes):
+        edges.append(
+            _graph_edge(
+                "outcome:execute-ticket:delivered-change",
+                "outcome",
+                "skill:execute-ticket",
+                "outcome:delivered-change",
+                "declared",
+                reason="Execute Ticket owns the declared delivery outcome.",
+            )
+        )
+    return _validate_and_rank_graph(
+        {
+            "id": "graph:fleet-architecture",
+            "kind": "architecture",
+            "label": "Fleet architecture",
+            "scope": {"kind": "current_user_fleet", "project_id": None, "project_label": None},
+            "state": "declared",
+            "nodes": nodes,
+            "edges": edges,
+            "limitations": [],
+        },
+        max_nodes=MAX_ARCHITECTURE_GRAPH_NODES,
+        max_edges=MAX_ARCHITECTURE_GRAPH_EDGES,
+    )
+
+
+def _runtime_graphs(
+    topology: dict[str, Any],
+    inspection: Optional[dict[str, Any]],
+    unattributed_delivery_events: Optional[list[dict[str, Any]]] = None,
+) -> list[dict[str, Any]]:
+    runtime_nodes = [_object(item) for item in _array(topology.get("runtime_nodes"))]
+    graph_state_rank = {"failed": 0, "unknown": 1, "stale": 2, "running": 3, "healthy": 4}
+    graphs: list[dict[str, Any]] = []
+    for project in _fleet_projects(inspection):
+        project_id = project["project_id"]
+        project_label = project["project_label"]
+        roles = [item for item in runtime_nodes if item.get("project_id") == project_id]
+        root_id = f"runtime-project:{project_id}"
+        nodes = [
+            _graph_node(
+                root_id,
+                "project",
+                project_label,
+                project["project_state"],
+                project_id=project_id,
+                reason="This project is in the current-user Shipyard fleet.",
+            )
+        ]
+        edges = []
+        for item in roles[: MAX_PROJECT_RUNTIME_GRAPH_NODES - 1]:
+            nodes.append(
+                _graph_node(
+                    item["id"],
+                    "role_runtime",
+                    item["label"],
+                    item["state"],
+                    project_id=project_id,
+                    evidence_ids=_array(item.get("evidence_ids")),
+                    limitations=_safe_limitations(item.get("limitations")),
+                    reason=item.get("reason") if isinstance(item.get("reason"), str) else "Runtime evidence is unavailable.",
+                    impact=item.get("impact"),
+                    action=item.get("action"),
+                    role_id=item.get("role_id"),
+                    last_activity=item.get("last_activity"),
+                )
+            )
+            edges.append(
+                _graph_edge(
+                    f"runtime-scope:{project_id}:{item['role_id']}",
+                    "project_role",
+                    root_id,
+                    item["id"],
+                    "scoped",
+                    reason="This runtime role belongs to the named project.",
+                )
+            )
+        graph_limitations = []
+        if len(roles) > MAX_PROJECT_RUNTIME_GRAPH_NODES - 1:
+            graph_limitations.append("runtime_roles_truncated")
+        graphs.append(
+            _validate_and_rank_graph(
+                {
+                    "id": f"graph:runtime:{project_id}",
+                    "kind": "project_runtime",
+                    "label": f"{project_label} runtime",
+                    "scope": {"kind": "project", "project_id": project_id, "project_label": project_label},
+                    "state": min((item["state"] for item in roles), key=lambda value: graph_state_rank.get(value, 1), default="unknown"),
+                    "nodes": nodes,
+                    "edges": edges,
+                    "limitations": graph_limitations,
+                },
+                max_nodes=MAX_PROJECT_RUNTIME_GRAPH_NODES,
+                max_edges=MAX_PROJECT_RUNTIME_GRAPH_EDGES,
+            )
+        )
+    scope = _scope_document(inspection)
+    unattributed = _object(scope.get("unattributed"))
+    unattributed_count = sum(
+        value for key in ("records_unattributed", "records_ambiguous")
+        if isinstance((value := unattributed.get(key)), int) and value >= 0
+    )
+    unattributed_event_ids = [
+        _event_evidence_id(event)
+        for event in (unattributed_delivery_events or [])
+    ]
+    unattributed_count = max(unattributed_count, len(unattributed_event_ids))
+    unattributed_id = "unattributed"
+    graphs.append(
+        _validate_and_rank_graph(
+            {
+                "id": "graph:runtime:unattributed",
+                "kind": "project_runtime",
+                "label": "Unattributed runtime evidence",
+                "scope": {"kind": "unattributed", "project_id": unattributed_id, "project_label": "Unattributed evidence"},
+                "state": "unknown",
+                "nodes": [
+                    _graph_node(
+                        "runtime-project:unattributed",
+                        "unattributed",
+                        "Unattributed evidence",
+                        "unknown",
+                        project_id=unattributed_id,
+                        reason="These records could not be assigned to exactly one fleet project.",
+                    ),
+                    _graph_node(
+                        "runtime:unattributed:records",
+                        "evidence_bucket",
+                        "Unattributed records",
+                        "unknown",
+                        project_id=unattributed_id,
+                        evidence_ids=unattributed_event_ids,
+                        reason="Project ownership is unavailable for these operator records.",
+                        evidence_count=unattributed_count,
+                    ),
+                ],
+                "edges": [
+                    _graph_edge(
+                        "runtime-scope:unattributed:records",
+                        "unattributed_evidence",
+                        "runtime-project:unattributed",
+                        "runtime:unattributed:records",
+                        "unknown",
+                        reason="The records are explicitly separated from named projects.",
+                    )
+                ],
+                "limitations": ["project_attribution_unavailable"],
+            },
+            max_nodes=MAX_PROJECT_RUNTIME_GRAPH_NODES,
+            max_edges=MAX_PROJECT_RUNTIME_GRAPH_EDGES,
+        )
+    )
+    return graphs
+
+
+def _delivery_graphs(
+    events: list[dict[str, Any]], inspection: Optional[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]]]:
+    projects = _fleet_projects(inspection)
+    by_id = {item["project_id"]: item for item in projects}
+    by_label: dict[str, list[dict[str, Any]]] = {}
+    for project in projects:
+        by_label.setdefault(project["project_label"], []).append(project)
+
+    def direct_project_for(event: dict[str, Any]) -> Optional[tuple[str, str]]:
+        explicit_id = _safe_id(event.get("project_id"))
+        explicit_label = _safe_id(event.get("project"))
+        if explicit_id is not None:
+            installed = by_id.get(explicit_id)
+            return (
+                (installed["project_id"], installed["project_label"])
+                if installed is not None else None
+            )
+        matches = by_label.get(explicit_label or "", [])
+        if len(matches) == 1:
+            return matches[0]["project_id"], matches[0]["project_label"]
+        return None
+
+    run_projects: dict[str, set[tuple[str, str]]] = {}
+    for event in events:
+        run_id = _safe_id(event.get("run_id"))
+        project = direct_project_for(event)
+        if run_id is not None and project is not None:
+            run_projects.setdefault(run_id, set()).add(project)
+
+    def project_for(event: dict[str, Any]) -> Optional[tuple[str, str]]:
+        direct = direct_project_for(event)
+        if direct is not None:
+            return direct
+        if event.get("project_id") not in (None, "") or event.get("project") not in (None, ""):
+            return None
+        run_id = _safe_id(event.get("run_id"))
+        matches = run_projects.get(run_id or "", set())
+        return next(iter(matches)) if len(matches) == 1 else None
+
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    unattributed_events: list[dict[str, Any]] = []
+    for event in events:
+        project = project_for(event)
+        if project is not None:
+            grouped.setdefault(project, []).append(event)
+        elif any(
+            _safe_id(event.get(key)) is not None
+            for key in ("proposal_id", "incident_id", "work_id", "upstream_work_id")
+        ):
+            unattributed_events.append(event)
+
+    graphs: list[dict[str, Any]] = []
+    limitations: list[str] = []
+    for (project_id, project_label), rows in grouped.items():
+        raw_nodes: dict[str, dict[str, Any]] = {}
+        raw_edges: list[dict[str, Any]] = []
+        edge_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+        proposal_ids = {
+            value for event in rows
+            if (value := _safe_id(event.get("proposal_id"))) is not None
+        }
+        incident_ids = {
+            value for event in rows
+            if (value := _safe_id(event.get("incident_id"))) is not None
+        }
+
+        def add_node(node_id: str, kind: str, label: str, evidence_id: str) -> None:
+            existing = raw_nodes.get(node_id)
+            if existing is None:
+                raw_nodes[node_id] = _graph_node(
+                    node_id,
+                    kind,
+                    label,
+                    "observed",
+                    project_id=project_id,
+                    evidence_ids=[evidence_id],
+                    reason="This stage is linked by an explicit event identifier.",
+                )
+            else:
+                if kind in {"proposal", "incident", "ticket"}:
+                    existing["kind"] = kind
+                    existing["label"] = label
+                if evidence_id not in existing["evidence_ids"]:
+                    existing["evidence_ids"].append(evidence_id)
+                    existing["evidence_ids"] = existing["evidence_ids"][:MAX_GRAPH_EVIDENCE_IDS]
+                    existing["evidence_count"] += 1
+
+        def add_edge(source: str, target: str, kind: str, evidence_id: str) -> None:
+            if source == target:
+                return
+            key = (source, target)
+            existing = edge_by_key.get(key)
+            if existing is not None:
+                existing["evidence_count"] += 1
+                if evidence_id not in existing["evidence_ids"] and len(existing["evidence_ids"]) < MAX_GRAPH_EVIDENCE_IDS:
+                    existing["evidence_ids"].append(evidence_id)
+                return
+            digest = hashlib.sha256(f"{source}\0{target}".encode()).hexdigest()[:16]
+            edge = _graph_edge(
+                f"delivery-edge:{digest}",
+                kind,
+                source,
+                target,
+                "observed",
+                evidence_ids=[evidence_id],
+                reason="The source event explicitly links these stages.",
+            )
+            edge_by_key[key] = edge
+            raw_edges.append(edge)
+
+        for event in rows:
+            evidence_id = _event_evidence_id(event)
+            proposal_id = _safe_id(event.get("proposal_id"))
+            incident_id = _safe_id(event.get("incident_id"))
+            work_id = _safe_id(event.get("work_id"))
+            upstream_id = _safe_id(event.get("upstream_work_id"))
+            run_id = _safe_id(event.get("run_id"))
+            event_kind = _safe_code(event.get("event"))
+            if proposal_id is not None:
+                add_node(f"delivery:proposal:{proposal_id}", "proposal", "Proposal", evidence_id)
+            if incident_id is not None:
+                add_node(f"delivery:incident:{incident_id}", "incident", "Incident", evidence_id)
+            if work_id is not None:
+                work_kind = "ticket" if event_kind == "build.ticket.outcome" else "work"
+                work_label = "Ticket" if work_kind == "ticket" else "Work item"
+                add_node(f"delivery:work:{work_id}", work_kind, work_label, evidence_id)
+            if upstream_id is not None:
+                upstream_node = f"delivery:work:{upstream_id}"
+                if upstream_id in proposal_ids:
+                    upstream_node = f"delivery:proposal:{upstream_id}"
+                    add_node(upstream_node, "proposal", "Proposal", evidence_id)
+                elif upstream_id in incident_ids:
+                    upstream_node = f"delivery:incident:{upstream_id}"
+                    add_node(upstream_node, "incident", "Incident", evidence_id)
+                else:
+                    add_node(upstream_node, "work", "Work item", evidence_id)
+                if work_id is not None:
+                    add_edge(upstream_node, f"delivery:work:{work_id}", "explicit_lineage", evidence_id)
+            if work_id is not None and proposal_id is not None:
+                add_edge(f"delivery:proposal:{proposal_id}", f"delivery:work:{work_id}", "explicit_lineage", evidence_id)
+            if work_id is not None and incident_id is not None:
+                add_edge(f"delivery:incident:{incident_id}", f"delivery:work:{work_id}", "explicit_lineage", evidence_id)
+            if run_id is not None and work_id is not None:
+                run_node = f"delivery:run:{run_id}"
+                add_node(run_node, "build_run", "Build run", evidence_id)
+                add_edge(f"delivery:work:{work_id}", run_node, "explicit_run", evidence_id)
+            if work_id is not None and _safe_code(event.get("outcome")) == "pr_opened":
+                pr_digest = hashlib.sha256(work_id.encode()).hexdigest()[:20]
+                pr_node = f"delivery:pr:{pr_digest}"
+                add_node(pr_node, "pull_request", "Pull request", evidence_id)
+                source = f"delivery:run:{run_id}" if run_id is not None else f"delivery:work:{work_id}"
+                add_edge(source, pr_node, "explicit_outcome", evidence_id)
+
+        if not raw_nodes:
+            continue
+        parent = {node_id: node_id for node_id in raw_nodes}
+
+        def find(node_id: str) -> str:
+            while parent[node_id] != node_id:
+                parent[node_id] = parent[parent[node_id]]
+                node_id = parent[node_id]
+            return node_id
+
+        def union(left: str, right: str) -> None:
+            left_root, right_root = find(left), find(right)
+            if left_root != right_root:
+                parent[right_root] = left_root
+
+        for edge in raw_edges:
+            union(edge["from"], edge["to"])
+        components: dict[str, list[str]] = {}
+        for node_id in raw_nodes:
+            components.setdefault(find(node_id), []).append(node_id)
+        for component_ids in components.values():
+            if len(graphs) >= MAX_DELIVERY_GRAPHS:
+                limitations.append("delivery_graphs_truncated")
+                break
+            component_set = set(component_ids)
+            component_edges = [edge for edge in raw_edges if edge["from"] in component_set and edge["to"] in component_set]
+            digest = hashlib.sha256("\0".join(sorted(component_ids)).encode()).hexdigest()[:16]
+            nodes = [raw_nodes[node_id] for node_id in component_ids]
+            indegree = {node_id: 0 for node_id in component_ids}
+            outdegree = {node_id: 0 for node_id in component_ids}
+            for edge in component_edges:
+                indegree[edge["to"]] += 1
+                outdegree[edge["from"]] += 1
+            roots = [node_id for node_id in component_ids if indegree[node_id] == 0]
+            sinks = [node_id for node_id in component_ids if outdegree[node_id] == 0]
+
+            def gap(stage: str, label: str) -> str:
+                node_id = f"delivery:gap:{digest}:{stage}"
+                nodes.append(
+                    _graph_node(
+                        node_id,
+                        "missing_stage",
+                        label,
+                        "unverified",
+                        project_id=project_id,
+                        limitations=[f"{stage}_evidence_missing"],
+                        reason="No explicit correlated evidence is available for this stage.",
+                    )
+                )
+                return node_id
+
+            ask_roots = [
+                node_id for node_id in roots
+                if raw_nodes[node_id]["kind"] in {"proposal", "incident"}
+            ]
+            ask_gap = None if ask_roots else gap("ask", "Ask not linked")
+            has_ticket = any(raw_nodes[node_id]["kind"] == "ticket" for node_id in component_ids)
+            ticket_gap = None if has_ticket else gap("ticket", "Ticket not linked")
+            if ask_gap is not None and ticket_gap is not None:
+                component_edges.append(
+                    _graph_edge(
+                        f"delivery-edge:{digest}:ask-ticket",
+                        "missing_stage",
+                        ask_gap,
+                        ticket_gap,
+                        "expected",
+                        reason="Neither an originating ask nor a ticket is explicitly linked.",
+                    )
+                )
+                for root in roots:
+                    component_edges.append(
+                        _graph_edge(
+                            f"delivery-edge:{digest}:ticket-root:{len(component_edges)}",
+                            "missing_stage",
+                            ticket_gap,
+                            root,
+                            "expected",
+                            reason="The observed lineage begins after the missing ticket stage.",
+                        )
+                    )
+            elif ask_gap is not None:
+                for root in roots:
+                    component_edges.append(
+                        _graph_edge(
+                            f"delivery-edge:{digest}:ask:{len(component_edges)}",
+                            "missing_stage",
+                            ask_gap,
+                            root,
+                            "expected",
+                            reason="The observed lineage has no explicit originating ask.",
+                        )
+                    )
+            elif ticket_gap is not None:
+                ask_targets = [
+                    edge["to"] for edge in component_edges
+                    if edge["from"] in set(ask_roots)
+                ]
+                for ask_root in ask_roots:
+                    component_edges.append(
+                        _graph_edge(
+                            f"delivery-edge:{digest}:ask-ticket:{len(component_edges)}",
+                            "missing_stage",
+                            ask_root,
+                            ticket_gap,
+                            "expected",
+                            reason="The explicit ask has no explicitly linked ticket.",
+                        )
+                    )
+                for target in dict.fromkeys(ask_targets):
+                    component_edges.append(
+                        _graph_edge(
+                            f"delivery-edge:{digest}:ticket-target:{len(component_edges)}",
+                            "missing_stage",
+                            ticket_gap,
+                            target,
+                            "expected",
+                            reason="Observed work continues after the missing ticket stage.",
+                        )
+                    )
+            terminal_sources = [node_id for node_id in sinks if raw_nodes[node_id]["kind"] == "pull_request"]
+            if not terminal_sources:
+                pr_gap = gap("pull-request", "Pull request not linked")
+                for sink in sinks:
+                    component_edges.append(
+                        _graph_edge(
+                            f"delivery-edge:{digest}:pr:{len(component_edges)}",
+                            "missing_stage",
+                            sink,
+                            pr_gap,
+                            "expected",
+                            reason="The observed lineage has no explicit pull-request outcome.",
+                        )
+                    )
+                terminal_sources = [pr_gap]
+            deploy_gap = gap("deploy", "Deploy not linked")
+            usage_gap = gap("usage", "Usage outcome not linked")
+            for source in terminal_sources:
+                component_edges.append(
+                    _graph_edge(
+                        f"delivery-edge:{digest}:deploy:{len(component_edges)}",
+                        "missing_stage",
+                        source,
+                        deploy_gap,
+                        "expected",
+                        reason="No explicit correlated deploy evidence is available.",
+                    )
+                )
+            component_edges.append(
+                _graph_edge(
+                    f"delivery-edge:{digest}:usage",
+                    "missing_stage",
+                    deploy_gap,
+                    usage_gap,
+                    "expected",
+                    reason="No explicit correlated usage outcome is available.",
+                )
+            )
+            try:
+                graphs.append(
+                    _validate_and_rank_graph(
+                        {
+                            "id": f"graph:delivery:{project_id}:{digest}",
+                            "kind": "delivery",
+                            "label": "Project delivery",
+                            "scope": {"kind": "project", "project_id": project_id, "project_label": project_label},
+                            "state": "incomplete",
+                            "nodes": nodes,
+                            "edges": component_edges,
+                            "limitations": ["deploy_evidence_missing", "usage_outcome_evidence_missing"],
+                        },
+                        max_nodes=MAX_DELIVERY_GRAPH_NODES,
+                        max_edges=MAX_DELIVERY_GRAPH_EDGES,
+                    )
+                )
+            except GraphValidationError as error:
+                limitations.append(f"delivery_graph_{error.code}")
+    return graphs, sorted(set(limitations)), unattributed_events
+
+
+def _graphs_document(
+    topology: dict[str, Any],
+    inspection: Optional[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    delivery, limitations, unattributed_events = _delivery_graphs(events, inspection)
+    return [
+        _architecture_graph(topology),
+        *_runtime_graphs(topology, inspection, unattributed_events),
+        *delivery,
+    ], limitations
+
+
 def _outcome_document(
     events: list[dict[str, Any]],
     attention_count: Optional[int],
@@ -1961,6 +2696,9 @@ def compose_operator_document(
     topology_document, relationship_evidence = _topology_document(
         topology, summary, safe_events, safe_runtime_events, inspection, relationships
     )
+    graphs, graph_limitations = _graphs_document(
+        topology_document, inspection, safe_events
+    )
     brief = _brief_document(
         promises,
         attention,
@@ -1981,7 +2719,7 @@ def compose_operator_document(
         if row["id"] not in seen_evidence:
             unique_evidence.append(row)
             seen_evidence.add(row["id"])
-    consumers = [brief, promises, attention, outcomes, topology_document, changes]
+    consumers = [brief, promises, attention, outcomes, topology_document, graphs, changes]
     unique_evidence, selected_evidence_ids, missing_evidence_ids, evidence_truncated = _bound_evidence(
         unique_evidence, consumers
     )
@@ -1999,6 +2737,7 @@ def compose_operator_document(
     if event_stream_truncated:
         limitations.append("event_window_truncated")
     limitations.extend(safe_runtime_limitations)
+    limitations.extend(graph_limitations)
     if refresh_limitation is not None:
         safe_refresh_limitation = _safe_code(refresh_limitation)
         if safe_refresh_limitation is not None:
@@ -2070,6 +2809,7 @@ def compose_operator_document(
         "narrative": narrative,
         "promises": promises,
         "outcomes": outcomes,
+        "graphs": graphs,
         "topology": topology_document,
         "changes": changes,
         "attention": attention,

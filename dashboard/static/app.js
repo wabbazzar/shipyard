@@ -4,6 +4,7 @@ const state = {
   document: null,
   mode: "outcomes",
   selectedEvidenceId: null,
+  selectedGraphId: null,
   selectedNodeId: null,
   selectedRawKey: null,
   storyIndex: 0,
@@ -14,6 +15,7 @@ const state = {
   unavailablePolls: 0,
   pollTimer: null,
   streamRetryTimer: null,
+  graphFrame: null,
 };
 
 const modeNames = ["outcomes", "crew", "evidence", "story"];
@@ -237,17 +239,89 @@ function renderAttention() {
   document.getElementById("attention-list").replaceChildren(...cards);
 }
 
+function suppliedGraphs() {
+  return Array.isArray(state.document?.graphs) ? state.document.graphs : [];
+}
+
+function selectedGraph() {
+  return suppliedGraphs().find(graph => String(graph.id) === state.selectedGraphId) || null;
+}
+
 function nodeById(id) {
-  const nodes = Array.isArray(state.document?.topology?.nodes) ? state.document.topology.nodes : [];
+  const nodes = Array.isArray(selectedGraph()?.nodes) ? selectedGraph().nodes : [];
   return nodes.find(node => String(node.id) === id) || null;
+}
+
+function graphScopeText(graph) {
+  const scope = graph?.scope || {};
+  if (scope.kind === "current_user_fleet") return "Scope · current-user Shipyard fleet";
+  if (scope.kind === "unattributed") return `Scope · ${present(scope.project_label)} · not assigned to a named project`;
+  return `Scope · project ${present(scope.project_label)} (${present(scope.project_id)})`;
+}
+
+function renderGraphEdges() {
+  cancelAnimationFrame(state.graphFrame);
+  state.graphFrame = requestAnimationFrame(() => {
+    const graph = selectedGraph();
+    const stage = document.getElementById("graph-stage");
+    const svg = document.getElementById("graph-edges");
+    if (!graph || stage.closest("[hidden]") || stage.clientWidth === 0 || stage.clientHeight === 0) {
+      svg.replaceChildren();
+      return;
+    }
+    const bounds = stage.getBoundingClientRect();
+    const width = Math.max(1, stage.scrollWidth);
+    const height = Math.max(1, stage.scrollHeight);
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    svg.setAttribute("width", String(width));
+    svg.setAttribute("height", String(height));
+    const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+    marker.setAttribute("id", "graph-arrow");
+    marker.setAttribute("markerWidth", "8");
+    marker.setAttribute("markerHeight", "8");
+    marker.setAttribute("refX", "7");
+    marker.setAttribute("refY", "4");
+    marker.setAttribute("orient", "auto");
+    marker.setAttribute("markerUnits", "strokeWidth");
+    const arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    arrow.setAttribute("d", "M 0 0 L 8 4 L 0 8 z");
+    marker.append(arrow);
+    const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+    defs.append(marker);
+    const paths = [];
+    const vertical = matchMedia("(max-width: 700px)").matches;
+    for (const edge of Array.isArray(graph.edges) ? graph.edges : []) {
+      const source = stage.querySelector(`[data-node-id="${CSS.escape(String(edge.from))}"] .node-card`);
+      const target = stage.querySelector(`[data-node-id="${CSS.escape(String(edge.to))}"] .node-card`);
+      if (!source || !target) continue;
+      const from = source.getBoundingClientRect();
+      const to = target.getBoundingClientRect();
+      const x1 = vertical ? from.left + from.width / 2 - bounds.left : from.right - bounds.left;
+      const y1 = vertical ? from.bottom - bounds.top : from.top + from.height / 2 - bounds.top;
+      const x2 = vertical ? to.left + to.width / 2 - bounds.left : to.left - bounds.left;
+      const y2 = vertical ? to.top - bounds.top : to.top + to.height / 2 - bounds.top;
+      const bend = vertical ? Math.max(18, Math.abs(y2 - y1) / 2) : Math.max(6, Math.abs(x2 - x1) / 2);
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.dataset.edgeId = String(edge.id);
+      path.dataset.from = String(edge.from);
+      path.dataset.to = String(edge.to);
+      path.dataset.sourceState = sourceState(edge.state);
+      path.setAttribute("d", vertical
+        ? `M ${x1} ${y1} C ${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2}`
+        : `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`);
+      path.setAttribute("marker-end", "url(#graph-arrow)");
+      paths.push(path);
+    }
+    svg.replaceChildren(defs, ...paths);
+  });
 }
 
 function renderCrewSelection() {
   const root = document.getElementById("crew-selection");
-  const heading = element("h3", "", "Skills");
+  const heading = element("h3", "", "Selection");
   const node = nodeById(state.selectedNodeId);
   if (!node) {
-    root.replaceChildren(heading, element("p", "quiet", "Select a crew or skill node."));
+    root.replaceChildren(heading, element("p", "quiet", "Select a node in this graph."));
     return;
   }
   const fields = element("dl", "evidence-fields");
@@ -259,15 +333,38 @@ function renderCrewSelection() {
 }
 
 function renderCrew() {
-  const topology = state.document?.topology || {};
-  const nodes = Array.isArray(topology.nodes) ? topology.nodes : [];
+  const graphs = suppliedGraphs();
+  if (!graphs.some(graph => String(graph.id) === state.selectedGraphId)) {
+    state.selectedGraphId = graphs[0] ? String(graphs[0].id) : null;
+  }
+  const graph = selectedGraph();
+  const select = document.getElementById("graph-select");
+  select.replaceChildren(...graphs.map(item => {
+    const option = element("option", "", `${present(item.label)} · ${present(item.scope?.project_label || item.scope?.kind)}`);
+    option.value = String(item.id);
+    option.selected = String(item.id) === state.selectedGraphId;
+    return option;
+  }));
+  select.disabled = graphs.length === 0;
+  document.getElementById("graph-scope").textContent = graph ? graphScopeText(graph) : "No supplied graph is available.";
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
   if (!nodeById(state.selectedNodeId)) state.selectedNodeId = nodes[0] ? String(nodes[0].id) : null;
-  const items = nodes.map((node, index) => {
+  const nodeMap = new Map(nodes.map((node, index) => [String(node.id), {node, index}]));
+  const ranks = Array.isArray(graph?.ranks) ? graph.ranks : [];
+  const rankItems = ranks.map((rank, rankIndex) => {
+    const group = element("div", "graph-rank");
+    group.dataset.rank = String(rankIndex);
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", `Rank ${rankIndex + 1}`);
+    const items = (Array.isArray(rank) ? rank : []).flatMap(nodeId => {
+      const found = nodeMap.get(String(nodeId));
+      if (!found) return [];
+      const {node, index} = found;
     const li = element("li", "topology-node");
-    li.setAttribute("role", "treeitem");
-    li.setAttribute("aria-level", "1");
+      li.setAttribute("role", "listitem");
     li.dataset.nodeId = present(node.id);
     li.dataset.order = String(index);
+      li.dataset.rank = String(rankIndex);
     const button = element("button", "node-card");
     button.type = "button";
     button.setAttribute("aria-pressed", String(String(node.id) === state.selectedNodeId));
@@ -275,7 +372,7 @@ function renderCrew() {
     const activity = element("span", "activity-mark");
     activity.setAttribute("aria-hidden", "true");
     const meta = element("span", "node-meta");
-    meta.append(activity, document.createTextNode(`${sourceState(node.state)} · ${present(node.observed_count)}`));
+    meta.append(activity, document.createTextNode(`${sourceState(node.state)} · ${present(node.evidence_count)} records`));
     button.append(
       element("span", "node-kind", present(node.kind)),
       element("span", "node-label", present(node.label)),
@@ -289,39 +386,45 @@ function renderCrew() {
     });
     li.append(button);
     return li;
+    });
+    const list = element("ol", "graph-rank-nodes");
+    list.append(...items);
+    group.append(list);
+    return group;
   });
-  document.getElementById("topology-nodes").replaceChildren(...items);
+  document.getElementById("topology-nodes").replaceChildren(...rankItems);
 
-  const edges = [
-    ...(Array.isArray(topology.declared_edges) ? topology.declared_edges : []),
-    ...(Array.isArray(topology.observed_edges) ? topology.observed_edges : []),
-  ];
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const routes = edges.map((edge, index) => {
-    const li = element("li", "route-card");
-    li.dataset.edgeId = present(edge.id);
-    li.dataset.order = String(index);
-    markState(li, edge.state);
-    li.append(
-      element("span", "", `${present(edge.from)} → ${present(edge.to)}`),
-      element("span", "route-meta", `${present(edge.kind)} · ${sourceState(edge.state)}${edge.count === undefined ? "" : ` · ${edge.count}`}`),
-    );
+    const row = element("tr", "route-card");
+    row.dataset.edgeId = present(edge.id);
+    row.dataset.from = present(edge.from);
+    row.dataset.to = present(edge.to);
+    row.dataset.order = String(index);
+    markState(row, edge.state);
+    const from = element("td", "route-endpoint", present(edge.from));
+    const to = element("td", "route-endpoint", present(edge.to));
+    const reason = element("td", "route-reason", present(edge.reason));
+    const routeState = element("td", "route-meta", `${present(edge.kind)} · ${sourceState(edge.state)}`);
+    for (const [cell, label] of [[from, "From"], [to, "To"], [reason, "Why"], [routeState, "State"]]) cell.dataset.label = label;
+    row.append(from, to, reason, routeState);
     if (Array.isArray(edge.evidence_ids) && edge.evidence_ids.length) {
-      li.tabIndex = 0;
-      li.setAttribute("role", "button");
-      li.setAttribute("aria-label", `Inspect evidence for ${present(edge.id)}`);
+      row.tabIndex = 0;
+      row.setAttribute("aria-label", `Inspect evidence for ${present(edge.id)}`);
       const open = () => {
         state.selectedEvidenceId = String(edge.evidence_ids[0]);
         setMode("evidence", {focus: true});
       };
-      li.addEventListener("click", open);
-      li.addEventListener("keydown", event => {
+      row.addEventListener("click", open);
+      row.addEventListener("keydown", event => {
         if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
       });
     }
-    return li;
+    return row;
   });
   document.getElementById("topology-routes").replaceChildren(...routes);
   renderCrewSelection();
+  renderGraphEdges();
 }
 
 function evidenceById(id) {
@@ -506,6 +609,7 @@ function setMode(mode, {focus = false} = {}) {
     renderEvidence();
     refreshRawEvents();
   }
+  if (mode === "crew") renderGraphEdges();
   if (focus) document.getElementById(`mode-${mode}`).focus();
 }
 
@@ -556,6 +660,14 @@ document.getElementById("window-select").addEventListener("change", () => {
   refreshOperator();
   if (state.mode === "evidence") refreshRawEvents();
 });
+document.getElementById("graph-select").addEventListener("change", event => {
+  state.selectedGraphId = event.target.value;
+  state.selectedNodeId = null;
+  renderCrew();
+});
+new ResizeObserver(() => {
+  if (state.mode === "crew") renderGraphEdges();
+}).observe(document.getElementById("graph-stage"));
 document.getElementById("story-previous").addEventListener("click", () => { if (state.storyIndex > 0) { state.storyIndex -= 1; renderStory(); } });
 document.getElementById("story-next").addEventListener("click", () => {
   const beats = Array.isArray(state.document?.narrative?.beats) ? state.document.narrative.beats : [];

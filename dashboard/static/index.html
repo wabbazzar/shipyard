@@ -71,15 +71,35 @@
     </section>
 
     <section id="mode-crew" class="mode-panel" role="tabpanel" aria-labelledby="tab-crew" tabindex="0" hidden>
-      <header class="mode-heading"><h2>Crew</h2></header>
+      <header class="mode-heading">
+        <div>
+          <h2>Crew</h2>
+          <p id="graph-scope" class="subline">Choose a supplied graph.</p>
+        </div>
+        <label class="graph-control">Graph
+          <select id="graph-select" aria-label="Crew graph"></select>
+        </label>
+      </header>
       <div class="crew-layout">
         <div class="map-panel">
-          <ol id="topology-nodes" class="topology-nodes" role="tree" aria-label="Crew and skills in supplied order"></ol>
-          <ol id="topology-routes" class="topology-routes" aria-label="Declared and observed routes in supplied order"></ol>
+          <div id="graph-stage" class="graph-stage">
+            <svg id="graph-edges" class="graph-edges" aria-hidden="true"></svg>
+            <div id="topology-nodes" class="graph-ranks" aria-label="Nodes in supplied ranks"></div>
+          </div>
+          <div class="connections-heading">
+            <h3>Connections</h3>
+            <p class="quiet">The same supplied endpoints shown on the map.</p>
+          </div>
+          <div class="connection-table-wrap">
+            <table class="connection-table">
+              <thead><tr><th scope="col">From</th><th scope="col">To</th><th scope="col">Why</th><th scope="col">State</th></tr></thead>
+              <tbody id="topology-routes"></tbody>
+            </table>
+          </div>
         </div>
         <aside id="crew-selection" class="selection-panel" aria-live="polite">
-          <h3>Skills</h3>
-          <p class="quiet">Select a crew or skill node.</p>
+          <h3>Selection</h3>
+          <p class="quiet">Select a node in this graph.</p>
         </aside>
       </div>
     </section>
