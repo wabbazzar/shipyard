@@ -222,7 +222,7 @@ EOF
   stub_model_in_progress_with_error
 
   run run_runner release "$project" --mode daily
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   public="$project/tmp/blockindependent-release-result.json"
   [ "$(jq -r '.e2eIsolated.status' "$public")" = "completed" ]
   [ "$(jq -r '.e2eIsolated.pass' "$public")" = "true" ]
@@ -271,7 +271,7 @@ EOF
   export MODEL_CREATE_DIRT_DURING_RUN=1
 
   run run_runner release "$project" --mode daily
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   public="$project/tmp/blocknewdirt-release-result.json"
   [ "$(jq -r '.pass' "$public")" = "false" ]
   [ "$(jq -r '.hygieneNotifications // [] | length' "$public")" -eq 0 ]

@@ -503,6 +503,15 @@ if [ "$VERIFY_GATE" = "true" ] && [ "$PASS" = "true" ] && [ "$INCOMPLETE" -eq 0 
   fi
 fi
 
+# The process status is part of the release verdict consumed by hooks and
+# pipeline callers. A harness can finish its one-shot turn successfully while
+# writing pass:false (including a run-in-progress sentinel); never let that
+# transport success escape as a green runner exit. Preserve every genuine
+# nonzero harness or runner-owned-gate code for exact diagnosis.
+if [ "$PASS" != "true" ] && [ "$FINAL_EXIT" -eq 0 ]; then
+  FINAL_EXIT=1
+fi
+
 # Build category tag from the result fields (project-specific structure
 # but the field names are stable across release-style runs).
 CATEGORY="$(python3 - "$WORK_RESULT_FILE" <<'PY' 2>/dev/null || echo unknown
