@@ -46,6 +46,14 @@ body.present-mode {
   overflow: hidden;
 }
 
+/* Read mode is normal document flow, so the whole page clears the
+   Dynamic Island / home indicator here. Present mode uses 100vh
+   snap slides instead and insets those directly. */
+body:not(.present-mode) {
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
 a {
   color: var(--accent);
   text-decoration: none;
@@ -57,7 +65,7 @@ a:hover { opacity: 0.8; }
 .mode-toggle {
   position: fixed;
   top: calc(1.5rem + env(safe-area-inset-top, 0px));
-  right: 1.5rem;
+  right: calc(1.5rem + env(safe-area-inset-right, 0px));
   z-index: 100;
   display: flex;
   background: #111;
@@ -94,7 +102,7 @@ a:hover { opacity: 0.8; }
 /* --- Progress Dots --- */
 .progress-dots {
   position: fixed;
-  right: 1.5rem;
+  right: calc(1.5rem + env(safe-area-inset-right, 0px));
   top: 50%;
   transform: translateY(-50%);
   z-index: 101;
@@ -171,6 +179,8 @@ section {
   max-width: var(--max-w);
   margin: 0 auto;
   padding: var(--section-pad);
+  padding-left: max(2rem, env(safe-area-inset-left, 0px));
+  padding-right: max(2rem, env(safe-area-inset-right, 0px));
   min-height: auto;
 }
 
@@ -184,7 +194,7 @@ body.present-mode section {
   flex-direction: column;
   justify-content: flex-start;   /* top-align; slide-inner's auto margins center it when short */
   align-items: center;
-  padding: 3rem 2rem;
+  padding: calc(3rem + env(safe-area-inset-top, 0px)) calc(2rem + env(safe-area-inset-right, 0px)) calc(3rem + env(safe-area-inset-bottom, 0px)) calc(2rem + env(safe-area-inset-left, 0px));
   overflow-y: auto;              /* tall slides scroll internally instead of clipping */
   overflow-x: hidden;
   scrollbar-width: none;         /* Firefox — hide the internal scrollbar */
@@ -470,7 +480,7 @@ body.present-mode .section-divider {
   background: #0a0a0a;
   border-right: 1px solid #222;
   z-index: 90;
-  padding: 2rem 1.5rem;
+  padding: calc(2rem + env(safe-area-inset-top, 0px)) 1.5rem calc(2rem + env(safe-area-inset-bottom, 0px)) calc(1.5rem + env(safe-area-inset-left, 0px));
   overflow-y: auto;
   transition: left 0.25s ease;
   scrollbar-width: none;
@@ -610,7 +620,7 @@ body.present-mode .mermaid .node:hover polygon {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem 1.25rem 0.75rem;
+  padding: calc(1rem + env(safe-area-inset-top, 0px)) calc(1.25rem + env(safe-area-inset-right, 0px)) 0.75rem 1.25rem;
   border-bottom: 1px solid #222;
   flex-shrink: 0;
 }
@@ -656,7 +666,7 @@ body.present-mode .mermaid .node:hover polygon {
 .notes-panel-body {
   flex: 1;
   overflow-y: auto;
-  padding: 1.25rem 2.5rem 1.25rem 1.25rem;
+  padding: 1.25rem calc(2.5rem + env(safe-area-inset-right, 0px)) calc(1.25rem + env(safe-area-inset-bottom, 0px)) 1.25rem;
   scrollbar-width: none;
   font-size: 0.95rem;
   line-height: 1.65;
@@ -718,7 +728,7 @@ body.present-mode .notes-panel-body p {
 .notes-panel-tab {
   display: none;
   position: fixed;
-  bottom: 2rem;
+  bottom: calc(2rem + env(safe-area-inset-bottom, 0px));
   right: 0;
   z-index: 81;
   background: #1a1a1a;
@@ -800,7 +810,7 @@ body:not(.present-mode) .section-divider {
 
 /* Mode toggle stays visible above the notes panel */
 body:not(.present-mode) .mode-toggle {
-  right: calc(340px + 1.5rem);
+  right: calc(340px + 1.5rem + env(safe-area-inset-right, 0px));
 }
 
 /* --- Responsive --- */
@@ -811,17 +821,17 @@ body:not(.present-mode) .mode-toggle {
   .subtitle { font-size: 1.1rem; }
   .two-col { grid-template-columns: 1fr; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
-  section { padding: 2.5rem 1.25rem; }
-  body.present-mode section { padding: 2rem 1.25rem; }
-  .mode-toggle { top: 1rem; right: 1rem; }
-  .progress-dots { right: 0.75rem; }
+  section { padding: 2.5rem max(1.25rem, env(safe-area-inset-right, 0px)) 2.5rem max(1.25rem, env(safe-area-inset-left, 0px)); }
+  body.present-mode section { padding: calc(2rem + env(safe-area-inset-top, 0px)) calc(1.25rem + env(safe-area-inset-right, 0px)) calc(2rem + env(safe-area-inset-bottom, 0px)) calc(1.25rem + env(safe-area-inset-left, 0px)); }
+  .mode-toggle { top: calc(1rem + env(safe-area-inset-top, 0px)); right: calc(1rem + env(safe-area-inset-right, 0px)); }
+  .progress-dots { right: calc(0.75rem + env(safe-area-inset-right, 0px)); }
 
   .stat-card .number { font-size: 1.5rem; }
 
   .notes-panel { display: none; }
   .notes-panel-tab { display: none !important; }
   body:not(.present-mode) main { margin-right: 0; }
-  body:not(.present-mode) .mode-toggle { right: 1rem; }
+  body:not(.present-mode) .mode-toggle { right: calc(1rem + env(safe-area-inset-right, 0px)); }
 }
 
 @media (max-width: 480px) {
@@ -857,8 +867,8 @@ body:not(.present-mode) .mode-toggle {
 /* --- Theme toggle button (visible in both modes) --- */
 .theme-toggle {
   position: fixed;
-  bottom: 1.5rem;
-  left: 1.5rem;
+  bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
+  left: calc(1.5rem + env(safe-area-inset-left, 0px));
   z-index: 100;
   display: inline-flex;
   align-items: center;
@@ -974,7 +984,7 @@ html.light .mermaid li { color: inherit; }
    ============================================================ */
 /* Simulate pill — top-left, mirrors the Read/Present pill. Tap = on/off, hold = modal. */
 .sim-pill {
-  position: fixed; top: calc(1.5rem + env(safe-area-inset-top, 0px)); left: 1.5rem; z-index: 100;
+  position: fixed; top: calc(1.5rem + env(safe-area-inset-top, 0px)); left: calc(1.5rem + env(safe-area-inset-left, 0px)); z-index: 100;
   display: inline-flex; align-items: center; gap: 0.5rem;
   background: #111; border: 1px solid #222; border-radius: 999px;
   padding: 0.45rem 1rem; color: var(--muted);
@@ -988,7 +998,7 @@ html.light .mermaid li { color: inherit; }
 .sim-pill.running .sim-dot { background: #E63946; box-shadow: 0 0 8px rgba(230,57,70,0.9); animation: simpulse 1.1s ease-in-out infinite; }
 @keyframes simpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 /* Push the back-link below the pill so they don't collide at top-left. */
-body .back-to-writing { top: 4.2rem; }
+body .back-to-writing { top: calc(4.2rem + env(safe-area-inset-top, 0px)); }
 
 /* Settings / explanation modal (opened by holding the pill) */
 .sim-modal[hidden] { display: none; }
