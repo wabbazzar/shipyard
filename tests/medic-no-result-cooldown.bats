@@ -63,10 +63,10 @@ printf "%s" "{\"type\":\"result\",\"result\":\"done\",\"usage\":{\"input_tokens\
 '
 
   run run_runner release "$p" --mode daily
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
 
   [ "$(notify_log | wc -l | tr -d ' ')" = "1" ]
-  [ "$(notify_log)" = "origin Release FAILED (daily)|origin-release completed (mode=daily, exit=0). See $p/tmp/origin-release-last-run.log." ]
+  [ "$(notify_log)" = "origin Release FAILED (daily)|origin-release completed (mode=daily, exit=1). See $p/tmp/origin-release-last-run.log." ]
   [ "$(events_json | jq -r 'select(.event=="notification.decision") | .outcome')" = $'delivered\ndeduped' ]
   [ "$(events_json | jq -r 'select(.event=="notification.decision") | .class' | sort -u)" = "actionable" ]
   episodes="$(events_json | jq -r 'select(.event=="notification.decision") | .episode')"

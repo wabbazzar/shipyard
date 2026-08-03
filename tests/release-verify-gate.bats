@@ -48,7 +48,8 @@ run_release() { run_runner release "$PROJ" --mode daily; }
   PROJ="$(make_fixture_project vgfail can-merge-true.toml)"
   setup_cfg "$PROJ" "false" on          # test_cmd exits 1
   stub_pass
-  run_release
+  run run_release
+  [ "$status" -eq 1 ]
   [ "$(job_status)" = "fail" ]
   [ "$(jq -r '.pass' "$PROJ/tmp/vgfail-release-result.json")" = "false" ]
   [ "$(jq -r '.false_green_caught' "$PROJ/tmp/vgfail-release-result.json")" = "true" ]
