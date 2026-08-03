@@ -373,10 +373,32 @@ function renderCrew() {
     activity.setAttribute("aria-hidden", "true");
     const meta = element("span", "node-meta");
     meta.append(activity, document.createTextNode(`${sourceState(node.state)} · ${present(node.evidence_count)} records`));
+    const runtimeDetails = [];
+    if (graph?.kind === "project_runtime" && ["role", "role_runtime"].includes(node.kind)) {
+      const observedCount = Number.isInteger(node.observed_count) && node.observed_count >= 0
+        ? `${node.observed_count} observation${node.observed_count === 1 ? "" : "s"}`
+        : "Observations · not reported";
+      const terminalStatus = typeof node.terminal_status === "string" && node.terminal_status
+        ? node.terminal_status
+        : null;
+      const terminalReason = typeof node.terminal_reason === "string" && node.terminal_reason
+        ? node.terminal_reason
+        : null;
+      runtimeDetails.push(
+        element("span", "node-meta", observedCount),
+        element("span", "node-meta", terminalStatus
+          ? `Terminal · ${terminalStatus}${terminalReason ? ` / ${terminalReason}` : ""}`
+          : "Terminal · not recorded"),
+      );
+      if (typeof node.impact === "string" && node.impact) {
+        runtimeDetails.push(element("span", "node-meta", node.impact));
+      }
+    }
     button.append(
       element("span", "node-kind", present(node.kind)),
       element("span", "node-label", present(node.label)),
       meta,
+      ...runtimeDetails,
       element("span", "node-meta", formatTimestamp(node.last_activity)),
     );
     button.addEventListener("click", () => {

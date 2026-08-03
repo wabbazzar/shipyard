@@ -832,6 +832,105 @@ class OperatorComposerTest(unittest.TestCase):
         css = (self.repo_root / "dashboard" / "static" / "styles.css").read_text(encoding="utf-8")
         self.assertNotRegex(css, r"topology-node(?::not\([^)]*\)|:last-child)?::(?:before|after)")
 
+    def test_project_runtime_graph_preserves_terminal_observation_contract(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {
+                "project_id": "project-safe",
+                "project_name": "Shredly",
+                "roles": ["build"],
+                "state": "no_fault_observed",
+            }
+        ]
+        runtime_node = {
+            "id": "runtime:project-safe:build",
+            "kind": "role_runtime",
+            "label": "Helldiver",
+            "project_id": "project-safe",
+            "role_id": "build",
+            "state": "unknown",
+            "observed_count": 2,
+            "terminal_status": "abort",
+            "terminal_reason": "dirty",
+            "reason": "The latest recorded run ended early before completion.",
+            "impact": "This recorded early stop is not an outage; no completed result was produced.",
+            "action": "Review the recorded early stop before treating this role as healthy.",
+            "evidence_ids": ["event:job-start", "event:job-end"],
+            "limitations": [],
+            "last_activity": "2026-08-01T10:01:00Z",
+        }
+
+        graphs = operator_module._runtime_graphs(
+            {"runtime_nodes": [runtime_node]}, inspection
+        )
+        graph = next(item for item in graphs if item["scope"].get("project_id") == "project-safe")
+        role = next(
+            item
+            for item in graph["nodes"]
+            if item["kind"] == "role" and item.get("role") == "build"
+        )
+
+        self.assertEqual(role["role_id"], "build")
+        self.assertEqual(role["observed_count"], 2)
+        self.assertEqual(role["terminal_status"], "abort")
+        self.assertEqual(role["terminal_reason"], "dirty")
+        self.assertEqual(role["reason"], runtime_node["reason"])
+        self.assertEqual(role["impact"], runtime_node["impact"])
+        self.assertEqual(role["action"], runtime_node["action"])
+        self.assertIn("not an outage", role["impact"].lower())
+
+    def test_graph_validator_rejects_malformed_runtime_terminal_fields(self) -> None:
+        validate = operator_module._validate_and_rank_graph
+        valid_role = {
+            "id": "runtime:project-safe:build",
+            "kind": "role",
+            "label": "Helldiver",
+            "state": "unknown",
+            "project_id": "project-safe",
+            "role": "build",
+            "reason": "Runtime evidence is bounded and project coherent.",
+            "evidence_count": 0,
+            "evidence_ids": [],
+            "limitations": [],
+            "observed_count": None,
+            "terminal_status": None,
+            "terminal_reason": None,
+        }
+        base = {
+            "id": "graph:runtime:project-safe",
+            "kind": "project_runtime",
+            "label": "Shredly runtime",
+            "scope": {
+                "kind": "project",
+                "project_id": "project-safe",
+                "project_label": "Shredly",
+            },
+            "state": "unknown",
+            "nodes": [valid_role],
+            "edges": [],
+            "limitations": [],
+        }
+        accepted = validate(base, max_nodes=8, max_edges=8)
+        self.assertIsNone(accepted["nodes"][0]["observed_count"])
+        self.assertIsNone(accepted["nodes"][0]["terminal_status"])
+        self.assertIsNone(accepted["nodes"][0]["terminal_reason"])
+
+        malformed = {
+            "negative_count": {"observed_count": -1},
+            "boolean_count": {"observed_count": True},
+            "unknown_status": {"terminal_status": "success"},
+            "unsafe_status": {"terminal_status": "<script>"},
+            "unknown_reason": {"terminal_reason": "manual"},
+            "unsafe_reason": {"terminal_reason": "<script>"},
+        }
+        for name, fields in malformed.items():
+            graph = {**base, "nodes": [{**valid_role, **fields}]}
+            with self.subTest(name=name), self.assertRaises(
+                operator_module.GraphValidationError
+            ) as caught:
+                validate(graph, max_nodes=8, max_edges=8)
+            self.assertEqual(caught.exception.code, "invalid")
+
     def test_project_delivery_graph_preserves_branch_convergence_and_gaps(self) -> None:
         inspection = inspection_fixture()
         inspection["fleet"] = [
@@ -911,6 +1010,135 @@ class OperatorComposerTest(unittest.TestCase):
         )
         self.assertTrue(any(node["kind"] == "missing_stage" for node in graph["nodes"]))
         self.assertNotIn(("delivery:work:work-left", "delivery:work:work-right"), edges)
+
+    def test_separate_delivery_page_recovers_graph_without_changing_global_semantics(self) -> None:
+        inspection = inspection_fixture()
+        inspection["fleet"] = [
+            {
+                "project_id": "project-safe",
+                "project_name": "demo",
+                "roles": ["design", "build", "release"],
+                "state": "no_fault_observed",
+            }
+        ]
+        global_events = [
+            {
+                "ts": f"2026-08-01T11:{index // 60:02d}:{index % 60:02d}Z",
+                "event": "medic.scan",
+                "project": "demo",
+                "role": "medic",
+                "svc": "demo-medic",
+            }
+            for index in range(2_000)
+        ]
+        delivery_events = [
+            {
+                "ts": "2026-08-01T09:00:00Z",
+                "event": "design.proposal.opened",
+                "project": "demo",
+                "role": "design",
+                "proposal_id": "proposal-buried",
+            },
+            {
+                "ts": "2026-08-01T09:10:00Z",
+                "event": "build.ticket.outcome",
+                "project": "demo",
+                "role": "build",
+                "work_id": "ticket-buried",
+                "upstream_work_id": "proposal-buried",
+                "outcome": "ok",
+            },
+            {
+                "ts": "2026-08-01T09:20:00Z",
+                "event": "build.work.outcome",
+                "project": "demo",
+                "role": "build",
+                "work_id": "branch-left",
+                "upstream_work_id": "ticket-buried",
+                "outcome": "ok",
+            },
+            {
+                "ts": "2026-08-01T09:21:00Z",
+                "event": "build.work.outcome",
+                "project": "demo",
+                "role": "build",
+                "work_id": "branch-right",
+                "upstream_work_id": "ticket-buried",
+                "outcome": "ok",
+            },
+            {
+                "ts": "2026-08-01T09:30:00Z",
+                "event": "build.work.outcome",
+                "project": "demo",
+                "role": "build",
+                "work_id": "branch-joined",
+                "upstream_work_id": "branch-left",
+                "outcome": "pr_opened",
+            },
+            {
+                "ts": "2026-08-01T09:31:00Z",
+                "event": "build.work.outcome",
+                "project": "demo",
+                "role": "build",
+                "work_id": "branch-joined",
+                "upstream_work_id": "branch-right",
+                "outcome": "pr_opened",
+            },
+        ]
+        baseline = self.compose(
+            inspection=inspection,
+            events=global_events,
+            event_stream_truncated=True,
+            delivery_events=[],
+            delivery_limitations=[],
+        )
+        document = self.compose(
+            inspection=inspection,
+            events=global_events,
+            event_stream_truncated=True,
+            delivery_events=delivery_events,
+            delivery_limitations=["delivery_scan_truncated", "delivery_lifecycle_truncated"],
+        )
+
+        for key in ("brief", "outcomes", "attention"):
+            self.assertEqual(document[key], baseline[key], f"delivery page changed global {key}")
+        baseline_global = next(row for row in baseline["coverage"] if row["source"] == "operator_events")
+        recovered_global = next(row for row in document["coverage"] if row["source"] == "operator_events")
+        self.assertEqual(recovered_global, baseline_global)
+
+        graph = next(item for item in document["graphs"] if item["kind"] == "delivery")
+        self.assertEqual(graph["scope"]["project_label"], "demo")
+        node_ids = {node["id"] for node in graph["nodes"]}
+        self.assertTrue(all(edge["from"] in node_ids and edge["to"] in node_ids for edge in graph["edges"]))
+        edges = {(edge["from"], edge["to"]) for edge in graph["edges"]}
+        self.assertEqual(
+            {target for source, target in edges if source == "delivery:work:ticket-buried"},
+            {"delivery:work:branch-left", "delivery:work:branch-right"},
+        )
+        self.assertEqual(
+            {source for source, target in edges if target == "delivery:work:branch-joined"},
+            {"delivery:work:branch-left", "delivery:work:branch-right"},
+        )
+        self.assertTrue(any(node["kind"] == "missing_stage" for node in graph["nodes"]))
+        graph_evidence = {
+            evidence_id
+            for item in graph["nodes"] + graph["edges"]
+            for evidence_id in item["evidence_ids"]
+        }
+        self.assertTrue(graph_evidence)
+        self.assertTrue(graph_evidence.issubset({row["id"] for row in document["evidence"]}))
+        self.assertLessEqual(len(document["evidence"]), MAX_EVIDENCE)
+        self.assertIn("delivery_scan_truncated", document["metadata"]["limitations"])
+        delivery_coverage = next(
+            row for row in document["coverage"] if row["source"] == "delivery_lifecycle"
+        )
+        self.assertEqual(delivery_coverage["state"], "partial")
+        self.assertEqual(delivery_coverage["reason"], "bounded_at_maximum")
+        self.assertEqual(delivery_coverage["records_total"], len(delivery_events))
+        self.assertEqual(
+            delivery_coverage["limitations"],
+            ["delivery_lifecycle_truncated", "delivery_scan_truncated"],
+        )
 
     def test_delivery_graphs_require_installed_scope_and_quarantine_unknown_events(self) -> None:
         inspection = inspection_fixture()
@@ -1548,6 +1776,16 @@ class OperatorFixtureContractTest(unittest.TestCase):
                         for node in graph["nodes"]
                     )
                 )
+        runtime_graph = next(graph for graph in graphs if graph["kind"] == "project_runtime")
+        runtime_role = next(
+            node
+            for node in runtime_graph["nodes"]
+            if node["kind"] == "role" and node.get("role") == "build"
+        )
+        self.assertEqual(runtime_role["role_id"], "build")
+        self.assertEqual(runtime_role["observed_count"], 2)
+        self.assertEqual(runtime_role["terminal_status"], "ok")
+        self.assertIsNone(runtime_role["terminal_reason"])
 
 
 class InspectionCacheTest(unittest.TestCase):

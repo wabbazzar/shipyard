@@ -37,6 +37,8 @@ from urllib.parse import parse_qsl, urlsplit
 
 from dashboard.reader import DEFAULT_LIMIT, MAX_LIMIT, EventReader, StaleReferenceError
 from dashboard.operator import (
+    DELIVERY_EVENT_FAMILIES,
+    DELIVERY_IDENTIFIER_FIELDS,
     InspectionCache,
     MAX_RUNTIME_EVENTS_PER_NODE,
     OperatorDataError,
@@ -89,6 +91,11 @@ _TERMINAL_REASONS = {"dirty", "not_trunk", "open_cap", "budget", "budget_deferre
 MAX_RUNTIME_IDENTITIES = 512
 MAX_RUNTIME_EVENTS_TOTAL = 4096
 MAX_RUNTIME_SCAN_REFERENCES = 50_000
+MAX_DELIVERY_SCAN_REFERENCES = 50_000
+MAX_DELIVERY_READ_REFERENCES = 4_096
+MAX_DELIVERY_IDENTITIES = 4_096
+MAX_DELIVERY_EVENTS_TOTAL = 4_096
+_DELIVERY_SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$")
 
 
 class RequestError(ValueError):
@@ -351,6 +358,116 @@ def _runtime_lifecycle_events(
         limitations.add("runtime_lifecycle_truncated")
     rows = [row for key in sorted(buckets) for row in buckets[key]]
     return RuntimeLifecycleEvents(rows, sorted(limitations))
+
+
+class DeliveryLifecycleEvents(list[dict[str, Any]]):
+    """Bounded delivery-only recovery page with controlled limitations."""
+
+    def __init__(self, rows: list[dict[str, Any]], limitations: list[str]):
+        super().__init__(rows)
+        self.limitations = limitations
+
+
+def _delivery_safe_text(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or _DELIVERY_SAFE_ID.fullmatch(value) is None:
+        return None
+    return value
+
+
+def _delivery_lifecycle_events(
+    reader: EventReader,
+    window: str,
+    displayed_references: Optional[list[Any]] = None,
+) -> DeliveryLifecycleEvents:
+    """Recover only bounded, identifier-bearing delivery rows beyond the display page."""
+    displayed = set(displayed_references or [])
+    limitations: set[str] = set()
+    identifiers: set[tuple[str, str]] = set()
+    identity_projects: dict[tuple[str, str], Optional[str]] = {}
+    pending_rows: list[tuple[dict[str, Any], Optional[tuple[str, str]]]] = []
+    scanned = 0
+    reads = 0
+    for reference in itertools.islice(
+        reader._window_refs(window, None), MAX_DELIVERY_SCAN_REFERENCES
+    ):
+        scanned += 1
+        role = _delivery_safe_text(reference.role)
+        service = _delivery_safe_text(reference.svc)
+        project = _delivery_safe_text(reference.project)
+        identity = (role, service) if role is not None and service is not None else None
+        if identity is not None and project is not None:
+            if identity not in identity_projects:
+                if len(identity_projects) + len(identifiers) >= MAX_DELIVERY_IDENTITIES:
+                    limitations.add("delivery_identities_truncated")
+                else:
+                    identity_projects[identity] = project
+            elif identity_projects[identity] != project:
+                identity_projects[identity] = None
+        if reference in displayed:
+            continue
+        if not any(
+            reference.event == family or reference.event.startswith(family + ".")
+            for family in DELIVERY_EVENT_FAMILIES
+        ):
+            continue
+        if reads >= MAX_DELIVERY_READ_REFERENCES:
+            limitations.add("delivery_reads_truncated")
+            break
+        raw = reader.read_event(reference)
+        reads += 1
+        safe_identifiers = {
+            (field, value)
+            for field in DELIVERY_IDENTIFIER_FIELDS
+            if (value := _delivery_safe_text(raw.get(field))) is not None
+        }
+        if not safe_identifiers:
+            continue
+        if len(identity_projects) + len(identifiers | safe_identifiers) > MAX_DELIVERY_IDENTITIES:
+            limitations.add("delivery_identities_truncated")
+            continue
+        identifiers.update(safe_identifiers)
+        event: dict[str, Any] = {"event": reference.event}
+        for field in (
+            "ts",
+            "project_id",
+            "project",
+            "role",
+            "svc",
+            "run_id",
+            "work_id",
+            "upstream_work_id",
+            "proposal_id",
+            "incident_id",
+            "outcome",
+            "status",
+        ):
+            value = _delivery_safe_text(raw.get(field))
+            if value is not None:
+                event[field] = value
+        if "project" not in event:
+            project = _delivery_safe_text(reference.project)
+            if project is not None:
+                event["project"] = project
+        if "role" not in event:
+            role = _delivery_safe_text(reference.role)
+            if role is not None:
+                event["role"] = role
+        pending_rows.append((event, identity))
+        if len(pending_rows) >= MAX_DELIVERY_EVENTS_TOTAL:
+            limitations.add("delivery_events_total_truncated")
+            break
+    if scanned == MAX_DELIVERY_SCAN_REFERENCES:
+        limitations.add("delivery_scan_truncated")
+    if limitations:
+        limitations.add("delivery_lifecycle_truncated")
+    rows = []
+    for event, identity in pending_rows:
+        if "project" not in event and identity is not None:
+            project = identity_projects.get(identity)
+            if project is not None:
+                event["project"] = project
+        rows.append(event)
+    return DeliveryLifecycleEvents(rows, sorted(limitations))
 
 
 def _with_event_index_limitation(payload: dict[str, Any], limitation: Optional[str]) -> dict[str, Any]:
@@ -733,6 +850,13 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         cached_payload: Optional[dict[str, Any]] = None
         with self.dashboard.reader_lock:
             index_refresh_limitation = self.dashboard.index_refresh_limitation()
+            if index_refresh_limitation is not None:
+                cached_payload = self.dashboard._operator_documents.get(window)
+        if cached_payload is not None:
+            self._json(200, _with_event_index_limitation(cached_payload, index_refresh_limitation))
+            return
+        with self.dashboard.reader_lock:
+            index_refresh_limitation = self.dashboard.index_refresh_limitation()
             reader = self.dashboard.reader
             try:
                 summary = _summary_payload(reader, window)
@@ -740,6 +864,11 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 events = [reader.read_event(ref) for ref in refs]
                 runtime_events = _runtime_lifecycle_events(reader, window, summary)
                 event_stream_truncated = len(refs) == MAX_LIMIT
+                delivery_events = (
+                    _delivery_lifecycle_events(reader, window, refs)
+                    if event_stream_truncated
+                    else DeliveryLifecycleEvents([], [])
+                )
             except StaleReferenceError:
                 cached_payload = self.dashboard._operator_documents.get(window)
                 if cached_payload is None:
@@ -765,6 +894,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             event_stream_truncated=event_stream_truncated,
             runtime_events=runtime_events,
             runtime_limitations=runtime_events.limitations,
+            delivery_events=delivery_events,
+            delivery_limitations=delivery_events.limitations,
             source_provenance=self.dashboard.current_source_provenance(),
             changes=changes,
             change_limitations=change_limitations,

@@ -888,7 +888,7 @@
         },
         {
           "id": "runtime:project-safe:build",
-          "kind": "role_runtime",
+          "kind": "role",
           "label": "build",
           "state": "healthy",
           "project_id": "project-safe",
@@ -900,8 +900,12 @@
           "limitations": [],
           "impact": "No runtime failure is evidenced for this role in the selected window.",
           "action": "Keep monitoring the next scheduled run.",
+          "role": "build",
           "role_id": "build",
-          "last_activity": "2026-08-01T10:02:00Z"
+          "observed_count": 2,
+          "last_activity": "2026-08-01T10:02:00Z",
+          "terminal_status": "ok",
+          "terminal_reason": null
         }
       ],
       "edges": [

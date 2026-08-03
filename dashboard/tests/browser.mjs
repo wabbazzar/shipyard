@@ -254,8 +254,18 @@ function browserGraphs() {
       id: "graph:runtime:demo", kind: "project_runtime", label: "demo runtime", scope: project, state: "unknown",
       nodes: [
         graphNode("runtime-project:demo", "project", "demo", "observed", "project-safe"),
-        graphNode("runtime:demo:build", "role_runtime", "Helldiver", "unknown", "project-safe", ["runtime_lifecycle_unobserved"], "No runtime lifecycle event was observed for Helldiver in this window."),
-        graphNode("runtime:demo:release", "role_runtime", "Release", "healthy", "project-safe"),
+        {
+          ...graphNode("runtime:demo:build", "role", "Helldiver", "unknown", "project-safe", [], "The scheduled run stopped before producing a result."),
+          role: "build", role_id: "build", observed_count: 2,
+          terminal_status: "abort", terminal_reason: "dirty",
+          impact: "This recorded early stop is not an outage; no completed result was produced.",
+        },
+        {
+          ...graphNode("runtime:demo:release", "role", "Release", "healthy", "project-safe"),
+          role: "release", role_id: "release", observed_count: 1,
+          terminal_status: "ok", terminal_reason: null,
+          impact: "No runtime failure is evidenced for this role in the selected window.",
+        },
       ],
       edges: [
         graphEdge("runtime:demo:build", "runtime-project:demo", "runtime:demo:build", "project_role", "scoped"),
@@ -522,8 +532,12 @@ async function main() {
     })()`);
     await waitFor(browser, "document.querySelectorAll('#graph-edges > path').length === 2", "runtime graph paths");
     verify.equal(await evaluate(browser, "document.getElementById('graph-scope').textContent"), "Scope · project demo (project-safe)", "runtime project scope is ambiguous");
+    const runtimeCard = await evaluate(browser, "document.querySelector('[data-node-id=\"runtime:demo:build\"] .node-card').textContent");
+    verify.equal(runtimeCard.includes("2 observations"), true, "runtime card omits its observation count");
+    verify.equal(runtimeCard.includes("Terminal · abort / dirty"), true, "runtime card omits its terminal outcome and reason");
+    verify.equal(runtimeCard.includes("not an outage"), true, "runtime card omits the controlled impact");
     await evaluate(browser, "document.querySelector('[data-node-id=\"runtime:demo:build\"] .node-card').click()");
-    verify.equal(await evaluate(browser, "document.getElementById('crew-selection').textContent.includes('No runtime lifecycle event was observed')"), true, "Helldiver unknown lacks its controlled explanation");
+    verify.equal(await evaluate(browser, "document.getElementById('crew-selection').textContent.includes('not an outage')"), true, "Helldiver terminal outcome lacks its controlled explanation");
 
     await evaluate(browser, `(() => {
       const select = document.getElementById('graph-select');
