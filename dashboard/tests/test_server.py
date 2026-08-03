@@ -344,6 +344,212 @@ class ServerTest(unittest.TestCase):
             all(evidence[evidence_id]["project_id"] == "project-target" for evidence_id in runtime["evidence_ids"])
         )
 
+    def test_operator_api_recovers_buried_delivery_dag_with_bounded_scan(self) -> None:
+        target_rows = [
+            row(
+                "design.proposal.opened",
+                seconds_ago=7_200,
+                project="target",
+                role="design",
+                proposal_id="proposal-buried",
+            ),
+            row(
+                "build.ticket.outcome",
+                seconds_ago=7_190,
+                project="target",
+                role="build",
+                svc="target-build",
+                work_id="ticket-buried",
+                upstream_work_id="proposal-buried",
+                outcome="ok",
+            ),
+            row(
+                "build.work.outcome",
+                seconds_ago=7_180,
+                project="target",
+                role="build",
+                svc="target-build",
+                work_id="branch-left",
+                upstream_work_id="ticket-buried",
+                outcome="ok",
+            ),
+            row(
+                "build.work.outcome",
+                seconds_ago=7_179,
+                project="target",
+                role="build",
+                svc="target-build",
+                work_id="branch-right",
+                upstream_work_id="ticket-buried",
+                outcome="ok",
+            ),
+            row(
+                "build.work.outcome",
+                seconds_ago=7_170,
+                project="target",
+                role="build",
+                svc="target-build",
+                work_id="branch-joined",
+                upstream_work_id="branch-left",
+                outcome="pr_opened",
+            ),
+            row(
+                "build.work.outcome",
+                seconds_ago=7_169,
+                project="target",
+                role="build",
+                svc="target-build",
+                work_id="branch-joined",
+                upstream_work_id="branch-right",
+                outcome="pr_opened",
+            ),
+        ]
+        project_anchor = row(
+            "job.start",
+            seconds_ago=7_201,
+            project="target",
+            role="build",
+            svc="target-build",
+        )
+        for event in target_rows[1:]:
+            event.pop("project", None)
+        unrelated_rows = [
+            row(
+                "medic.scan",
+                seconds_ago=2_100 - index,
+                project="noise",
+                role="medic",
+                svc="noise-medic",
+            )
+            for index in range(2_001)
+        ]
+        with self.today.open("ab") as output:
+            for event in [project_anchor, *target_rows, *unrelated_rows]:
+                output.write(encode(event))
+        source_checksum = checksum(self.today)
+
+        collector = getattr(server_module, "_delivery_lifecycle_events", None)
+        self.assertIsNotNone(collector, "server has no separately bounded delivery collector")
+        max_scan = getattr(server_module, "MAX_DELIVERY_SCAN_REFERENCES", None)
+        max_rows = getattr(server_module, "MAX_DELIVERY_EVENTS_TOTAL", None)
+        self.assertIsInstance(max_scan, int)
+        self.assertGreater(max_scan, len(target_rows) + len(unrelated_rows))
+        self.assertIsInstance(max_rows, int)
+        self.assertGreaterEqual(max_rows, len(target_rows))
+
+        reader = EventReader(self.root).refresh()
+        original_window_refs = reader._window_refs
+        scanned_references = 0
+
+        def counted_window_refs(window: str, now: object):
+            nonlocal scanned_references
+            for reference in original_window_refs(window, now):
+                scanned_references += 1
+                yield reference
+
+        with (
+            mock.patch.object(reader, "_window_refs", side_effect=counted_window_refs),
+            mock.patch.object(reader, "read_event", wraps=reader.read_event) as read_event,
+        ):
+            delivery_events = collector(reader, "24h")
+        self.assertGreater(scanned_references, 2_000)
+        self.assertLessEqual(scanned_references, max_scan)
+        self.assertLessEqual(read_event.call_count, max_rows)
+        self.assertEqual(len(delivery_events), len(target_rows))
+        self.assertEqual(delivery_events.limitations, [])
+
+        with mock.patch.object(server_module, "MAX_DELIVERY_SCAN_REFERENCES", 2_000):
+            scan_truncated = collector(reader, "24h")
+        self.assertEqual(len(scan_truncated), 0)
+        self.assertIn("delivery_scan_truncated", scan_truncated.limitations)
+        self.assertIn("delivery_lifecycle_truncated", scan_truncated.limitations)
+
+        with mock.patch.object(server_module, "MAX_DELIVERY_EVENTS_TOTAL", 2):
+            rows_truncated = collector(reader, "24h")
+        self.assertEqual(len(rows_truncated), 2)
+        self.assertIn("delivery_events_total_truncated", rows_truncated.limitations)
+        self.assertIn("delivery_lifecycle_truncated", rows_truncated.limitations)
+
+        def loader(window: str) -> dict[str, object]:
+            return {
+                "inspection": {
+                    "schema_version": 1,
+                    "meta": {"rule_version": "shipyard-inspect-v1"},
+                    "summary": {},
+                    "fleet": [
+                        {
+                            "project_id": "project-target",
+                            "project_name": "target",
+                            "roles": ["design", "build", "release"],
+                            "state": "no_fault_observed",
+                        },
+                        {
+                            "project_id": "project-noise",
+                            "project_name": "noise",
+                            "roles": ["medic"],
+                            "state": "no_fault_observed",
+                        },
+                    ],
+                    "effectiveness": [],
+                    "priorities": [],
+                    "attention": [],
+                    "coverage": [],
+                    "evidence": [],
+                },
+                "relationships": {
+                    "schema_version": 1,
+                    "kind": "shipyard.operator.relationships",
+                    "window": window,
+                    "sources": {},
+                },
+            }
+
+        replacement = RunningServer(
+            self.root,
+            poll_interval=0.01,
+            heartbeat_interval=0.04,
+            operator_loader=loader,
+        )
+        previous = self.running
+        self.running = replacement
+        previous.close()
+
+        for _ in range(100):
+            status, _, payload = self.json_request("GET", "/api/operator?window=24h")
+            if payload["metadata"]["inspection_state"] == "fresh":
+                break
+            time.sleep(0.01)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["metadata"]["inspection_state"], "fresh")
+        self.assertIn("event_window_truncated", payload["metadata"]["limitations"])
+        graph = next(
+            item
+            for item in payload["graphs"]
+            if item["kind"] == "delivery"
+            and item["scope"].get("project_id") == "project-target"
+        )
+        node_ids = {node["id"] for node in graph["nodes"]}
+        self.assertTrue(all(edge["from"] in node_ids and edge["to"] in node_ids for edge in graph["edges"]))
+        self.assertTrue(any(node["kind"] == "missing_stage" for node in graph["nodes"]))
+        graph_evidence = {
+            evidence_id
+            for item in graph["nodes"] + graph["edges"]
+            for evidence_id in item["evidence_ids"]
+        }
+        self.assertTrue(graph_evidence)
+        self.assertTrue(graph_evidence.issubset({item["id"] for item in payload["evidence"]}))
+        operator_coverage = next(
+            item for item in payload["coverage"] if item["source"] == "operator_events"
+        )
+        delivery_coverage = next(
+            item for item in payload["coverage"] if item["source"] == "delivery_lifecycle"
+        )
+        self.assertEqual(operator_coverage["records_total"], 2_000)
+        self.assertEqual(delivery_coverage["records_total"], len(target_rows))
+        self.assertEqual(delivery_coverage["state"], "available")
+        self.assertEqual(delivery_coverage["limitations"], [])
+        self.assertEqual(checksum(self.today), source_checksum)
+
     def test_runtime_lifecycle_fanout_is_globally_bounded_and_reported(self) -> None:
         from dashboard.server import (
             MAX_RUNTIME_EVENTS_TOTAL,
@@ -641,6 +847,131 @@ class ServerTest(unittest.TestCase):
             self.assertIn("event_index_refresh_failed", payload["metadata"]["limitations"])
             coverage = next(row for row in payload["coverage"] if row["source"] == "operator_events")
             self.assertEqual(coverage["records_total"], initial_count + 1)
+        self.assertEqual(checksum(self.today), failed_checksum)
+
+    def test_cached_operator_bypasses_heavy_recomposition_during_index_refresh(self) -> None:
+        status, _, initial = self.json_request("GET", "/api/operator?window=7d")
+        initial_coverage = next(
+            row for row in initial["coverage"] if row["source"] == "operator_events"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(initial_coverage["records_total"], 2)
+
+        with self.today.open("ab") as output:
+            output.write(encode(row("dashboard.large-refresh", seconds_ago=0, status="ok")))
+        source_checksum = checksum(self.today)
+        refresh_entered = threading.Event()
+        refresh_release = threading.Event()
+        refresh_calls = 0
+        original_refresh = EventReader.refresh
+
+        def held_refresh(reader: EventReader) -> EventReader:
+            nonlocal refresh_calls
+            refresh_calls += 1
+            refresh_entered.set()
+            self.assertTrue(refresh_release.wait(2), "test did not release held refresh")
+            return original_refresh(reader)
+
+        heavy_calls: list[str] = []
+
+        def forbidden_heavy_path(name: str) -> None:
+            heavy_calls.append(name)
+            raise AssertionError(f"cached operator invoked forbidden heavy path: {name}")
+
+        results: queue.Queue[tuple[str, object, float]] = queue.Queue()
+
+        def cached_request() -> None:
+            started = time.monotonic()
+            try:
+                result: object = self.json_request("GET", "/api/operator?window=7d")
+                kind = "response"
+            except Exception as error:  # Captures handler disconnects as evidence, not hangs.
+                result = error
+                kind = "error"
+            results.put((kind, result, time.monotonic() - started))
+
+        request_threads = [threading.Thread(target=cached_request) for _ in range(4)]
+        with mock.patch.object(EventReader, "refresh", autospec=True, side_effect=held_refresh):
+            try:
+                with (
+                    mock.patch("dashboard.server._summary_payload", side_effect=lambda *_: forbidden_heavy_path("summary")),
+                    mock.patch.object(EventReader, "query_refs", side_effect=lambda *_args, **_kwargs: forbidden_heavy_path("query")),
+                    mock.patch("dashboard.server._runtime_lifecycle_events", side_effect=lambda *_: forbidden_heavy_path("runtime_lifecycle")),
+                ):
+                    for thread in request_threads:
+                        thread.start()
+                    self.assertTrue(refresh_entered.wait(1), "changed signature did not start refresh")
+                    responses = [results.get(timeout=0.5) for _ in request_threads]
+                    self.assertEqual(heavy_calls, [], "cached response entered a million-row-equivalent path")
+                    for kind, result, elapsed in responses:
+                        self.assertEqual(kind, "response", f"cached operator request failed: {result!r}")
+                        status, _, payload = result
+                        self.assertEqual(status, 200)
+                        self.assertLess(elapsed, 0.5)
+                        self.assertIn("event_index_refreshing", payload["metadata"]["limitations"])
+                        coverage = next(
+                            row for row in payload["coverage"] if row["source"] == "operator_events"
+                        )
+                        self.assertEqual(coverage["records_total"], 2)
+                    self.assertEqual(refresh_calls, 1, "refresh was not single-flight")
+            finally:
+                refresh_release.set()
+                for thread in request_threads:
+                    thread.join(2)
+
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            status, _, fresh = self.json_request("GET", "/api/operator?window=7d")
+            coverage = next(
+                row for row in fresh["coverage"] if row["source"] == "operator_events"
+            )
+            if coverage["records_total"] == 3:
+                break
+            time.sleep(0.01)
+        self.assertEqual(status, 200)
+        self.assertEqual(coverage["records_total"], 3)
+        self.assertNotIn("event_index_refreshing", fresh["metadata"]["limitations"])
+        self.assertEqual(checksum(self.today), source_checksum)
+
+        with self.today.open("ab") as output:
+            output.write(encode(row("dashboard.failed-large-refresh", seconds_ago=0, status="error")))
+        failed_checksum = checksum(self.today)
+        failure_entered = threading.Event()
+
+        def failed_refresh(_reader: EventReader) -> EventReader:
+            failure_entered.set()
+            raise OSError("deliberate replacement-reader failure")
+
+        with mock.patch.object(EventReader, "refresh", autospec=True, side_effect=failed_refresh):
+            status, _, _ = self.json_request("GET", "/api/operator?window=7d")
+            self.assertEqual(status, 200)
+            self.assertTrue(failure_entered.wait(1), "failed refresh was not attempted")
+            deadline = time.monotonic() + 1
+            while (
+                self.running.server.index_refresh_limitation() != "event_index_refresh_failed"
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.005)
+            self.assertEqual(
+                self.running.server.index_refresh_limitation(), "event_index_refresh_failed"
+            )
+            heavy_calls.clear()
+            with (
+                mock.patch("dashboard.server._summary_payload", side_effect=lambda *_: forbidden_heavy_path("summary")),
+                mock.patch.object(EventReader, "query_refs", side_effect=lambda *_args, **_kwargs: forbidden_heavy_path("query")),
+                mock.patch("dashboard.server._runtime_lifecycle_events", side_effect=lambda *_: forbidden_heavy_path("runtime_lifecycle")),
+            ):
+                started = time.monotonic()
+                status, _, failed_cached = self.json_request("GET", "/api/operator?window=7d")
+                elapsed = time.monotonic() - started
+            self.assertEqual(status, 200)
+            self.assertLess(elapsed, 0.5)
+            self.assertEqual(heavy_calls, [], "failed-refresh cache entered a heavy path")
+            self.assertIn("event_index_refresh_failed", failed_cached["metadata"]["limitations"])
+            failed_coverage = next(
+                row for row in failed_cached["coverage"] if row["source"] == "operator_events"
+            )
+            self.assertEqual(failed_coverage["records_total"], 3)
         self.assertEqual(checksum(self.today), failed_checksum)
 
     def test_operator_uses_last_good_document_during_rotation_and_truncation(self) -> None:

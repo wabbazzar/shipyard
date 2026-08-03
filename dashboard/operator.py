@@ -41,6 +41,18 @@ MAX_DELIVERY_GRAPHS = 50
 MAX_DELIVERY_GRAPH_NODES = 12
 MAX_DELIVERY_GRAPH_EDGES = 16
 MAX_GRAPH_EVIDENCE_IDS = 20
+DELIVERY_EVENT_FAMILIES = (
+    "design.proposal",
+    "build.ticket.outcome",
+    "build.work.outcome",
+    "medic.incident",
+)
+DELIVERY_IDENTIFIER_FIELDS = (
+    "proposal_id",
+    "incident_id",
+    "work_id",
+    "upstream_work_id",
+)
 WINDOW_DAYS = {"24h": 1, "7d": 7, "30d": 30}
 PROMISE_DEFINITIONS = (
     ("bugs_caught_and_fixed", "Bugs caught and fixed"),
@@ -275,6 +287,19 @@ def _safe_ids(values: Any, *, limit: int = 50) -> list[str]:
         if len(result) >= limit:
             break
     return result
+
+
+def _is_delivery_lineage_event(event: dict[str, Any]) -> bool:
+    event_name = _safe_code(event.get("event"))
+    if event_name is None or not any(
+        event_name == family or event_name.startswith(family + ".")
+        for family in DELIVERY_EVENT_FAMILIES
+    ):
+        return False
+    return any(
+        _safe_id(event.get(field)) is not None
+        for field in DELIVERY_IDENTIFIER_FIELDS
+    )
 
 
 def _controlled_explanation(
@@ -1339,6 +1364,25 @@ def _validate_and_rank_graph(
         evidence_ids = _array(node.get("evidence_ids"))
         if not isinstance(evidence_count, int) or evidence_count < 0:
             raise GraphValidationError("invalid")
+        if "observed_count" in node:
+            observed_count = node.get("observed_count")
+            if observed_count is not None and (
+                isinstance(observed_count, bool)
+                or not isinstance(observed_count, int)
+                or observed_count < 0
+                or observed_count > MAX_RUNTIME_EVENTS_PER_NODE
+            ):
+                raise GraphValidationError("invalid")
+        if "terminal_status" in node and node.get("terminal_status") not in {
+            None,
+            *_RUNTIME_TERMINAL_STATUSES,
+        }:
+            raise GraphValidationError("invalid")
+        if "terminal_reason" in node and node.get("terminal_reason") not in {
+            None,
+            *_RUNTIME_TERMINAL_REASONS,
+        }:
+            raise GraphValidationError("invalid")
         if len(evidence_ids) > MAX_GRAPH_EVIDENCE_IDS or any(_safe_id(value) is None for value in evidence_ids):
             raise GraphValidationError("invalid")
         if len(_safe_limitations(node.get("limitations"))) != len(_array(node.get("limitations"))):
@@ -1546,7 +1590,7 @@ def _runtime_graphs(
             nodes.append(
                 _graph_node(
                     item["id"],
-                    "role_runtime",
+                    "role",
                     item["label"],
                     item["state"],
                     project_id=project_id,
@@ -1555,8 +1599,12 @@ def _runtime_graphs(
                     reason=item.get("reason") if isinstance(item.get("reason"), str) else "Runtime evidence is unavailable.",
                     impact=item.get("impact"),
                     action=item.get("action"),
+                    role=item.get("role_id"),
                     role_id=item.get("role_id"),
+                    observed_count=item.get("observed_count"),
                     last_activity=item.get("last_activity"),
+                    terminal_status=item.get("terminal_status"),
+                    terminal_reason=item.get("terminal_reason"),
                 )
             )
             edges.append(
@@ -1690,6 +1738,8 @@ def _delivery_graphs(
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     unattributed_events: list[dict[str, Any]] = []
     for event in events:
+        if not _is_delivery_lineage_event(event):
+            continue
         project = project_for(event)
         if project is not None:
             grouped.setdefault(project, []).append(event)
@@ -2663,6 +2713,8 @@ def compose_operator_document(
     event_stream_truncated: bool = False,
     runtime_events: Optional[list[dict[str, Any]]] = None,
     runtime_limitations: Optional[list[str]] = None,
+    delivery_events: Optional[list[dict[str, Any]]] = None,
+    delivery_limitations: Optional[list[str]] = None,
     source_provenance: Optional[dict[str, str]] = None,
     changes: Optional[list[dict[str, Any]]] = None,
     change_limitations: Optional[list[str]] = None,
@@ -2681,6 +2733,22 @@ def compose_operator_document(
         if isinstance(event, dict)
     ]
     safe_runtime_limitations = _safe_limitations(runtime_limitations)
+    recovered_delivery_events = [
+        event for event in (delivery_events or [])
+        if isinstance(event, dict) and _is_delivery_lineage_event(event)
+    ]
+    displayed_event_ids = {_event_evidence_id(event) for event in safe_events}
+    recovered_by_evidence_id: dict[str, dict[str, Any]] = {}
+    for event in recovered_delivery_events:
+        evidence_id = _event_evidence_id(event)
+        if evidence_id not in displayed_event_ids:
+            recovered_by_evidence_id.setdefault(evidence_id, event)
+    graph_delivery_events = [*safe_events, *recovered_by_evidence_id.values()]
+    safe_delivery_events = [
+        event for event in graph_delivery_events
+        if _is_delivery_lineage_event(event)
+    ]
+    safe_delivery_limitations = _safe_limitations(delivery_limitations)
     promises = _promise_rows(inspection)
     attention, attention_truncated = _attention_rows(inspection)
     inspection_attention_count = _safe_number(
@@ -2697,7 +2765,7 @@ def compose_operator_document(
         topology, summary, safe_events, safe_runtime_events, inspection, relationships
     )
     graphs, graph_limitations = _graphs_document(
-        topology_document, inspection, safe_events
+        topology_document, inspection, graph_delivery_events
     )
     brief = _brief_document(
         promises,
@@ -2712,7 +2780,18 @@ def compose_operator_document(
     )
     # Project-keyed runtime evidence wins over the same globally bounded event
     # so its controlled project linkage cannot be erased by de-duplication.
-    evidence = _inspection_evidence(inspection) + relationship_evidence + event_evidence
+    displayed_evidence_ids = {row["id"] for row in event_evidence}
+    recovered_delivery_evidence = [
+        _safe_event_evidence(event)
+        for event in safe_delivery_events
+        if _event_evidence_id(event) not in displayed_evidence_ids
+    ]
+    evidence = (
+        _inspection_evidence(inspection)
+        + relationship_evidence
+        + event_evidence
+        + recovered_delivery_evidence
+    )
     unique_evidence: list[dict[str, Any]] = []
     seen_evidence: set[str] = set()
     for row in evidence:
@@ -2737,6 +2816,7 @@ def compose_operator_document(
     if event_stream_truncated:
         limitations.append("event_window_truncated")
     limitations.extend(safe_runtime_limitations)
+    limitations.extend(safe_delivery_limitations)
     limitations.extend(graph_limitations)
     if refresh_limitation is not None:
         safe_refresh_limitation = _safe_code(refresh_limitation)
@@ -2796,6 +2876,15 @@ def compose_operator_document(
             "reason": "bounded_at_maximum" if safe_runtime_limitations else "ok",
             "records_total": len(safe_runtime_events),
             "limitations": safe_runtime_limitations,
+        }
+    )
+    coverage.append(
+        {
+            "source": "delivery_lifecycle",
+            "state": "partial" if safe_delivery_limitations else "available",
+            "reason": "bounded_at_maximum" if safe_delivery_limitations else "ok",
+            "records_total": len(safe_delivery_events),
+            "limitations": safe_delivery_limitations,
         }
     )
     narrative = _narrative_document(
