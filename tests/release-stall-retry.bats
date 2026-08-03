@@ -93,6 +93,37 @@ run_release_with_harness() {
 n_retry_events() { events_json | jq -c 'select(.event=="release.stall.retry")' | wc -l | tr -d ' '; }
 job_end_status() { events_json | jq -r 'select(.event=="job.end" and (.svc|endswith("-release"))) | .status' | tail -1; }
 release_job_end() { events_json | jq -c 'select(.event=="job.end" and (.svc|endswith("-release")))' | tail -1; }
+medic_events() { events_json | jq -c 'select(.role=="medic" or (.svc|endswith("-medic")))'; }
+
+@test "an account usage cap is incomplete and never escalates to medic" {
+  PROJ="$(make_fixture_project usagecap can-merge-true.toml)"
+  stub_claude 'printf "%s" "{\"result\":\"You have hit your weekly limit; resets 1am\",\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}"; exit 1'
+
+  run run_release
+
+  [ "$status" -eq 1 ]
+  result="$PROJ/tmp/usagecap-release-result.json"
+  [ "$(jq -r '.pass' "$result")" = "false" ]
+  [ "$(jq -r '.incomplete' "$result")" = "true" ]
+  jq -e '(.errors | length == 1) and (.errors[0] | contains("account usage cap, not a code issue"))' "$result"
+  [ "$(cat "$RELCOUNT")" -eq 1 ]
+  [ -z "$(medic_events)" ]
+  [[ "$(notify_log)" == *"usagecap Release DID NOT FINISH (daily)"* ]]
+  [ "$(events_json | jq -r 'select(.event=="notification.decision" and (.svc|endswith("-release"))) | .class' | tail -1)" = "routine" ]
+}
+
+@test "an unrelated no-result failure retains normal medic escalation" {
+  PROJ="$(make_fixture_project nocap can-merge-true.toml)"
+  stub_claude ':'
+
+  run run_release
+
+  [ "$status" -eq 1 ]
+  result="$PROJ/tmp/nocap-release-result.json"
+  [ "$(jq -r '.incomplete // false' "$result")" = "false" ]
+  [[ "$(notify_log)" == *"nocap Release FAILED (daily)"* ]]
+  [ -n "$(medic_events)" ]
+}
 
 @test "a clean harness exit with an incomplete sentinel fails the runner closed" {
   PROJ="$(make_fixture_project incomplete0 can-merge-true.toml)"
