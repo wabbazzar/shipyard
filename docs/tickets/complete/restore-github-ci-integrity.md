@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-03
 - **Owner:** wabbazzar
-- **Status:** in progress — D-4 resolved; execution started
+- **Status:** Complete — built and verified 2026-08-03 CDT
 - **Priority:** urgent
 - **Type:** bugfix
 - **Estimated Points:** 8 (P1 3 · P2 3 · P3 2)
@@ -380,25 +380,25 @@ canonical checkout agree.
 
 ## Acceptance Criteria / Definition of Done
 
-- [ ] The deterministic owner-release reproduction that currently exits `75`
+- [x] The deterministic owner-release reproduction that currently exits `75`
       exits `0`, deposits exactly once, and leaves no lock.
-- [ ] Unsafe lock replacements, malformed generations, genuine wait exhaustion,
+- [x] Unsafe lock replacements, malformed generations, genuine wait exhaustion,
       and stale-owner recovery preserve their fail-closed contracts.
-- [ ] The eight-writer test checks individual writer status and reliably yields
+- [x] The eight-writer test checks individual writer status and reliably yields
       eight valid, unique pending records without `ps`.
-- [ ] D-4 is explicitly resolved and the implemented identity behavior exactly
+- [x] D-4 is explicitly resolved and the implemented identity behavior exactly
       matches the recorded owner choice.
-- [ ] The current six-commit all-history identity reproduction passes under the
+- [x] The current six-commit all-history identity reproduction passes under the
       selected contract without silently exempting arbitrary branch commits.
-- [ ] A hermetic PR-range plus final-merge push topology fails against the
+- [x] A hermetic PR-range plus final-merge push topology fails against the
       pre-change integration and passes after the repair.
-- [ ] The prior identity ticket and README no longer contradict the supported
+- [x] The prior identity ticket and README no longer contradict the supported
       merge path.
-- [ ] `bats tests/`, syntax, leak, deck, lifecycle, delegation, and diff gates
+- [x] `bats tests/`, syntax, leak, deck, lifecycle, delegation, and diff gates
       are green with exact exit codes recorded.
-- [ ] GitHub's exact `checks` workflow for the published repaired SHA completes
+- [x] GitHub's exact `checks` workflow for the published repaired SHA completes
       successfully; Pages status is separately recorded.
-- [ ] The shared checkout is clean, on `main`, synchronized with `origin/main`,
+- [x] The shared checkout is clean, on `main`, synchronized with `origin/main`,
       with no temporary worktree/branch or untracked diagnostic artifact.
 
 ## Ledger
@@ -432,7 +432,7 @@ rejected email values in tracked text.
 - `red-first:` executable PR-to-merge-to-push topology exited `1`; its PR range
   passed, then the post-merge all-history audit reported only redacted
   committer mismatches on the synthetic two-parent platform merge.
-- `commit:` pending
+- `commit: 0be7e6a` (`fix: support GitHub merge committers`)
 - `focused/full gates:` event topology `1/1`; complete identity file `44/44`;
   repository Bats `741/741`; live
   `bash scripts/check-git-identity.sh --all HEAD --project .`, full shell
@@ -448,10 +448,23 @@ rejected email values in tracked text.
 
 - `builder: inline (canonical push/live GitHub state must be performed and
   inspected directly by the orchestrator)`
-- `remote preflight:` pending
-- `published SHA:` pending
-- `GitHub checks / Pages:` pending
-- `notes/blockers:` pending
+- `remote preflight:` fetched `main`; remote and tracking refs both resolved to
+  `8424e353b2a44164b4d9943444048d8ad6ebfac1`, with the clean local candidate
+  four commits ahead. The normal non-force push advanced `main` without drift.
+- `published SHA: 0be7e6a7dcaa927c6219d6dcff7c8cd6a38501d1`
+- `GitHub checks / Pages:` exact `checks` run `30831191413` completed
+  `success` with Bats, shell, ticket-lifecycle, git-identity, leak-check, and
+  deck-fresh all successful. Exact Pages run `30831188649` separately
+  completed `success` with build, deploy, and report-build-status successful.
+- `notes/blockers:` final local repository Bats passed `741/741`; all-history
+  identity, `git fsck --full`, syntax, Python bytecode, leak, deck freshness,
+  deck completeness/render, lifecycle, delegation, and diff gates exited `0`.
+  The render ownership check observed the same 23 unrelated pre-existing
+  browser PIDs before and after, proving this run leaked none and leaving those
+  user processes untouched. The pre-push deck-mirror cascade found unrelated
+  uncommitted mirror edits, refused to clobber them, and remained non-blocking
+  as designed; the canonical repository push and both exact GitHub runs were
+  unaffected.
 
 ## Dependencies
 
