@@ -8,17 +8,32 @@ setup() {
   PRE_COMMIT="$QUARTET_ROOT/.githooks/pre-commit"
   INSTALLER="$QUARTET_ROOT/install.sh"
   CHECKER="$QUARTET_ROOT/scripts/check-git-identity.sh"
+  CI_CHECKER="$QUARTET_ROOT/scripts/check-git-identity-ci.sh"
   WORKFLOW="$QUARTET_ROOT/.github/workflows/checks.yml"
   CANONICAL_NAME="canonical-owner"
   CANONICAL_EMAIL="canonical-owner@example.invalid"
   BAD_AUTHOR_EMAIL="wrong-author@example.invalid"
   BAD_COMMITTER_EMAIL="wrong-committer@example.invalid"
+  PLATFORM_COMMITTER_NAME="fixture-platform-merge"
+  PLATFORM_COMMITTER_EMAIL="fixture-platform-merge@example.invalid"
 }
 
 write_policy() {
   local project="$1"
   printf '[git_identity]\nenforce = true\nname = "%s"\n' \
     "$CANONICAL_NAME" >"$project/.shipyard-git-identity.toml"
+}
+
+tuple_digest() {
+  printf '%s\0%s' "$1" "$2" | sha256sum | awk '{print $1}'
+}
+
+allow_platform_merge_committer() {
+  local project="$1" digest
+  digest="$(tuple_digest "$PLATFORM_COMMITTER_NAME" \
+    "$PLATFORM_COMMITTER_EMAIL")"
+  printf 'allow_github_merge_committer = true\ngithub_merge_committer_sha256 = "%s"\n' \
+    "$digest" >>"$project/.shipyard-git-identity.toml"
 }
 
 commit_with_identity() {
@@ -60,6 +75,37 @@ add_identity_commit() {
   git -C "$project" rev-parse HEAD
 }
 
+add_two_parent_merge() {
+  local project="$1" author_name="$2" author_email="$3"
+  local committer_name="$4" committer_email="$5"
+  git -C "$project" switch -q -c topic
+  add_identity_commit "$project" topic \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" >/dev/null
+  git -C "$project" switch -q main
+  add_identity_commit "$project" main-side \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" >/dev/null
+  GIT_AUTHOR_NAME="$author_name" \
+    GIT_AUTHOR_EMAIL="$author_email" \
+    GIT_COMMITTER_NAME="$committer_name" \
+    GIT_COMMITTER_EMAIL="$committer_email" \
+    git -C "$project" merge -q --no-ff -m fixture-merge topic
+  git -C "$project" rev-parse HEAD
+}
+
+make_tree_commit() {
+  local project="$1" message="$2"
+  local author_name="$3" author_email="$4"
+  local committer_name="$5" committer_email="$6" tree
+  shift 6
+  tree="$(git -C "$project" rev-parse HEAD^{tree})"
+  printf '%s\n' "$message" | \
+    GIT_AUTHOR_NAME="$author_name" GIT_AUTHOR_EMAIL="$author_email" \
+    GIT_COMMITTER_NAME="$committer_name" GIT_COMMITTER_EMAIL="$committer_email" \
+    git -C "$project" commit-tree "$tree" "$@"
+}
+
 install_identity_hooks() {
   local project="$1"
   mkdir -p "$project/.githooks" "$project/scripts"
@@ -68,6 +114,15 @@ install_identity_hooks() {
   cp "$CHECKER" "$project/scripts/check-git-identity.sh"
   chmod +x "$project/.githooks/pre-commit" \
     "$project/.githooks/pre-push" "$project/scripts/check-git-identity.sh"
+}
+
+install_ci_identity_scripts() {
+  local project="$1"
+  mkdir -p "$project/scripts"
+  cp "$CHECKER" "$project/scripts/check-git-identity.sh"
+  cp "$CI_CHECKER" "$project/scripts/check-git-identity-ci.sh"
+  chmod +x "$project/scripts/check-git-identity.sh" \
+    "$project/scripts/check-git-identity-ci.sh"
 }
 
 stub_install_dependencies() {
@@ -344,6 +399,198 @@ assert_addresses_redacted() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"$bad_sha: author.email mismatch"* ]]
   assert_addresses_redacted
+}
+
+@test "git identity: workflow executes PR and GitHub merge push identity contracts" {
+  local project root main_tip pr_head merge_sha
+  project="$(make_identity_repo workflow-merge-topology)"
+  root="$(git -C "$project" rev-parse HEAD)"
+  allow_platform_merge_committer "$project"
+
+  git -C "$project" switch -q -c topic
+  pr_head="$(add_identity_commit "$project" topic \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL")"
+  git -C "$project" switch -q main
+  main_tip="$(add_identity_commit "$project" main-side \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL")"
+  GIT_AUTHOR_NAME="$CANONICAL_NAME" \
+    GIT_AUTHOR_EMAIL="$CANONICAL_EMAIL" \
+    GIT_COMMITTER_NAME="$PLATFORM_COMMITTER_NAME" \
+    GIT_COMMITTER_EMAIL="$PLATFORM_COMMITTER_EMAIL" \
+    git -C "$project" merge -q --no-ff -m fixture-platform-merge topic
+  merge_sha="$(git -C "$project" rev-parse HEAD)"
+  install_ci_identity_scripts "$project"
+
+  [ "$(git -C "$project" rev-list --parents -n 1 "$merge_sha" | wc -w)" -eq 3 ]
+  [ "$(git -C "$project" merge-base "$main_tip" "$pr_head")" = "$root" ]
+
+  run env SHIPYARD_IDENTITY_EMAIL="$CANONICAL_EMAIL" \
+    EVENT_NAME=pull_request BASE_SHA="$main_tip" PR_HEAD_SHA="$pr_head" \
+    HEAD_SHA= TARGET_REF=refs/pull/1/merge \
+    bash "$project/scripts/check-git-identity-ci.sh" --project "$project"
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+
+  run env SHIPYARD_IDENTITY_EMAIL="$CANONICAL_EMAIL" \
+    EVENT_NAME=push BASE_SHA= PR_HEAD_SHA= \
+    HEAD_SHA="$merge_sha" TARGET_REF=refs/heads/main \
+    bash "$project/scripts/check-git-identity-ci.sh" --project "$project"
+  if [ "$status" -ne 0 ]; then
+    printf 'post_merge_push_status=%s output=%s\n' "$status" "$output" >&3
+  fi
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+}
+
+@test "git identity: merge exemption rejects a wrong tuple and wrong author" {
+  local project merge_sha
+  project="$(make_identity_repo merge-wrong-tuple)"
+  allow_platform_merge_committer "$project"
+  merge_sha="$(add_two_parent_merge "$project" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    wrong-platform "$BAD_COMMITTER_EMAIL")"
+
+  run bash "$CHECKER" --all "$merge_sha" --project "$project"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$merge_sha: committer.name mismatch"* ]]
+  [[ "$output" == *"$merge_sha: committer.email mismatch"* ]]
+  assert_addresses_redacted
+
+  project="$(make_identity_repo merge-wrong-author)"
+  allow_platform_merge_committer "$project"
+  merge_sha="$(add_two_parent_merge "$project" \
+    wrong-author "$BAD_AUTHOR_EMAIL" \
+    "$PLATFORM_COMMITTER_NAME" "$PLATFORM_COMMITTER_EMAIL")"
+
+  run bash "$CHECKER" --all "$merge_sha" --project "$project"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$merge_sha: author.name mismatch"* ]]
+  [[ "$output" == *"$merge_sha: author.email mismatch"* ]]
+  [[ "$output" == *"$merge_sha: committer.name mismatch"* ]]
+  [[ "$output" == *"$merge_sha: committer.email mismatch"* ]]
+  assert_addresses_redacted
+}
+
+@test "git identity: forged merge subject and wrong parent counts get no exemption" {
+  local project base one_parent root parent_two parent_three octopus
+  project="$(make_identity_repo forged-merge-subject)"
+  allow_platform_merge_committer "$project"
+  base="$(git -C "$project" rev-parse HEAD)"
+  printf 'forged\n' >"$project/forged.txt"
+  git -C "$project" add forged.txt
+  commit_with_identity "$project" "Merge pull request #999 from fixture/topic" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$PLATFORM_COMMITTER_NAME" "$PLATFORM_COMMITTER_EMAIL"
+  one_parent="$(git -C "$project" rev-parse HEAD)"
+
+  run bash "$CHECKER" --range "$base..$one_parent" --project "$project"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$one_parent: committer.name mismatch"* ]]
+  [[ "$output" == *"$one_parent: committer.email mismatch"* ]]
+
+  project="$(make_identity_repo octopus-platform-committer)"
+  allow_platform_merge_committer "$project"
+  root="$(git -C "$project" rev-parse HEAD)"
+  parent_two="$(make_tree_commit "$project" parent-two \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" -p "$root")"
+  parent_three="$(make_tree_commit "$project" parent-three \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" -p "$root")"
+  octopus="$(make_tree_commit "$project" octopus \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$PLATFORM_COMMITTER_NAME" "$PLATFORM_COMMITTER_EMAIL" \
+    -p "$root" -p "$parent_two" -p "$parent_three")"
+  [ "$(git -C "$project" rev-list --parents -n 1 "$octopus" | wc -w)" -eq 4 ]
+
+  run bash "$CHECKER" --all "$octopus" --project "$project"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$octopus: committer.name mismatch"* ]]
+  [[ "$output" == *"$octopus: committer.email mismatch"* ]]
+}
+
+@test "git identity: canonical committers pass all topologies with merge policy enabled" {
+  local project root parent_two parent_three octopus
+  project="$(make_identity_repo canonical-topologies)"
+  allow_platform_merge_committer "$project"
+  root="$(git -C "$project" rev-parse HEAD)"
+  parent_two="$(make_tree_commit "$project" parent-two \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" -p "$root")"
+  parent_three="$(make_tree_commit "$project" parent-three \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" -p "$root")"
+  octopus="$(make_tree_commit "$project" canonical-octopus \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    -p "$root" -p "$parent_two" -p "$parent_three")"
+
+  run bash "$CHECKER" --all "$octopus" --project "$project"
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+}
+
+@test "git identity: merge policy keys are paired and strictly typed" {
+  local project digest
+  digest="$(tuple_digest "$PLATFORM_COMMITTER_NAME" \
+    "$PLATFORM_COMMITTER_EMAIL")"
+
+  project="$(make_identity_repo policy-missing-merge-digest)"
+  printf 'allow_github_merge_committer = true\n' \
+    >>"$project/.shipyard-git-identity.toml"
+  run bash "$CHECKER" --all HEAD --project "$project"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"identity policy is missing or malformed"* ]]
+
+  project="$(make_identity_repo policy-orphan-merge-digest)"
+  printf 'github_merge_committer_sha256 = "%s"\n' "$digest" \
+    >>"$project/.shipyard-git-identity.toml"
+  run bash "$CHECKER" --all HEAD --project "$project"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"identity policy is missing or malformed"* ]]
+
+  project="$(make_identity_repo policy-string-merge-boolean)"
+  printf 'allow_github_merge_committer = "true"\n' \
+    >>"$project/.shipyard-git-identity.toml"
+  run bash "$CHECKER" --all HEAD --project "$project"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"identity policy is missing or malformed"* ]]
+
+  project="$(make_identity_repo policy-malformed-merge-digest)"
+  printf 'allow_github_merge_committer = true\n' \
+    >>"$project/.shipyard-git-identity.toml"
+  printf 'github_merge_committer_sha256 = "not-a-digest"\n' \
+    >>"$project/.shipyard-git-identity.toml"
+  run bash "$CHECKER" --all HEAD --project "$project"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"identity policy is missing or malformed"* ]]
+  assert_addresses_redacted
+}
+
+@test "git identity: absent or false merge opt-in preserves exact committer policy" {
+  local project merge_sha
+  project="$(make_identity_repo explicit-false-merge-policy)"
+  printf 'allow_github_merge_committer = false\n' \
+    >>"$project/.shipyard-git-identity.toml"
+  merge_sha="$(add_two_parent_merge "$project" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$PLATFORM_COMMITTER_NAME" "$PLATFORM_COMMITTER_EMAIL")"
+
+  run bash "$CHECKER" --all "$merge_sha" --project "$project"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$merge_sha: committer.name mismatch"* ]]
+  [[ "$output" == *"$merge_sha: committer.email mismatch"* ]]
+
+  project="$(make_identity_repo absent-merge-policy)"
+  merge_sha="$(add_two_parent_merge "$project" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$PLATFORM_COMMITTER_NAME" "$PLATFORM_COMMITTER_EMAIL")"
+  run bash "$CHECKER" --all "$merge_sha" --project "$project"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$merge_sha: committer.name mismatch"* ]]
+  [[ "$output" == *"$merge_sha: committer.email mismatch"* ]]
 }
 
 @test "git identity: empty explicit range is valid" {
@@ -761,17 +1008,64 @@ refs/heads/new-ref $new_sha refs/heads/new-ref $zero"
   grep -Fq 'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}' "$WORKFLOW"
   grep -Fq 'TARGET_REF: ${{ github.ref }}' "$WORKFLOW"
   ! grep -Fq 'GITHUB_REF_NAME:' "$WORKFLOW"
-  grep -Fq -- '--range "$BASE_SHA..$PR_HEAD_SHA" --project .' "$WORKFLOW"
-  grep -Fq -- '--all "$HEAD_SHA" --project .' "$WORKFLOW"
+  grep -Fq 'run: bash scripts/check-git-identity-ci.sh --project .' "$WORKFLOW"
+  grep -Fq -- '--range "$BASE_SHA..$PR_HEAD_SHA"' "$CI_CHECKER"
+  grep -Fq -- '--all "$HEAD_SHA"' "$CI_CHECKER"
 }
 
 @test "git identity: workflow fails closed on missing variable event SHA history or policy" {
   grep -Fq 'SHIPYARD_IDENTITY_EMAIL: ${{ secrets.SHIPYARD_IDENTITY_EMAIL }}' "$WORKFLOW"
   ! grep -Fq 'vars.SHIPYARD_IDENTITY_EMAIL' "$WORKFLOW"
-  grep -Fq 'identity email variable is missing' "$WORKFLOW"
-  grep -Fq 'pull request identity range is missing' "$WORKFLOW"
-  grep -Fq 'main identity revision is missing' "$WORKFLOW"
-  grep -Fq 'repository history is shallow' "$WORKFLOW"
-  grep -Fq 'git config --local shipyard.identityEmail "$SHIPYARD_IDENTITY_EMAIL"' "$WORKFLOW"
-  grep -Fq 'bash scripts/check-git-identity.sh' "$WORKFLOW"
+  grep -Fq 'identity email variable is missing' "$CI_CHECKER"
+  grep -Fq 'pull request identity range is missing' "$CI_CHECKER"
+  grep -Fq 'main identity revision is missing' "$CI_CHECKER"
+  grep -Fq 'repository history is shallow' "$CI_CHECKER"
+  grep -Fq 'config --local shipyard.identityEmail' "$CI_CHECKER"
+  grep -Fq 'scripts/check-git-identity.sh' "$CI_CHECKER"
+}
+
+@test "git identity: CI dispatcher executes fail-closed event posture" {
+  local project head source shallow
+  project="$(make_identity_repo ci-event-failures)"
+  install_ci_identity_scripts "$project"
+  head="$(git -C "$project" rev-parse HEAD)"
+
+  run env -u SHIPYARD_IDENTITY_EMAIL \
+    EVENT_NAME=push HEAD_SHA="$head" TARGET_REF=refs/heads/main \
+    bash "$project/scripts/check-git-identity-ci.sh" --project "$project"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"identity email variable is missing"* ]]
+
+  run env SHIPYARD_IDENTITY_EMAIL="$CANONICAL_EMAIL" \
+    EVENT_NAME=pull_request BASE_SHA="$head" PR_HEAD_SHA= \
+    bash "$project/scripts/check-git-identity-ci.sh" --project "$project"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"pull request identity range is missing"* ]]
+
+  run env SHIPYARD_IDENTITY_EMAIL="$CANONICAL_EMAIL" \
+    EVENT_NAME=push HEAD_SHA="$head" TARGET_REF=refs/heads/topic \
+    bash "$project/scripts/check-git-identity-ci.sh" --project "$project"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"main identity revision is missing"* ]]
+
+  run env SHIPYARD_IDENTITY_EMAIL="$CANONICAL_EMAIL" \
+    EVENT_NAME=schedule HEAD_SHA="$head" TARGET_REF=refs/heads/main \
+    bash "$project/scripts/check-git-identity-ci.sh" --project "$project"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unsupported workflow event"* ]]
+
+  source="$(make_identity_repo ci-shallow-source)"
+  add_identity_commit "$source" second \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" \
+    "$CANONICAL_NAME" "$CANONICAL_EMAIL" >/dev/null
+  shallow="$BATS_TEST_TMPDIR/ci-shallow-clone"
+  git clone -q --depth 1 "file://$source" "$shallow"
+  install_ci_identity_scripts "$shallow"
+  head="$(git -C "$shallow" rev-parse HEAD)"
+  run env SHIPYARD_IDENTITY_EMAIL="$CANONICAL_EMAIL" \
+    EVENT_NAME=push HEAD_SHA="$head" TARGET_REF=refs/heads/main \
+    bash "$shallow/scripts/check-git-identity-ci.sh" --project "$shallow"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"repository history is shallow"* ]]
+  assert_addresses_redacted
 }

@@ -11,7 +11,7 @@
   `agents/release/critic-codex-feedback.sh`,
   `tests/git-identity-enforcement.bats`,
   `tests/codex-feedback-delivery.bats`,
-  `docs/tickets/pending/git-identity-enforcement.md`, `.agents/gates.md`
+  `docs/tickets/freezer/git-identity-enforcement.md`, `.agents/gates.md`
 
 ## Goal
 
@@ -34,7 +34,7 @@ two independent causes:
 1. The `git-identity` job audits all commits reachable from a `main` push
    (`.github/workflows/checks.yml:35-44`). It correctly rejects six merge
    commits whose committer is GitHub rather than the one exact canonical
-   identity required by `docs/tickets/pending/git-identity-enforcement.md`.
+   identity required by `docs/tickets/freezer/git-identity-enforcement.md`.
    Pull-request checks passed because they audit only the proposed branch
    range, before GitHub creates the final merge commit. The observable defect
    is therefore the merge path and its missing pre-merge coverage, not a stale
@@ -251,7 +251,7 @@ complete 733+ suite passes, and unsafe replacements remain fatal.
 
 **Delegation: subagent — implement the resolved D-4 policy and hermetic
 merge-event coverage; no live refs, pushes, or history mutation.** Receive the
-confirmed D-4 outcome; `docs/tickets/pending/git-identity-enforcement.md`;
+confirmed D-4 outcome; `docs/tickets/freezer/git-identity-enforcement.md`;
 workflow lines 8-49; checker modes; the tracked digest design; and the six
 redacted offending hashes. Own the tracked opt-in, checker, extracted CI
 dispatcher/workflow, their near-miss fixtures, and the prior-ticket/README
@@ -301,7 +301,7 @@ The configured system tuple stays redacted. All merge behavior tests use
 fixture repositories; no test reaches GitHub or mutates a live ref.
 
 **Phase acceptance:** the executed PR-to-push fixture fails on the pre-change
-contract and passes under the selected D-4 contract, arbitrary wrong metadata
+contract and passes under the resolved D-4 contract, arbitrary wrong metadata
 still fails, unset policy behavior is unchanged, focused 37+ and full 733+
 tests pass, and no live ref/history/GitHub state changed.
 
@@ -371,7 +371,7 @@ canonical checkout agree.
   validation-to-generation owner-release case and per-writer status assertions.
 - Focused identity/workflow regression:
   `bats tests/git-identity-enforcement.bats`, including executed PR/merge/push
-  topologies for the selected D-4 contract.
+  topologies for the resolved D-4 contract.
 - Canonical repository gate: `bats tests/`.
 - Shell syntax, leak firewall, deck freshness/completeness, lifecycle, and
   optional render gates as declared in `.agents/gates.md`.
@@ -413,7 +413,7 @@ rejected email values in tracked text.
   repair; the orchestrator repeats every gate and commits the slice.
 - `red-first:` deterministic owner-release case exited `1`; the contender
   returned `75` with the retry-required diagnostic and no second deposit.
-- `commit:` pending
+- `commit: 842ba35` (`fix: retry mailbox owner handoffs`)
 - `focused/full gates:` handoff/live-owner/successor matrix `4/4`; complete
   feedback file `53/53`; repository Bats `734/734`; shell syntax, Python
   bytecode, leak, deck freshness/completeness, lifecycle, delegation, and diff
@@ -429,10 +429,20 @@ rejected email values in tracked text.
   event topology, and policy documentation; the orchestrator repeats every
   gate and commits the slice.
 - `decision: D-4 Option B — native GitHub web merges with narrow digest policy`
-- `red-first:` pending
+- `red-first:` executable PR-to-merge-to-push topology exited `1`; its PR range
+  passed, then the post-merge all-history audit reported only redacted
+  committer mismatches on the synthetic two-parent platform merge.
 - `commit:` pending
-- `focused/full gates:` pending
-- `notes/blockers:` pending
+- `focused/full gates:` event topology `1/1`; complete identity file `44/44`;
+  repository Bats `741/741`; live
+  `bash scripts/check-git-identity.sh --all HEAD --project .`, full shell
+  syntax, Python bytecode, leak, deck freshness/completeness, lifecycle,
+  delegation, and diff checks exited `0` under independent orchestrator
+  reruns.
+- `notes/blockers:` all six current web merges pass through one tracked digest
+  while wrong tuple/author/topology and malformed/absent opt-ins fail. The raw
+  tuple never enters tracked bytes or diagnostics. Prior exact-governance work
+  is parked in the freezer as a retained historical decision record.
 
 ### Phase 3
 

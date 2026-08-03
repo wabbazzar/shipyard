@@ -206,7 +206,7 @@ configuration, and it is YOUR job:
 | off switch | Linux: `systemctl --user disable --now <project>-<display>.timer`; macOS: `launchctl bootout gui/$(id -u)/com.shipyard.<project>-<display>` | — |
 | hands-off repo | `autonomous = true` (top-level) — a private, disposable dogfood repo with no human in the loop: it never appears in the hub's approval wire, and the ticket auto-gate proceeds without stopping even for a user-decision. Pair with `[medic] can_merge = true`. **Only ever set this on a throwaway private repo.** | **unset** (human-in-the-loop) |
 | inspect first | `install.sh --dry-run` prints every unit and crontab change before writing | — |
-| raw Git identity | tracked `.shipyard-git-identity.toml` opt-in checks exact author/committer names and emails in pre-commit, pre-push, doctor, and CI; the email stays in local Git config and the `SHIPYARD_IDENTITY_EMAIL` Actions secret, never tracked source | **absent/off** |
+| raw Git identity | tracked `.shipyard-git-identity.toml` opt-in checks exact authors and committers in hooks, doctor, and CI; an optional digest-only policy admits one system committer solely on canonical-author, two-parent merges | **absent/off** |
 
 Agents only get projects you explicitly install them on. Start with one
 low-stakes repo.
@@ -296,6 +296,16 @@ To opt in, track `.shipyard-git-identity.toml` at the repository root:
 enforce = true
 name = "your-github-user"
 ```
+
+By default every author and committer must match the canonical name and locally
+configured email exactly. Repositories that support GitHub web merges may also
+track `allow_github_merge_committer = true` together with a 64-hex
+`github_merge_committer_sha256` digest of the NUL-delimited system committer
+name/email tuple. The exemption applies only to two-parent commits with an
+exact canonical author; canonical committers remain valid on every topology.
+Omitting the pair preserves the exact policy. Like the canonical tuple check,
+this is metadata conformance rather than cryptographic provenance: tuple
+spoofing is outside its threat model. Never track or print the raw system tuple.
 
 Then set the intended name and email in effective Git configuration and
 configure the repository-local guard:

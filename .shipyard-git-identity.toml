@@ -1,3 +1,5 @@
 [git_identity]
 enforce = true
 name = "wabbazzar"
+allow_github_merge_committer = true
+github_merge_committer_sha256 = "a41b65ba81bfb1a3250274b0bd325be0cc7ae3ea8af07798ca77cb7920468ffc"

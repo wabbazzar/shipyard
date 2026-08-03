@@ -19,34 +19,7 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_SHA: ${{ github.sha }}
           TARGET_REF: ${{ github.ref }}
-        run: |
-          set -eu
-          fail() {
-            printf 'git-identity CI: %s\n' "$1" >&2
-            exit 2
-          }
-          [ -n "$SHIPYARD_IDENTITY_EMAIL" ] ||
-            fail "identity email variable is missing"
-          [ "$(git rev-parse --is-shallow-repository)" = "false" ] ||
-            fail "repository history is shallow"
-          git config --local shipyard.identityEmail "$SHIPYARD_IDENTITY_EMAIL"
-          trap 'git config --local --unset-all shipyard.identityEmail >/dev/null 2>&1 || true' EXIT
-          case "$EVENT_NAME" in
-            pull_request)
-              [ -n "$BASE_SHA" ] && [ -n "$PR_HEAD_SHA" ] ||
-                fail "pull request identity range is missing"
-              bash scripts/check-git-identity.sh \
-                --range "$BASE_SHA..$PR_HEAD_SHA" --project .
-              ;;
-            push)
-              [ "$TARGET_REF" = "refs/heads/main" ] && [ -n "$HEAD_SHA" ] ||
-                fail "main identity revision is missing"
-              bash scripts/check-git-identity.sh --all "$HEAD_SHA" --project .
-              ;;
-            *)
-              fail "unsupported workflow event"
-              ;;
-          esac
+        run: bash scripts/check-git-identity-ci.sh --project .
 
   leak-check:
     runs-on: ubuntu-latest

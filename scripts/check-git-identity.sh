@@ -85,8 +85,9 @@ ROOT="$(git -C "$PROJECT" rev-parse --show-toplevel 2>/dev/null)" ||
 POLICY_FILE="$ROOT/.shipyard-git-identity.toml"
 [ -f "$POLICY_FILE" ] || config_error "identity policy is missing"
 
-CANONICAL_NAME="$(
+POLICY_VALUES="$(
   python3 - "$POLICY_FILE" 2>/dev/null <<'PY'
+import re
 import sys
 
 try:
@@ -107,12 +108,29 @@ try:
         or any(ch in name for ch in "\r\n\0<>")
     ):
         raise ValueError
+    allow_merge = policy.get("allow_github_merge_committer", False)
+    if not isinstance(allow_merge, bool):
+        raise ValueError
+    has_digest = "github_merge_committer_sha256" in policy
+    if allow_merge != has_digest:
+        raise ValueError
+    if allow_merge:
+        digest = policy.get("github_merge_committer_sha256")
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-fA-F]{64}", digest) is None:
+            raise ValueError
+        digest = digest.lower()
+    else:
+        digest = "-"
 except Exception:
     raise SystemExit(2)
 
-sys.stdout.write(name)
+sys.stdout.write(f"{name}\n{int(allow_merge)}\n{digest}")
 PY
 )" || config_error "identity policy is missing or malformed"
+CANONICAL_NAME="${POLICY_VALUES%%$'\n'*}"
+POLICY_REST="${POLICY_VALUES#*$'\n'}"
+ALLOW_GITHUB_MERGE_COMMITTER="${POLICY_REST%%$'\n'*}"
+GITHUB_MERGE_COMMITTER_SHA256="${POLICY_REST#*$'\n'}"
 
 EMAIL_VALUES="$(git -C "$ROOT" config --local --get-all shipyard.identityEmail 2>/dev/null)" ||
   config_error "local canonical email is missing"
@@ -145,6 +163,44 @@ check_fields() {
     report_mismatch "$object" "author.name"
   [ "$author_email" = "$CANONICAL_EMAIL" ] ||
     report_mismatch "$object" "author.email"
+  [ "$committer_name" = "$CANONICAL_NAME" ] ||
+    report_mismatch "$object" "committer.name"
+  [ "$committer_email" = "$CANONICAL_EMAIL" ] ||
+    report_mismatch "$object" "committer.email"
+}
+
+check_commit_fields() {
+  local object="$1" parent_count="$2"
+  local author_name="$3" author_email="$4"
+  local committer_name="$5" committer_email="$6"
+  local author_matches=1 committer_digest_record committer_digest
+
+  if [ "$author_name" != "$CANONICAL_NAME" ]; then
+    report_mismatch "$object" "author.name"
+    author_matches=0
+  fi
+  if [ "$author_email" != "$CANONICAL_EMAIL" ]; then
+    report_mismatch "$object" "author.email"
+    author_matches=0
+  fi
+
+  if [ "$committer_name" = "$CANONICAL_NAME" ] &&
+     [ "$committer_email" = "$CANONICAL_EMAIL" ]; then
+    return
+  fi
+
+  if [ "$author_matches" -eq 1 ] &&
+     [ "$ALLOW_GITHUB_MERGE_COMMITTER" = "1" ] &&
+     [ "$parent_count" -eq 2 ]; then
+    committer_digest_record="$(
+      printf '%s\0%s' "$committer_name" "$committer_email" | sha256sum
+    )" || input_error "cannot hash commit metadata"
+    committer_digest="${committer_digest_record%% *}"
+    if [ "$committer_digest" = "$GITHUB_MERGE_COMMITTER_SHA256" ]; then
+      return
+    fi
+  fi
+
   [ "$committer_name" = "$CANONICAL_NAME" ] ||
     report_mismatch "$object" "committer.name"
   [ "$committer_email" = "$CANONICAL_EMAIL" ] ||
@@ -282,18 +338,21 @@ RECORD="$SCRATCH/record"
 while IFS= read -r commit; do
   [ -n "$commit" ] || continue
   if ! git -C "$ROOT" show -s \
-      --format='format:%H%x00%an%x00%ae%x00%cn%x00%ce%x00' \
+      --format='format:%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00' \
       "$commit" >"$RECORD" 2>/dev/null; then
     input_error "commit metadata is missing or malformed"
   fi
 
   exec 3<"$RECORD"
   hash=""
+  parent_hashes=""
   author_name=""
   author_email=""
   committer_name=""
   committer_email=""
   IFS= read -r -d '' hash <&3 ||
+    input_error "commit metadata is malformed"
+  IFS= read -r -d '' parent_hashes <&3 ||
     input_error "commit metadata is malformed"
   IFS= read -r -d '' author_name <&3 ||
     input_error "commit metadata is malformed"
@@ -313,7 +372,11 @@ while IFS= read -r commit; do
   [ -n "$author_name" ] && [ -n "$author_email" ] &&
     [ -n "$committer_name" ] && [ -n "$committer_email" ] ||
     input_error "commit metadata is malformed"
-  check_fields "$hash" \
+  parent_array=()
+  if [ -n "$parent_hashes" ]; then
+    read -r -a parent_array <<<"$parent_hashes"
+  fi
+  check_commit_fields "$hash" "${#parent_array[@]}" \
     "$author_name" "$author_email" "$committer_name" "$committer_email"
 done <"$UNIQUE_COMMITS"
 

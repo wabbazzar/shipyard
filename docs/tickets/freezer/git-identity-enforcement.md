@@ -2,13 +2,28 @@
 
 - **Created:** 2026-07-30
 - **Owner:** wabbazzar
-- **Status:** pending — blocked on unavailable server metadata rules
+- **Status:** parked — superseded by the owner-selected GitHub web-merge policy
 - **Priority:** urgent
 - **Type:** feature
 - **Estimated Points:** 8 (P1 3 · P2 3 · P3 2)
 - **Refs:** `.githooks/pre-commit`, `.githooks/pre-push`,
   `.github/workflows/checks.yml`, `install.sh`, `.agents/config.toml`,
   `.shipyard-git-identity.toml`, `.agents/gates.md`
+
+## Supersession — 2026-08-03
+
+The local hooks, installer/doctor integration, raw checker, CI secret, and
+history repair shipped, but this ticket's exact-committer server-governance
+goal is unavailable on the repository plan. The owner subsequently selected
+supported GitHub web merges in
+`docs/tickets/pending/restore-github-ci-integrity.md`. That replacement keeps
+authors and ordinary committers exact and adds one digest-only system
+committer exemption solely for canonical-author, two-parent merge objects.
+Absent/false opt-in retains this ticket's exact behavior. The accepted tuple is
+never tracked or logged, and tuple spoofing remains outside this metadata
+policy's threat model. The historical plan below is retained as the decision
+record; its exact-server acceptance and prohibition on web merges are no longer
+the active contract.
 
 ## Goal
 
@@ -498,7 +513,7 @@ specified, all checks green, and the priority tree restored byte-for-byte. A
 server-capability failure is an honest blocked terminal condition, not a
 partial-green completion.
 
-## Acceptance Criteria / Definition of Done
+## Historical Acceptance Criteria / Definition of Done (superseded)
 
 - [ ] Every commit reachable from published `main` has raw author and committer
       name `wabbazzar` and the owner-confirmed canonical email.
@@ -616,8 +631,8 @@ email value in tracked text.
 
 ### Never
 
-- Never add a second allowed author/committer identity, including GitHub
-  no-reply, to make web merges convenient.
+- Never add an arbitrary raw author/committer tuple. The superseding policy may
+  accept its tracked digest only for canonical-author, two-parent merges.
 - Never store the canonical personal email or disallowed work email in tracked
   source, tests, fixtures, logs, or ticket prose.
 - Never replace raw-object validation with `.mailmap`, display attribution, or
@@ -659,8 +674,6 @@ email value in tracked text.
 
 ## Handoff
 
-Run this ticket end-to-end with `execute-ticket`. With no open decision, the
-polish auto-gate proceeds immediately; execution stops only on a proven
-user-decision/server-capability blocker and otherwise graduates this ticket
-with `bash scripts/ticket-lifecycle.sh --project . --graduate
-docs/tickets/pending/git-identity-enforcement.md`.
+No further execution is authorized from this parked ticket. Continue through
+`docs/tickets/pending/restore-github-ci-integrity.md`, which owns the replacement
+web-merge policy and its live GitHub verification.
