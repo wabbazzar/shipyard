@@ -104,6 +104,52 @@ deposit() {
     bash "$NOTE" --harness codex "$session" "$message"
 }
 
+lock_stat_flavor() {
+  if "$1" -c '%a' "$2" >/dev/null 2>&1; then
+    printf 'gnu\n'
+  else
+    printf 'bsd\n'
+  fi
+}
+
+make_lock_handoff_stat_shim() {
+  local bin="$1"
+  mkdir "$bin"
+  cat >"$bin/stat" <<'EOF'
+#!/bin/bash
+set -u
+last="${!#}"
+mode_query=0
+generation_query=0
+if [ "$LOCK_STAT_FLAVOR" = gnu ]; then
+  [ "${1:-}" = -c ] && [ "${2:-}" = %a ] && mode_query=1
+  [ "${1:-}" = -c ] && [ "${2:-}" = %d:%i ] && generation_query=1
+else
+  [ "${1:-}" = -f ] && [ "${2:-}" = %Lp ] && mode_query=1
+  [ "${1:-}" = -f ] && [ "${2:-}" = %d:%i ] && generation_query=1
+fi
+if [ "$last" = "$LOCK_PATH" ] && [ "$generation_query" -eq 1 ]; then
+  count=0
+  [ ! -e "$LOCK_STAT_COUNT" ] || count="$(<"$LOCK_STAT_COUNT")"
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$LOCK_STAT_COUNT"
+  if [ "$LOCK_RELEASE_AT" = generation-2 ] && [ "$count" -eq 2 ]; then
+    : >"$LOCK_VALIDATED"
+    while [ ! -e "$LOCK_RELEASED" ]; do /bin/sleep 0.001; done
+  fi
+fi
+result="$($LOCK_REAL_STAT "$@" 2>/dev/null)" || exit $?
+if [ "$LOCK_RELEASE_AT" = mode ] && [ "$last" = "$LOCK_PATH" ] &&
+   [ "$mode_query" -eq 1 ] && [ "$result" = 700 ] &&
+   mkdir "$LOCK_ONCE" 2>/dev/null; then
+  : >"$LOCK_VALIDATED"
+  while [ ! -e "$LOCK_RELEASED" ]; do /bin/sleep 0.001; done
+fi
+printf '%s\n' "$result"
+EOF
+  chmod +x "$bin/stat"
+}
+
 drain() {
   local project="$1" session="$2"
   jq -nc --arg cwd "$project" --arg session "$session" \
@@ -644,19 +690,82 @@ EOF
 exit 127
 EOF
   chmod +x "$PS_BIN/ps" "$PS_BIN/cksum"
+  WRITER_STATUS="$BATS_TEST_TMPDIR/writer-status"
+  mkdir "$WRITER_STATUS"
+  WRITER_PIDS=()
   for ((i=1; i<=8; i++)); do
     ID="$(printf '%064x' "$i")"
     WRITER_TZ=UTC
     [ $((i % 2)) -eq 0 ] && WRITER_TZ=America/Chicago
     TZ="$WRITER_TZ" PATH="$PS_BIN:$PATH" \
       CRITIC_PROJECT_DIR="$P" CRITIC_NOTE_ID="$ID" \
-        bash "$NOTE" --harness codex "session-writers" "writer $i" &
+        bash "$NOTE" --harness codex "session-writers" "writer $i" \
+          >"$WRITER_STATUS/$i.out" 2>&1 &
+    WRITER_PIDS+=("$!")
   done
-  wait
+  for ((i=1; i<=8; i++)); do
+    WRITER_RC=0
+    wait "${WRITER_PIDS[$((i - 1))]}" || WRITER_RC=$?
+    printf '%s\n' "$WRITER_RC" >"$WRITER_STATUS/$i.rc"
+  done
+  for ((i=1; i<=8; i++)); do
+    [ "$(<"$WRITER_STATUS/$i.rc")" -eq 0 ] || {
+      cat "$WRITER_STATUS/$i.out" >&3
+      false
+    }
+  done
   BOX="$(mailbox_dir "$P" session-writers)"
   [ "$(find "$BOX/pending" -type f -name '*.json' | wc -l)" -eq 8 ]
   run bash -c "jq -e '.schema_version == 1' '$BOX'/pending/*.json >/dev/null"
   [ "$status" -eq 0 ]
+  [ ! -e "$BOX/.lock" ]
+}
+
+@test "owner release between validation and generation retries safely" {
+  P="$(make_fixture_project cfb-owner-release)"
+  FIRST="$(printf '1%.0s' {1..64})"
+  SECOND="$(printf '2%.0s' {1..64})"
+  deposit "$P" session-owner-release "first" "$FIRST"
+  BOX="$(mailbox_dir "$P" session-owner-release)"
+
+  STAT_BIN="$BATS_TEST_TMPDIR/handoff-stat-bin"
+  make_lock_handoff_stat_shim "$STAT_BIN"
+  REAL_STAT="$(command -v stat)"
+  STAT_FLAVOR="$(lock_stat_flavor "$REAL_STAT" "$BOX")"
+  VALIDATED="$BATS_TEST_TMPDIR/lock-validated"
+  RELEASED="$BATS_TEST_TMPDIR/lock-released"
+  ONCE="$BATS_TEST_TMPDIR/lock-mode-once"
+
+  (
+    mkdir "$BOX/.lock"
+    chmod 700 "$BOX/.lock"
+    TOKEN="$(printf 'a%.0s' {1..32})"
+    IDENTITY="$(python3 "$QUARTET_ROOT/agents/release/critic-process-identity.py" "$BASHPID")"
+    printf '%s %s %s %s\n' "$BASHPID" "$TOKEN" "$IDENTITY" \
+      "$(date +%s)" >"$BOX/.lock/owner"
+    chmod 600 "$BOX/.lock/owner"
+    while [ ! -e "$VALIDATED" ]; do sleep 0.001; done
+    rm "$BOX/.lock/owner"
+    rmdir "$BOX/.lock"
+    : >"$RELEASED"
+  ) &
+  OWNER_PID=$!
+  while [ ! -e "$BOX/.lock/owner" ]; do sleep 0.001; done
+
+  run env PATH="$STAT_BIN:$PATH" LOCK_REAL_STAT="$REAL_STAT" \
+    LOCK_STAT_FLAVOR="$STAT_FLAVOR" LOCK_PATH="$BOX/.lock" \
+    LOCK_VALIDATED="$VALIDATED" LOCK_RELEASED="$RELEASED" LOCK_ONCE="$ONCE" \
+    LOCK_STAT_COUNT="$BATS_TEST_TMPDIR/lock-stat-count" LOCK_RELEASE_AT=mode \
+    CRITIC_PROJECT_DIR="$P" CRITIC_NOTE_ID="$SECOND" \
+    bash "$NOTE" --harness codex session-owner-release "second"
+  wait "$OWNER_PID"
+
+  [ "$status" -eq 0 ] || {
+    printf 'contender_status=%s output=%q\n' "$status" "$output" >&3
+    false
+  }
+  [ "$(find "$BOX/pending" -type f -name '*.json' | wc -l)" -eq 2 ]
+  [ "$(jq -r '.critique_id' "$BOX"/pending/*.json | sort -u | wc -l)" -eq 2 ]
   [ ! -e "$BOX/.lock" ]
 }
 

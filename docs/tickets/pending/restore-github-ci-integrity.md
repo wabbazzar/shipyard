@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-03
 - **Owner:** wabbazzar
-- **Status:** polished — blocked on user decision D-4
+- **Status:** in progress — D-4 resolved; execution started
 - **Priority:** urgent
 - **Type:** bugfix
 - **Estimated Points:** 8 (P1 3 · P2 3 · P3 2)
@@ -113,22 +113,20 @@ secret, or shallow checkout.
 | D-2 | Coverage posture | Both regressions receive deterministic, hermetic red-first cases; the existing probabilistic concurrency case remains as defense in depth | Acceptance is the captured repro passing and the named coverage gaps closing, not a retry around a flaky suite |
 | D-3 | CI evidence | Completion requires terminal success from GitHub's exact `checks` run on the published repaired commit, in addition to local gates | The current incident was visible only after merge, and `.agents/gates.md` explicitly requires checking CI rather than assuming local parity |
 
-### Open user decision
+### Resolved user decision
 
-| # | Owner | Option A | Option B |
-|---|---|---|---|
-| D-4 | wabbazzar | **Preserve exact identity:** metadata-only rewrite the six offending merge objects under recovery refs and an exact lease, then ship `scripts/merge-pr-canonical.sh` as the policy-aware local PR merge path | **Support GitHub web merge:** add an explicit `allow_github_merge_committer=true` policy plus a separately configured/redacted system-committer tuple accepted only on qualifying two-parent merge objects; keep authors and all non-merge committers canonical |
+| # | Owner choice | Rationale |
+|---|---|---|
+| D-4 | **Support GitHub web merges** through an explicit, narrow policy exemption; do not rewrite history | On 2026-08-03 the owner expressed no preference and asked for the easier policy to maintain. Native GitHub merges avoid recurrent metadata rewrites and a custom merge ceremony. Authors and all non-merge committers remain canonical. |
 
-### User-decision class
+The exemption is metadata conformance, not cryptographic provenance—the same
+boundary as the existing canonical tuple check. It is limited to two-parent
+objects and one tracked SHA-256 digest of the accepted system committer tuple;
+the raw tuple is never duplicated in tracked source or logs.
 
-D-4 is user-decision-class. Option A preserves the owner's previously locked
-identity boundary but performs a destructive published-history rewrite and
-changes the future merge operation. Option B avoids rewriting history and
-supports normal web merges, but deliberately broadens a live policy whose
-ticket says never to do that. There is no implied default. While unresolved,
-leave Git history, the checker, mailbox source, and remote state unchanged.
+There are no open user-decision-class items.
 
-**Auto-gate: STOP for D-4.**
+**Auto-gate: PROCEED.**
 
 ## Technical Requirements
 
@@ -149,54 +147,34 @@ leave Git history, the checker, mailbox source, and remote state unchanged.
 - Keep the existing wait budget, lease semantics, process-identity checks,
   durable rename/fsync path, and no-`ps` portability unchanged.
 
-### Identity remediation selected by D-4
-
-If D-4 preserves the exact policy:
-
-- Create immutable local backup refs and record the exact remote lease before
-  mutation. Recreate only the six offending merge commits with canonical
-  committer metadata; preserve trees, messages, author metadata, dates, parent
-  order/topology, and every unrelated commit byte except unavoidable
-  descendant hashes and invalidated signatures.
-- Prove old/new histories pairwise equivalent on the preserved fields, run the
-  raw all-history checker on the candidate, and publish once with an exact
-  `--force-with-lease`. Retain recovery refs until owner acceptance.
-- Add `scripts/merge-pr-canonical.sh` as a deterministic, policy-aware merge
-  surface for future PRs
-  under the existing `.shipyard-git-identity.toml` opt-in. It must resolve and
-  validate `--pr <number>` against `origin/main`, require a clean canonical
-  `main` checkout equal to the remote base, require terminal green required PR
-  checks, fetch the exact PR head, create a no-fast-forward merge locally with
-  the configured canonical author/committer, run the pre-push identity check,
-  and push only with the recorded lease. `--check-config` is read-only;
-  `--dry-run` prints redacted refs/check state and makes no commit or push;
-  malformed invocation/config exits `2`; an absent identity opt-in exits `3`
-  without writes. Hermetic tests stub every `gh`/network surface.
-- Update the existing identity setup/operation documentation and hermetic tests
-  so an agent cannot claim a GitHub web merge is compatible with the exact
-  policy.
-
-If D-4 revises the policy:
+### GitHub merge identity policy
 
 - Add tracked `.shipyard-git-identity.toml` key
   `allow_github_merge_committer = true`, whose absent/false value preserves the
-  exact current behavior. Configure the allowed merge committer name/email in
-  repository-local Git keys and corresponding Actions secrets, never tracked
-  prose. Accept that tuple only for a two-parent commit whose author fields are
-  canonical and whose parents are already individually clean; author fields
-  and every non-merge committer remain canonical.
+  exact current behavior. Add `github_merge_committer_sha256` containing the
+  SHA-256 digest of the NUL-delimited system committer name/email tuple. Never
+  track or print the raw tuple. Require both keys together and reject malformed
+  booleans/digests as configuration exit `2`.
+- Accept the configured digest only for a two-parent commit whose author fields
+  are canonical. Canonical committers continue to pass on any topology;
+  one-parent/root commits and wrong author fields never receive the exemption.
 - Add red-first fixtures for arbitrary wrong committers, forged merge-like
-  subjects, wrong parent counts, unsigned/unverifiable objects, and qualifying
-  platform merges. Fail closed where the local checker cannot establish the
-  required provenance without network access.
-- Update the prior ticket's status/boundary and canonical README claim rather
-  than leaving contradictory policy documentation.
+  subjects, wrong parent counts, malformed/missing policy digests, and
+  qualifying platform merges. Pin that tuple spoofing is outside this metadata
+  policy's threat model, exactly as spoofing the canonical tuple already is.
+- Extract the inline workflow dispatcher into
+  `scripts/check-git-identity-ci.sh`; the workflow calls the script and Bats
+  executes it against hermetic PR and post-merge push topologies. Preserve
+  secret redaction, full-depth checks, and event failure posture.
+- Update the prior identity ticket's status/boundary and canonical README claim
+  so the parked exact-server-governance goal no longer contradicts supported
+  web merges.
 
 ### Workflow contract and publication
 
 - Replace static workflow-string confidence with a hermetic Git topology that
   exercises the pull-request range and the corresponding post-merge push
-  audit. The selected D-4 policy must make both paths agree before publication.
+  audit. The resolved D-4 policy must make both paths agree before publication.
 - Preserve `fetch-depth: 0`, secret redaction, failure on malformed/missing
   event endpoints, and the distinction between PR-introduced commits and the
   final merge object.
@@ -271,15 +249,14 @@ complete 733+ suite passes, and unsafe replacements remain fatal.
 
 ### Phase 2 — Resolve identity contract and prevent recurrence (3 pts)
 
-**Delegation: subagent — implement the owner-selected D-4 policy and hermetic
+**Delegation: subagent — implement the resolved D-4 policy and hermetic
 merge-event coverage; no live refs, pushes, or history mutation.** Receive the
 confirmed D-4 outcome; `docs/tickets/pending/git-identity-enforcement.md`;
-workflow lines 8-49; checker modes; and the six redacted offending hashes. For
-Option A, own new `scripts/merge-pr-canonical.sh`, its hermetic Bats coverage,
-the static-to-executed workflow fixture upgrade, and existing identity docs.
-For Option B, own the tracked opt-in, checker/configure/doctor/workflow changes,
-their near-miss fixtures, and the prior-ticket/README reconciliation. Never
-read or print configured email values. Return in at most 40 lines: files
+workflow lines 8-49; checker modes; the tracked digest design; and the six
+redacted offending hashes. Own the tracked opt-in, checker, extracted CI
+dispatcher/workflow, their near-miss fixtures, and the prior-ticket/README
+reconciliation. Never read or print raw tuple values. Return in at most 40
+lines: files
 changed; commands plus exit codes; red-first event-topology evidence;
 focused/full counts; exact fixture graph; blockers.
 
@@ -288,8 +265,8 @@ focused/full counts; exact fixture graph; blockers.
 > command, read the real file, curl the real port, and report exact output
 > (exit codes, JSONL lines, HTTP codes), not adjectives.
 
-Implement only the non-destructive checker/workflow/tooling/docs portion of the
-selected path. The pull-request and push topology tests, Bats, shell syntax,
+Implement only the non-destructive checker/workflow/tooling/docs policy. The
+pull-request and push topology tests, Bats, shell syntax,
 deck coupling if applicable, and public-repo hygiene gate classes apply. The
 orchestrator repeats every gate and commits the slice before any shared-history
 operation.
@@ -302,11 +279,11 @@ frontmatter or `GENERIC_SKILLS` changes; neither is expected.
 
 ```bash
 bats tests/git-identity-enforcement.bats
-bash -n scripts/check-git-identity.sh scripts/merge-pr-canonical.sh \
+bash -n scripts/check-git-identity.sh scripts/check-git-identity-ci.sh \
   install.sh .githooks/pre-commit .githooks/pre-push
-bash scripts/merge-pr-canonical.sh --check-config --project .
-bats --filter 'canonical merge dry-run is redacted and mutation-free' \
+bats --filter 'workflow executes PR and GitHub merge push identity contracts' \
   tests/git-identity-enforcement.bats
+bash scripts/check-git-identity.sh --all HEAD --project .
 bats tests/
 bash -n install.sh agents/lib/*.sh agents/*/runner.sh \
   agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit \
@@ -320,10 +297,8 @@ python3 scripts/delegation-report.py
 git diff --check
 ```
 
-For Option B, omit the nonexistent merge script commands and instead run
-`bash scripts/check-git-identity.sh --all HEAD --project .`; the configured
-system tuple stays redacted. All merge behavior tests use PATH-stubbed `gh`
-and fixture remotes; no test reaches GitHub or mutates a live ref.
+The configured system tuple stays redacted. All merge behavior tests use
+fixture repositories; no test reaches GitHub or mutates a live ref.
 
 **Phase acceptance:** the executed PR-to-push fixture fails on the pre-change
 contract and passes under the selected D-4 contract, arbitrary wrong metadata
@@ -332,44 +307,18 @@ tests pass, and no live ref/history/GitHub state changed.
 
 ### Phase 3 — Publish and prove GitHub CI (2 pts)
 
-**Delegation: inline (published-history mutation, exact remote lease, canonical
-push, and live GitHub verification are destructive shared-state operations).**
+**Delegation: inline (canonical push and live GitHub verification are shared
+remote-state operations the orchestrator must perform and inspect directly).**
 
-For the preserve-policy path, the orchestrator creates/re-reads recovery refs,
-constructs and compares the candidate graph, runs every local gate, and performs
-one exact-lease publication. For the revised-policy path, no history rewrite is
-allowed; publish the verified additive commit through the now-compatible merge
-contract. In both paths, inspect the exact `checks` and Pages run IDs to terminal
-state, record conclusions in the Ledger, and leave the canonical checkout clean
-and synchronized with `origin/main`.
+No history rewrite or force-push is allowed. Publish the verified additive
+commits through the existing canonical pre-push hook. Inspect the exact
+`checks` and Pages run IDs to terminal state, record conclusions in the Ledger,
+and leave the canonical checkout clean and synchronized with `origin/main`.
 
-Before mutation, require `git status --short` empty, `main` checked out, and
-`git rev-parse main == git rev-parse origin/main` except for the two verified
-local phase commits. Under Option A create
-`refs/backup/github-ci-integrity-20260803/{local,remote}` and record
-`git ls-remote origin refs/heads/main`. Recreate the graph from the oldest of
-the six offenders forward using raw commit fields and parent mapping; change
-only the six committer tuples, remove only signatures invalidated by those
-changed bytes, and abort if any unrelated signed header would be lost. Compare
-ordered old/new tree IDs, exact message bytes, author fields/dates, committer
-dates, parent topology, and non-offender committer fields before moving
-`main`. Publish once with:
-
-```bash
-git push --force-with-lease=refs/heads/main:<recorded-remote-sha> \
-  origin main:refs/heads/main
-```
-
-If post-push identity or GitHub checks fail for a rewrite-caused reason, the
-prewritten rollback is:
-
-```bash
-git push --force-with-lease=refs/heads/main:<published-repaired-sha> \
-  origin refs/backup/github-ci-integrity-20260803/remote:refs/heads/main
-```
-
-Do not run rollback automatically for an unrelated concurrent remote update;
-stop with both SHAs. Option B performs no force-push and no backup-ref rewrite.
+Before publication, require a clean `main` checkout, record
+`git ls-remote origin refs/heads/main`, fetch, and require the recorded remote
+tip to equal `origin/main`. A concurrent update stops the push for rebase and
+full re-verification; it is never overwritten.
 After all local and live evidence is terminal green, update this ticket's
 status to `Complete — built and verified 2026-08-03 CDT`, finish its Ledger,
 run `bash scripts/ticket-lifecycle.sh --project . --graduate
@@ -410,10 +359,10 @@ git status --short --branch
 ```
 
 Deck render exit `3` is the only permitted skip. **Phase acceptance:** the
-candidate passes all-history identity and graph equivalence as applicable; all
+candidate passes all-history identity under the explicit merge exemption; all
 733+ local tests and other gates pass; exact GitHub `checks` and Pages runs for
 the published SHA are terminal success; `main`, `origin/main`, and the clean
-canonical checkout agree. Retain Option A backup refs until owner acceptance.
+canonical checkout agree.
 
 ## Testing Strategy
 
@@ -459,16 +408,27 @@ rejected email values in tracked text.
 
 ### Phase 1
 
-- `builder:` pending
-- `red-first:` pending
+- `builder: subagent (1 agent)`
+- `plan:` add the deterministic lock-handoff regression and minimal retry-only
+  repair; the orchestrator repeats every gate and commits the slice.
+- `red-first:` deterministic owner-release case exited `1`; the contender
+  returned `75` with the retry-required diagnostic and no second deposit.
 - `commit:` pending
-- `focused/full gates:` pending
-- `notes/blockers:` pending
+- `focused/full gates:` handoff/live-owner/successor matrix `4/4`; complete
+  feedback file `53/53`; repository Bats `734/734`; shell syntax, Python
+  bytecode, leak, deck freshness/completeness, lifecycle, delegation, and diff
+  checks all exited `0` under independent orchestrator reruns.
+- `notes/blockers:` all eight writer PIDs are now asserted individually. The
+  retry classifier accepts only an absent lock or a fully safe successor;
+  symlink, non-directory, unsafe-mode, and uninspectable states remain fatal.
 
 ### Phase 2
 
-- `builder:` pending
-- `decision:` pending D-4
+- `builder: subagent (1 agent)`
+- `plan:` implement the digest-gated two-parent merge exemption, executable CI
+  event topology, and policy documentation; the orchestrator repeats every
+  gate and commits the slice.
+- `decision: D-4 Option B — native GitHub web merges with narrow digest policy`
 - `red-first:` pending
 - `commit:` pending
 - `focused/full gates:` pending
@@ -476,18 +436,17 @@ rejected email values in tracked text.
 
 ### Phase 3
 
-- `builder: inline (destructive shared history/live GitHub state)`
-- `backup refs / lease:` pending
-- `old/new equivalence:` pending if applicable
+- `builder: inline (canonical push/live GitHub state must be performed and
+  inspected directly by the orchestrator)`
+- `remote preflight:` pending
 - `published SHA:` pending
 - `GitHub checks / Pages:` pending
 - `notes/blockers:` pending
 
 ## Dependencies
 
-- Blocked by: owner resolution of D-4.
-- External state: GitHub Actions, remote `main`, and—under Option A—the exact
-  remote lease plus retained backup refs.
+- Blocked by: None.
+- External state: GitHub Actions and remote `main`.
 - Blocks: a trustworthy green `main` CI baseline and any subsequent merge whose
 result would otherwise inherit the red all-history audit.
 
@@ -497,8 +456,8 @@ result would otherwise inherit the red all-history audit.
 |---|---|
 | Normal handoff retry accidentally accepts a hostile replacement | Re-validate inode kind/ownership/mode before retry and retain deterministic symlink/non-directory failure tests |
 | A broad identity exception turns the guard into theater | Require explicit D-4 choice, config-gate any revision, and pin rejected near-miss merge fixtures |
-| Metadata rewrite changes content/topology or overwrites a new remote update | Immutable backup refs, pairwise graph comparison, exact single `--force-with-lease`, and post-push API audit |
-| Another web merge immediately makes CI red | Ship and test the owner-selected future merge path before publication; document it in the existing canonical identity surface |
+| A future GitHub system tuple changes | The exact digest fails closed; update it through a reviewed policy commit after verifying the new tuple instead of widening matching logic |
+| Another web merge immediately makes CI red | Execute the real PR-to-push topology in Bats and prove the published all-history audit accepts only the configured two-parent merge case |
 | Local green is mistaken for incident closure | Completion requires the exact terminal GitHub run for the published SHA |
 
 ## Out of scope
@@ -507,10 +466,9 @@ result would otherwise inherit the red all-history audit.
 - Retrying the full Bats workflow until the mailbox race happens not to fire.
 - Changing mailbox persistence format, lease duration, feedback schema, or
   cross-harness delivery semantics.
-- Rewriting any commit beyond the six proven identity offenders under the
-  preserve-policy path.
+- Rewriting any published commit or force-pushing `main`.
 - Adding GitHub organization/Enterprise governance unavailable to this personal
   repository.
 
-After D-4 is resolved and recorded, execute with
+Execution is active through
 `execute-ticket docs/tickets/pending/restore-github-ci-integrity.md`.

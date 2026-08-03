@@ -630,6 +630,18 @@ unlock_mailbox() {
 trap unlock_mailbox EXIT
 trap 'unlock_mailbox; exit 130' HUP INT TERM
 
+retryable_lock_handoff_state() {
+  local lock="$1" generation
+  if [ ! -e "$lock" ] && [ ! -L "$lock" ]; then
+    return 0
+  fi
+  safe_dir "$lock" || return 1
+  generation="$(lock_generation "$lock" || true)"
+  [ -n "$generation" ] || {
+    [ ! -e "$lock" ] && [ ! -L "$lock" ]
+  }
+}
+
 lock_mailbox() {
   local box="$1" attempt now identity owner owner_before current_identity
   local owner_live generation owner_kind mtime
@@ -652,22 +664,21 @@ lock_mailbox() {
     fi
     if ! safe_dir "$LOCK_DIR"; then
       # The prior owner may have removed the lock between failed mkdir and
-      # the lstat/mode checks. That normal handoff race is a retry, not mailbox
-      # corruption. Symlinks and non-directory replacements remain fatal.
-      if [ -L "$LOCK_DIR" ] ||
-          { [ -e "$LOCK_DIR" ] && [ ! -d "$LOCK_DIR" ]; }; then
-        return 75
-      fi
-      sleep "$LOCK_SLEEP_SEC"
+      # the safety checks, or a safe successor may already own the path. Both
+      # are retries; unsafe and uninspectable replacements remain fatal.
+      retryable_lock_handoff_state "$LOCK_DIR" || return 75
       continue
     fi
     generation="$(lock_generation "$LOCK_DIR" || true)"
-    [ -n "$generation" ] || return 75
+    if [ -z "$generation" ]; then
+      retryable_lock_handoff_state "$LOCK_DIR" || return 75
+      continue
+    fi
     recover_reaper_markers "$LOCK_DIR" "$generation" || return 75
     # Recovery may have removed only child markers; the lock generation itself
     # remains until a fully validated retirement below.
     safe_dir "$LOCK_DIR" || {
-      sleep "$LOCK_SLEEP_SEC"
+      retryable_lock_handoff_state "$LOCK_DIR" || return 75
       continue
     }
     owner="$LOCK_DIR/owner"
@@ -696,7 +707,10 @@ lock_mailbox() {
       # future value must not pin feedback behind an unrelated process.
       if [ "$(<"$owner")" = "$owner_before" ]; then
         generation="$(lock_generation "$LOCK_DIR" || true)"
-        [ -n "$generation" ] || return 75
+        if [ -z "$generation" ]; then
+          retryable_lock_handoff_state "$LOCK_DIR" || return 75
+          continue
+        fi
         run_lock_recovery_test_hook || return 75
         retire_stale_lock_generation "$LOCK_DIR" "$generation" record \
           "$owner_before" || true
@@ -719,7 +733,10 @@ lock_mailbox() {
          { [ "$mtime" -gt "$now" ] ||
            [ $((now - mtime)) -ge "$CLAIM_LEASE_SEC" ]; }; then
         generation="$(lock_generation "$LOCK_DIR" || true)"
-        [ -n "$generation" ] || return 75
+        if [ -z "$generation" ]; then
+          retryable_lock_handoff_state "$LOCK_DIR" || return 75
+          continue
+        fi
         run_lock_recovery_test_hook || return 75
         retire_stale_lock_generation "$LOCK_DIR" "$generation" "$owner_kind" \
           "$owner_before" || true
