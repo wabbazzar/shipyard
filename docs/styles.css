@@ -56,7 +56,7 @@ a:hover { opacity: 0.8; }
 /* --- Mode Toggle --- */
 .mode-toggle {
   position: fixed;
-  top: 1.5rem;
+  top: calc(1.5rem + env(safe-area-inset-top, 0px));
   right: 1.5rem;
   z-index: 100;
   display: flex;
@@ -974,7 +974,7 @@ html.light .mermaid li { color: inherit; }
    ============================================================ */
 /* Simulate pill — top-left, mirrors the Read/Present pill. Tap = on/off, hold = modal. */
 .sim-pill {
-  position: fixed; top: 1.5rem; left: 1.5rem; z-index: 100;
+  position: fixed; top: calc(1.5rem + env(safe-area-inset-top, 0px)); left: 1.5rem; z-index: 100;
   display: inline-flex; align-items: center; gap: 0.5rem;
   background: #111; border: 1px solid #222; border-radius: 999px;
   padding: 0.45rem 1rem; color: var(--muted);

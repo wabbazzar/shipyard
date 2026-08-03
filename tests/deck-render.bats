@@ -45,6 +45,13 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "fixed deck controls clear the top safe area" {
+  STYLES="$QUARTET_ROOT/docs/styles.css"
+  [ "$(grep -Fc 'top: calc(1.5rem + env(safe-area-inset-top, 0px));' "$STYLES")" -eq 2 ]
+  grep -Fq '.mode-toggle {' "$STYLES"
+  grep -Fq '.sim-pill {' "$STYLES"
+}
+
 @test "detail renderer splits blank lines into escaped linked paragraphs" {
   grep -Fq 'function renderParagraphs(text) {' "$INDEX"
   grep -Fq '.split(/\n\s*\n/)' "$INDEX"

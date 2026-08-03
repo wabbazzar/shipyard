@@ -332,12 +332,33 @@ done
 # synthesize a valid failure result. Downstream consumers (medic
 # post-run, telemetry) feed this file to `jq --argjson`; a 0-byte file
 # poisons them because jq exits 0 with empty output on empty input.
+#
+# Special case (2026-07-28 incident): an account-wide usage cap (weekly/
+# 5-hour/daily limit) makes the harness return a synthetic zero-token
+# message like "You've hit your weekly limit · resets 1am (...)" instead
+# of ever reaching the model — no tool call, no result.json, nonzero
+# exit. That is not a code regression; it self-resolves at the stated
+# reset time and every project's scheduled agents hit it simultaneously.
+# Mark it `incomplete` (like a wall-clock timeout) so release-verdict.sh
+# reports "DID NOT FINISH" instead of "FAILED" and medic doesn't escalate
+# it as a regression to fix.
+RELEASE_FINISH_OPTIONS=()
 if [ ! -s "$WORK_RESULT_FILE" ]; then
-  jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --argjson exit "$EXIT" --arg d "$DISPLAY" '{
-    pass: false, mode: $mode, timestamp: $ts,
-    errors: ["\($d) claude run exited (\($exit)) without writing result.json"]
-  }' > "$WORK_RESULT_FILE"
-  echo "[$SVC] claude run wrote no result.json; synthesized failure result" >> "$LOG_FILE"
+  USAGE_LIMIT_MSG="$(jq -r '.result // ""' <<<"$CLAUDE_OUT" 2>/dev/null || true)"
+  if grep -qEi "hit your (weekly|5-hour|daily) limit|usage limit (reached|exceeded)" <<<"$USAGE_LIMIT_MSG"; then
+    jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --arg msg "$USAGE_LIMIT_MSG" --arg d "$DISPLAY" '{
+      pass: false, incomplete: true, mode: $mode, timestamp: $ts,
+      errors: ["\($d) claude run hit an account usage cap, not a code issue: \($msg)"]
+    }' > "$WORK_RESULT_FILE"
+    echo "[$SVC] claude run hit account usage cap ($USAGE_LIMIT_MSG); marked incomplete, not a failure" >> "$LOG_FILE"
+    RELEASE_FINISH_OPTIONS+=(--no-escalate)
+  else
+    jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --argjson exit "$EXIT" --arg d "$DISPLAY" '{
+      pass: false, mode: $mode, timestamp: $ts,
+      errors: ["\($d) claude run exited (\($exit)) without writing result.json"]
+    }' > "$WORK_RESULT_FILE"
+    echo "[$SVC] claude run wrote no result.json; synthesized failure result" >> "$LOG_FILE"
+  fi
 fi
 
 # The model result stays private until this foreground command has exited and
@@ -570,6 +591,7 @@ JOB_DUR=$(( $(date +%s) - JOB_START ))
 
 # Emit job.end + (on fail) escalate to medic, via shared trailer.
 agent_finish "$SVC" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
+  "${RELEASE_FINISH_OPTIONS[@]}" \
   --episode "$RUN_EPISODE" mode="$MODE" exit_code="$FINAL_EXIT" tokens="$TOKENS" \
   category="$CATEGORY" >> "$LOG_FILE" 2>&1
 
