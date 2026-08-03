@@ -693,13 +693,17 @@ $diff"
     # CRITIC_MODEL, oversized prompt, missing binary) must not retry every
     # poll pass forever. Give up loudly with an event so the failure is
     # visible instead of an infinite silent loop.
-    local sa
+    local sa err_line
     sa="$(retry_state_count "$spawn_attempts_file" "$spawn_generation")"
     sa=$((sa + 1))
+    # The dispatcher already captures the final harness stderr. Preserve one
+    # bounded, single-line diagnostic: an exit code alone cannot distinguish a
+    # missing binary, EACCES, bad model, or an oversized prompt after the run.
+    err_line="$(printf '%s' "${_SPAWN_STDERR:-}" | tr '\r\n' '  ' | cut -c1-300)"
     if [ "$sa" -ge 3 ]; then
-      log "critic claude run failed (exit=$claude_rc) after $sa attempts; giving up on reviewed entries"
+      log "critic claude run failed (exit=$claude_rc) after $sa attempts; giving up on reviewed entries: $err_line"
       emit_event release.critique.spawn_failed source=shoulder \
-        rc="$claude_rc" attempts="$sa" files="$n_files"
+        rc="$claude_rc" attempts="$sa" files="$n_files" stderr="$err_line"
       if [ "$REQUIRE_FEEDBACK" = true ]; then
         write_retry_state "$spawn_attempts_file" "$sa" \
           "$spawn_generation" || true
@@ -712,7 +716,7 @@ $diff"
     else
       write_retry_state "$spawn_attempts_file" "$sa" \
         "$spawn_generation" || true
-      log "critic claude run failed (exit=$claude_rc); queue kept for retry ($sa/3)"
+      log "critic claude run failed (exit=$claude_rc); queue kept for retry ($sa/3): $err_line"
     fi
     return 0
   fi

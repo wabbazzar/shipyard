@@ -31,3 +31,45 @@ setup() {
   run run_runner build "$P" --mode bogus
   [ "$status" -ne 0 ]
 }
+
+@test "build: installer-owned skill links in both discovery roots are not dirty" {
+  P="$(make_fixture_project blskills can-merge-false.toml)"
+  for root in .claude/skills .agents/skills; do
+    mkdir -p "$P/$root"
+  done
+  # .claude is wholly untracked: the runner must enumerate its contents instead
+  # of treating Git's default collapsed `?? .claude/` row as real project dirt.
+  ln -s "$QUARTET_ROOT/skills/bugfix" "$P/.claude/skills/bugfix"
+  ln -s "$QUARTET_ROOT/skills/write-ticket" "$P/.agents/skills/write-ticket"
+
+  # Stop deterministically immediately after pre-flight, without a model call.
+  printf '%s\n' '{"svc":"blskills-build","event":"job.end","tokens":1000000}' \
+    >> "$(events_file)"
+  run run_runner build "$P" --mode live
+
+  [ "$status" -eq 0 ]
+  events_json | jq -e 'select(.event=="build.skipped" and .reason=="budget")' >/dev/null
+  ! events_json | jq -e 'select(.event=="job.end" and .reason=="dirty")' >/dev/null
+}
+
+@test "build: a skill link resolving outside Shipyard remains dirty" {
+  P="$(make_fixture_project bloutside can-merge-false.toml)"
+  mkdir -p "$P/.claude/skills" "$P/not-shipyard"
+  ln -s "$P/not-shipyard" "$P/.claude/skills/bugfix"
+
+  run run_runner build "$P" --mode live
+
+  [ "$status" -eq 0 ]
+  events_json | jq -e 'select(.event=="job.end" and .reason=="dirty")' >/dev/null
+}
+
+@test "build: a broken installer-shaped skill link remains dirty" {
+  P="$(make_fixture_project blbroken can-merge-false.toml)"
+  mkdir -p "$P/.agents/skills"
+  ln -s "$P/missing-skill" "$P/.agents/skills/bugfix"
+
+  run run_runner build "$P" --mode live
+
+  [ "$status" -eq 0 ]
+  events_json | jq -e 'select(.event=="job.end" and .reason=="dirty")' >/dev/null
+}

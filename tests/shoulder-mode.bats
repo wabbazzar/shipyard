@@ -315,7 +315,7 @@ fi"
 
 @test "claude spawn failure gives up loudly after 3 attempts" {
   P="$(make_fixture_project critspawn)"
-  make_stub claude 1
+  make_stub_script claude 'printf "%s\n%s\n" "env: EACCES: permission denied, exec claude" "detail: denied" >&2; exit 126'
   queue_files "$P" s1 2
   export CRITIC_IDLE_SEC=1
 
@@ -333,6 +333,9 @@ fi"
   EV="$(events_json | jq -c 'select(.event=="release.critique.spawn_failed")')"
   [ -n "$EV" ]
   [ "$(jq -r '.attempts' <<<"$EV")" = "3" ]
+  [[ "$output" == *"EACCES"* ]]
+  [ "$(jq -r '.stderr' <<<"$EV")" = "env: EACCES: permission denied, exec claude detail: denied" ]
+  [ "$(jq -r '.stderr | length' <<<"$EV")" -le 300 ]
 }
 
 # ---------------------------------------------------------------------------

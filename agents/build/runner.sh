@@ -135,16 +135,51 @@ if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
 
   # Pre-flight: live only. dry-run does no git ops, so skip.
   if [ "$MODE" = "live" ]; then
-    if [ -n "$(git status --porcelain)" ]; then
-      echo "[$SVC] SKIP: main checkout dirty (benign — not a failure)" >> "$LOG_FILE"
-      git status --short >> "$LOG_FILE"
-      # Benign precondition: uncommitted changes mean "skip this cycle", not a
-      # failure. Record the skip for observability but exit 0 so the systemd
-      # unit does not enter `failed` — which the medic reads as self_failure
-      # and freezes 24h (ticket 041). A routine skip does not page the owner.
-      [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
-        mode="$MODE" status="abort" reason="dirty" || true
-      exit 0
+    # Enumerate files beneath otherwise-wholly-untracked discovery directories;
+    # default porcelain output may collapse them to a single `?? .claude/` row.
+    PORCELAIN="$(git status --porcelain --untracked-files=all)"
+    if [ -n "$PORCELAIN" ]; then
+      # Installer-owned discovery links are runtime state, not project edits.
+      # Exempt only an untracked symlink in one of the two skill roots when its
+      # fully resolved target remains beneath this Shipyard checkout's skills
+      # directory. Broken, retargeted, regular, and modified paths stay dirty.
+      MANAGED_SKILLS_ROOT="$(cd -P "$QUARTET_DIR/skills" 2>/dev/null && pwd -P)"
+      REAL_DIRTY=""
+      while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        path="${line:3}"
+        managed=false
+        case "$line" in
+          '?? .claude/skills/'*|'?? .agents/skills/'*)
+            if [ -n "$MANAGED_SKILLS_ROOT" ] && [ -L "$path" ]; then
+              target="$(readlink "$path" 2>/dev/null || true)"
+              case "$target" in
+                /*) ;;
+                *) target="$(dirname "$path")/$target" ;;
+              esac
+              target="$(cd -P "$target" 2>/dev/null && pwd -P)" || target=""
+              case "$target" in
+                "$MANAGED_SKILLS_ROOT"/*) managed=true ;;
+              esac
+            fi
+            ;;
+        esac
+        [ "$managed" = true ] && continue
+        REAL_DIRTY="$REAL_DIRTY$line
+"
+      done <<<"$PORCELAIN"
+
+      if [ -n "$REAL_DIRTY" ]; then
+        echo "[$SVC] SKIP: main checkout dirty (benign — not a failure)" >> "$LOG_FILE"
+        printf '%s' "$REAL_DIRTY" >> "$LOG_FILE"
+        # Benign precondition: uncommitted changes mean "skip this cycle", not a
+        # failure. Record the skip for observability but exit 0 so the systemd
+        # unit does not enter `failed` — which the medic reads as self_failure
+        # and freezes 24h (ticket 041). A routine skip does not page the owner.
+        [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
+          mode="$MODE" status="abort" reason="dirty" || true
+        exit 0
+      fi
     fi
     CB="$(git rev-parse --abbrev-ref HEAD)"
     if [ "$CB" != "$TRUNK_BRANCH" ]; then
