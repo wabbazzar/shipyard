@@ -2319,3 +2319,29 @@ execute-ticket docs/tickets/pending/shipyard-fleet-inspect-cli.md
   and the lifecycle engine moved this ticket from `pending/` to `complete/`.
 - Commit: `feat: publish fleet inspect operator contract` (orchestrator;
   subagent was instructed not to commit).
+
+## Post-completion field finding — 2026-08-04
+
+A later rolling reconstruction exercised this ticket's historical-benchmark
+contract over `2026-07-30T16:09:30Z` through `2026-08-04T16:09:30Z`. It is not
+the original trial window. The original Phase 12 trial ran over
+`[2026-07-22T00:00:00Z, 2026-07-27T00:00:00Z)` and is owned by Ice's
+`quartet-gaps-guardian-teeth` ticket.
+
+The inspector behaved as specified during the reconstruction: all four floors
+remained `partial` because component evidence exists but the required outcome
+lineage does not. The operator dashboard therefore kept all four promises
+unverified rather than promoting component counts into claims.
+
+The original-window evidence was subsequently adjudicated as T1 PASS, T2 MISS
+at two of three projects, T3 MISS because the only feature was built before its
+later project-ledger approval and had no in-window Dispatch stamp, and T4 PASS:
+two of four floors met. The delayed Work Mac bundle and PR #17 contain August
+3–4 work, so they reconcile current history but do not receive July trial
+credit.
+
+The written misses, third-project real usage, prospective content-free lineage,
+installer usage-source question, dispatch ledger, and presentation closeout are
+tracked in `docs/tickets/pending/close-five-day-trial-findings.md`. This field
+note records operational evidence and does not reopen or redefine this
+completed ticket's acceptance.

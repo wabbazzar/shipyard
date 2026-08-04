@@ -2,8 +2,9 @@
 
 - **Created:** 2026-08-04
 - **Owner:** wabbazzar
-- **Status:** Implementation complete — receiver handoff pending the parallel
-  `specialist-shoulder-polish-routing` ticket
+- **Status:** Awaiting dependency — implementation merged and receiver handoff
+  complete; `specialist-shoulder-polish-routing` still awaits Judgify adoption
+  and live doctor proof
 - **Priority:** high
 - **Type:** bugfix
 - **Estimated Points:** 13 (four phases: 3 · 2 · 5 · 3)
@@ -572,9 +573,12 @@ semantics, and this ticket does not authorize a schema bump or external action.
   `/tmp/shipyard-microscope-evidence.png`,
   `/tmp/shipyard-live-narrow-outcomes.png`, and
   `/tmp/shipyard-live-narrow-crew.png`.
-- Handoff is deliberately not claimed: the parallel specialist ticket still
-  says its Judgify adoption and live doctor proof are pending. No GitHub push
-  originated from this Mac, and `receive-workmac` has not been contacted yet.
+- Receiver handoff completed on 2026-08-04. The verified Work Mac bundle was
+  integrated without touching the dirty Linux checkout, PR #17 passed all six
+  checks, and exact head `493a6e23ded3318b1c0f39671aec84215e53a0a8`
+  merged to `main` as `ab15f11577b3454823ce0371ece9d8dfe86e20cb`.
+  This ticket remains pending only because the parallel specialist ticket still
+  requires Judgify adoption and live doctor proof.
 - `delegation-plan-pipeline` remains pending: its retirement thresholds were not
   met (Codex zero-subagent sessions were 2/12, 16.67%; ledger subagent builders
   were 8/21, 38.1%; remaining metrics were unavailable or incomparable).
