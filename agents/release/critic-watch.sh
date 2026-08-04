@@ -434,7 +434,8 @@ deliver_findings() {
         local failed_lineage=()
         outcome_lineage_enabled && failed_lineage+=("critique_id=$note_id")
         emit_event release.critique.delivery_failed source=shoulder \
-          rc="$note_rc" attempts="$attempts" "${failed_lineage[@]}"
+          rc="$note_rc" attempts="$attempts" \
+          ${failed_lineage[@]+"${failed_lineage[@]}"}
         emit_delivery_disposition "$note_id" failed
         if [ "$REQUIRE_FEEDBACK" = true ]; then
           write_retry_state "$attempts_file" "$attempts" \
@@ -746,11 +747,12 @@ $diff"
       return 0
     }
     outcome_lineage_token_fields
-    critique_lineage=("critique_id=$critique_id" "${OUTCOME_TOKEN_FIELDS[@]}")
+    critique_lineage=("critique_id=$critique_id" \
+      ${OUTCOME_TOKEN_FIELDS[@]+"${OUTCOME_TOKEN_FIELDS[@]}"})
   fi
   emit_event release.critique source=shoulder files="$n_files" \
     block="$n_block" warn="$n_warn" note="$n_note" tokens="$tokens" \
-    "${critique_lineage[@]}"
+    ${critique_lineage[@]+"${critique_lineage[@]}"}
   log "critique: $n_block block, $n_warn warn, $n_note note across $n_files files (tokens=$tokens)"
 
   # ---- deliver to the dev session -------------------------------------------
@@ -770,7 +772,9 @@ eval_pass() {
     done
   fi
   local queue session now mtime idle distinct urgent
-  for queue in "${queues[@]}"; do
+  # Bash 3.2 (the native macOS /bin/bash) considers an empty local array
+  # unbound under `set -u`; the + expansion keeps an idle watcher a no-op.
+  for queue in ${queues[@]+"${queues[@]}"}; do
     [ -s "$queue" ] || continue
     session="${queue##*/critic-queue-}"
     now="$(date +%s)"

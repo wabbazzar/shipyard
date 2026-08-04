@@ -104,6 +104,15 @@ EOF
   marker_dir="$XDG_STATE_HOME/shipyard/critic-feedback/runtime-seen"
   [ -d "$marker_dir" ]
   [ "$(stat -c '%a' "$marker_dir" 2>/dev/null || stat -f '%Lp' "$marker_dir")" = "700" ]
+  watcher="$JOBS/macp-release-watch.plist"
+  [ -f "$watcher" ]
+  grep -Fq "$QUARTET_ROOT/agents/release/critic-watch.sh" "$watcher"
+  grep -Fq "$P/.agents/shoulder.env" "$watcher"
+  grep -Fq 'set -a; . "$1"; set +a' "$watcher"
+  grep -Fq '<key>RunAtLoad</key><true/>' "$watcher"
+  grep -Fq '<key>KeepAlive</key><true/>' "$watcher"
+  grep -Fq "bootstrap gui/" "$SHIM_LOG/launchctl.argv"
+  grep -Fq "$watcher" "$SHIM_LOG/launchctl.argv"
 }
 
 @test "launchd uninstall boots out jobs and removes plists but keeps config" {
