@@ -437,6 +437,26 @@ semantics, and this ticket does not authorize a schema bump or external action.
 - Commit: this phase commit (recorded by Git immediately after this ledger).
 - Installed service was not restarted; no push or external action occurred.
 
+### Phase 1B — Bound the operator summary prelude
+
+- builder: subagent (`retirement_audit`), independently verified by root
+- Plan: cap only operator-path service materialization at the existing 512
+  identity bound, preserve full aggregate counts and `/api/summary`, and carry
+  an internal truncation signal into runtime coverage.
+- RED: the isolated 50,025-identity HTTP regression timed out at 2.001s; profile
+  attributed 6.263s to unbounded terminal re-reads before 0.077s bounded runtime
+  recovery.
+- GREEN: focused fanout and 513-identity boundary cases passed; root observed
+  two HTTP 200 responses and the delegate measured 0.964s/0.924s under the
+  unchanged two-second timeout. Full healthy count stayed 50,026, terminal
+  reads/materialized services stayed at or below 512, and runtime identity/
+  lifecycle truncation remained explicit.
+- Root gates: focused fanout/boundary and unbounded-summary contract tests,
+  Python compilation, and `git diff --check` passed. Delegate server suite ran
+  29/29 and reader+server ran 51/51.
+- Commit: this phase commit (recorded by Git immediately after this ledger).
+- Installed service was not restarted; no push or external action occurred.
+
 Builder appends each remaining phase plan, `builder:` line, commit hash, exact
 gate output, rendered screenshot paths, and honest blockers here before its
 phase commit.

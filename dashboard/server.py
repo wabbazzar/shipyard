@@ -251,10 +251,20 @@ def capture_source_provenance(
     }
 
 
-def _summary_payload(reader: EventReader, window: str) -> dict[str, Any]:
+def _summary_payload(
+    reader: EventReader, window: str, *, service_limit: Optional[int] = None
+) -> dict[str, Any]:
     summary = reader.summarize(window=window)
     services = []
-    for item in summary["services"]:
+    # Counts still describe the full window; only terminal-backed service rows
+    # are materialized to the operator's existing runtime identity bound.
+    summary_services = summary["services"]
+    materialized_services = (
+        summary_services
+        if service_limit is None
+        else itertools.islice(summary_services, service_limit)
+    )
+    for item in materialized_services:
         terminal = reader.read_event(item.reference)
         terminal_reason = terminal.get("reason")
         if terminal_reason not in _TERMINAL_REASONS:
@@ -279,7 +289,7 @@ def _summary_payload(reader: EventReader, window: str) -> dict[str, Any]:
         if item.identity is not None:
             payload["identity"] = dict(zip(("project", "role", "svc"), item.identity))
         actionables.append(payload)
-    return {
+    payload = {
         "window": window,
         "counts": summary["counts"],
         "latest_timestamp": summary["latest_timestamp"],
@@ -290,6 +300,9 @@ def _summary_payload(reader: EventReader, window: str) -> dict[str, Any]:
             for problem in reader.problems
         ],
     }
+    if service_limit is not None and len(summary_services) > service_limit:
+        payload["_services_truncated"] = True
+    return payload
 
 
 class RuntimeLifecycleEvents(list[dict[str, Any]]):
@@ -308,7 +321,7 @@ def _runtime_lifecycle_events(
     identity_projects: dict[tuple[str, str], Optional[str]] = {}
     raw_services = summary.get("services", [])
     services = raw_services if isinstance(raw_services, list) else []
-    if len(services) > MAX_RUNTIME_IDENTITIES:
+    if summary.get("_services_truncated") is True or len(services) > MAX_RUNTIME_IDENTITIES:
         limitations.add("runtime_identities_truncated")
     for raw in services[:MAX_RUNTIME_IDENTITIES]:
         if not isinstance(raw, dict):
@@ -859,7 +872,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             index_refresh_limitation = self.dashboard.index_refresh_limitation()
             reader = self.dashboard.reader
             try:
-                summary = _summary_payload(reader, window)
+                summary = _summary_payload(
+                    reader, window, service_limit=MAX_RUNTIME_IDENTITIES
+                )
                 refs = reader.query_refs(window=window, limit=MAX_LIMIT)
                 events = [reader.read_event(ref) for ref in refs]
                 runtime_events = _runtime_lifecycle_events(reader, window, summary)
