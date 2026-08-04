@@ -5,11 +5,12 @@
 - **Status:** pending
 - **Priority:** high
 - **Type:** bugfix
-- **Estimated Points:** 11 (three phases: 3 · 5 · 3)
+- **Estimated Points:** 13 (four phases: 3 · 2 · 5 · 3)
 - **Refs:** `dashboard/operator.py:2045-2231`,
   `dashboard/operator.py:2408-2472`, `dashboard/operator.py:2545-2619`,
   `dashboard/operator.py:2910-2947`, `dashboard/static/app.js:82-143`,
   `dashboard/static/app.js:164-239`, `dashboard/static/app.js:490-497`,
+  `dashboard/server.py:249-284`, `dashboard/server.py:837-878`,
   `skills/shipyard/shipyard.sh:306-337`,
   `skills/shipyard/inspect.py:1174-1280`,
   `dashboard/tests/test_operator.py:1456-1467`,
@@ -170,8 +171,10 @@ semantics, and this ticket does not authorize a schema bump or external action.
   `ServerTest.test_runtime_lifecycle_fanout_is_globally_bounded_and_reported`
   exceeded its fixed two-second HTTP timeout under host load above 9 on both
   Python 3.11 and native Python 3.14; the endpoint eventually returned `503`.
-  Do not weaken the timeout. Re-run after each phase and distinguish a product
-  regression from this recorded baseline condition.
+  Isolated profiling proved this is deterministic product work, not prior-test
+  leakage: `_summary_payload()` materializes and re-reads all 50,026 service
+  terminals (6.263s) before bounded runtime recovery (0.077s). Phase 1B closes
+  that unbounded prelude. Do not weaken the timeout.
 - Browser baseline: 87 assertions passed in real Chrome at `1440×900`, with
   zero overflow, console/page/request errors, external origins, or stale
   browser processes. The captured unavailable document nevertheless exposed
@@ -224,6 +227,10 @@ semantics, and this ticket does not authorize a schema bump or external action.
    disabled review action when no linked evidence exists.
 7. Preserve ordering, schema version, redaction, response bounds, same-origin
    traffic, keyboard operation, contrast, reduced motion, and SSE restoration.
+8. Bound service materialization and terminal-event reads before operator
+   runtime recovery. Counts may describe the full indexed window, but the
+   operator path cannot perform work proportional to unbounded identity fanout;
+   truncation remains explicit in runtime coverage.
 
 ## Implementation Plan
 
@@ -245,6 +252,27 @@ semantics, and this ticket does not authorize a schema bump or external action.
   anti-cheating clause; return the required evidence in at most 40 lines.
 - Proving it works: focused shell/operator tests plus syntax/compile gates show
   the wrong ambient interpreter can no longer poison the cache.
+
+### Phase 1B — Bound the operator summary prelude (2 pts)
+
+- Add an operator-specific service materialization bound before
+  `_runtime_lifecycle_events()`; preserve full-window aggregate counts and the
+  unbounded `/api/summary` contract.
+- Keep truncation explicit so runtime coverage reports the same bounded-at-
+  maximum limitation rather than silently hiding identities.
+- Extend the existing 50,025-identity HTTP regression to assert the request
+  completes within its unchanged two-second timeout and terminal-event reads
+  are bounded before composition.
+- Files: `dashboard/server.py`, `dashboard/tests/test_server.py`.
+- Delegation: subagent — in only those two files, start from the isolated
+  profile showing `_summary_payload()` consumes 6.263s while bounded runtime
+  recovery consumes 0.077s; add the narrow operator-only bound without changing
+  `/api/summary`, the timeout, or full-window counts. Apply the Orchestration
+  Protocol and anti-cheating clause; return timings and the required evidence
+  in at most 40 lines.
+- Proving it works: the isolated HTTP regression passes under the existing
+  timeout, reports `runtime_lifecycle_truncated`, and demonstrates bounded
+  terminal reads.
 
 ### Phase 2 — Restore truthful operator semantics and evidence closure (5 pts)
 
@@ -319,6 +347,8 @@ semantics, and this ticket does not authorize a schema bump or external action.
       zero attention when inspection is unavailable.
 - [ ] A launchd-like minimal PATH cannot select an incompatible Python after the
       dashboard has already selected a compatible interpreter.
+- [ ] The 50,025-identity operator request completes within the unchanged
+      two-second HTTP timeout, with bounded reads and explicit truncation.
 - [ ] Known reliability alarms remain visible and qualified when inspection is
       unavailable; unknown data never overrides or falsifies known facts.
 - [ ] Missing inspection and relationship sources appear explicitly in coverage.
