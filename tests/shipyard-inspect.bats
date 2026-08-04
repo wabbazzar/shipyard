@@ -556,7 +556,10 @@ print(hashlib.sha256(("manifest\0" + e["source_ref"] + "\0" + operand)
   ' <<<"$output"
   [ "$(stub_calls systemctl)" -eq 0 ]
 
-  python_bin="$(command -v python3)"
+  # Resolve through pyenv/asdf shims before deliberately removing PATH. A
+  # launcher shim may itself require `env bash`, which would test the shim
+  # rather than Shipyard's missing-runtime-dependency behavior.
+  python_bin="$(python3 -c 'import sys; print(sys.executable)')"
   empty_path="$BATS_TEST_TMPDIR/empty-path"
   mkdir -p "$empty_path"
   run env PATH="$empty_path" SHIPYARD_INSPECT_NOW=2026-07-29T12:00:00Z \

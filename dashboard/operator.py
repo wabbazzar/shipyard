@@ -78,6 +78,7 @@ _RUNTIME_TERMINAL_REASONS = {
     "budget",
     "budget_deferred",
 }
+_CONTROLLED_ABORT_REASON_CODES = {"recorded_early_stop"}
 _TOKEN_FIELDS = (
     "input_tokens",
     "cache_read_tokens",
@@ -424,6 +425,11 @@ def _event_evidence_id(event: dict[str, Any]) -> str:
         )
         if isinstance(event.get(key), (str, int, float))
     }
+    if _safe_code(event.get("event")) == "job.end":
+        for key in ("reason", "reason_code"):
+            value = _safe_code(event.get(key))
+            if value is not None:
+                safe[key] = value
     digest = hashlib.sha256(
         json.dumps(safe, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:20]
@@ -449,6 +455,11 @@ def _safe_event_evidence(event: dict[str, Any]) -> dict[str, Any]:
         safe = _safe_id(value)
         if safe is not None:
             fields[key] = safe
+    if fields.get("event") == "job.end":
+        for key in ("reason", "reason_code"):
+            value = _safe_code(event.get(key))
+            if value is not None:
+                fields[key] = value
     for key in _TOKEN_FIELDS + ("duration_s",):
         value = _safe_number(event.get(key))
         if value is not None and value >= 0:
@@ -461,6 +472,17 @@ def _safe_event_evidence(event: dict[str, Any]) -> dict[str, Any]:
         "fields": fields,
         "limitations": [],
     }
+
+
+def _is_controlled_terminal_abort(event: dict[str, Any]) -> bool:
+    if _safe_code(event.get("status")) != "abort":
+        return False
+    reason = _safe_code(event.get("reason"))
+    reason_code = _safe_code(event.get("reason_code"))
+    return (
+        reason in _RUNTIME_TERMINAL_REASONS
+        or reason_code in _CONTROLLED_ABORT_REASON_CODES
+    )
 
 
 def load_presentation_topology(path: Path) -> dict[str, Any]:
@@ -2145,19 +2167,74 @@ def _outcome_document(
 
     terminal = [event for event in events if event.get("event") == "job.end"]
     successful = sum(1 for event in terminal if event.get("status") == "ok")
+    controlled_aborts = [
+        event for event in terminal if _is_controlled_terminal_abort(event)
+    ]
+    actionable_outcomes = [
+        event
+        for event in terminal
+        if event.get("status") != "ok" and not _is_controlled_terminal_abort(event)
+    ]
+    terminal_evidence_ids = list(
+        dict.fromkeys(evidence_id_by_object[id(event)] for event in terminal)
+    )
+
+    def qualified_terminal_claim(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        evidence_ids = list(
+            dict.fromkeys(evidence_id_by_object[id(event)] for event in rows)
+        )
+        return {
+            "count": len(rows),
+            "evidence_ids": evidence_ids[:MAX_GRAPH_EVIDENCE_IDS],
+            "limitations": (
+                ["evidence_truncated"]
+                if len(evidence_ids) > MAX_GRAPH_EVIDENCE_IDS
+                else []
+            ),
+        }
+
+    reliability_limitations = (
+        ["event_window_truncated"]
+        if terminal and event_stream_truncated
+        else ([] if terminal else ["job_terminal_denominator_missing"])
+    )
+    if len(terminal_evidence_ids) > MAX_GRAPH_EVIDENCE_IDS:
+        reliability_limitations.append("evidence_truncated")
     reliability = {
         "state": "partial" if terminal and event_stream_truncated else ("measured" if terminal else "unknown"),
         "completed": len(terminal) if terminal else None,
         "successful": successful if terminal else None,
         "rate": successful / len(terminal) if terminal else None,
-        "limitations": ["event_window_truncated"] if terminal and event_stream_truncated else ([] if terminal else ["job_terminal_denominator_missing"]),
+        "evidence_ids": terminal_evidence_ids[:MAX_GRAPH_EVIDENCE_IDS],
+        "controlled_aborts": qualified_terminal_claim(controlled_aborts),
+        "actionable_outcomes": qualified_terminal_claim(actionable_outcomes),
+        "limitations": reliability_limitations,
     }
     roles = sorted({_safe_code(event.get("role")) for event in events if _safe_code(event.get("role"))})
     role_contracts = []
     for role in roles:
-        started = sum(1 for event in events if event.get("role") == role and event.get("event") == "job.start")
-        completed = sum(1 for event in events if event.get("role") == role and event.get("event") == "job.end")
-        ok = sum(1 for event in events if event.get("role") == role and event.get("event") == "job.end" and event.get("status") == "ok")
+        role_events = [
+            event
+            for event in events
+            if event.get("role") == role and event.get("event") in {"job.start", "job.end"}
+        ]
+        started = sum(1 for event in role_events if event.get("event") == "job.start")
+        completed = sum(1 for event in role_events if event.get("event") == "job.end")
+        ok = sum(
+            1
+            for event in role_events
+            if event.get("event") == "job.end" and event.get("status") == "ok"
+        )
+        role_evidence_ids = list(
+            dict.fromkeys(evidence_id_by_object[id(event)] for event in role_events)
+        )
+        role_limitations = (
+            ["event_window_truncated"]
+            if started and event_stream_truncated
+            else ([] if started else ["role_start_denominator_missing"])
+        )
+        if len(role_evidence_ids) > MAX_GRAPH_EVIDENCE_IDS:
+            role_limitations.append("evidence_truncated")
         role_contracts.append(
             {
                 "role": role,
@@ -2166,7 +2243,8 @@ def _outcome_document(
                 "completed": completed if started else None,
                 "successful": ok if started else None,
                 "completion_rate": completed / started if started else None,
-                "limitations": ["event_window_truncated"] if started and event_stream_truncated else ([] if started else ["role_start_denominator_missing"]),
+                "evidence_ids": role_evidence_ids[:MAX_GRAPH_EVIDENCE_IDS],
+                "limitations": role_limitations,
             }
         )
     token_totals = {key: 0 for key in _TOKEN_FIELDS}
@@ -2414,7 +2492,16 @@ def _coverage_rows(
     evidence_truncated: bool,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    if inspection is not None:
+    if inspection is None:
+        rows.append(
+            {
+                "source": "fleet_inspection",
+                "state": "unavailable",
+                "reason": "snapshot_missing",
+                "limitations": ["inspection_snapshot_missing", "inspection_unavailable"],
+            }
+        )
+    else:
         for raw in _array(inspection.get("coverage")):
             item = _object(raw)
             source = _safe_code(item.get("source"))
@@ -2435,6 +2522,15 @@ def _coverage_rows(
                 if isinstance(number, int) and number >= 0:
                     row[key] = number
             rows.append(row)
+    if relationships is None:
+        rows.append(
+            {
+                "source": "operator_relationships",
+                "state": "unavailable",
+                "reason": "snapshot_missing",
+                "limitations": ["relationship_snapshot_missing"],
+            }
+        )
     rows.extend(
         {
             "source": f"relationships_{row['provider']}",
@@ -2569,6 +2665,23 @@ def _brief_document(
     reliability_state = reliability.get("state")
     if not isinstance(reliability_state, str):
         reliability_state = "unknown"
+    controlled_abort_count = _safe_number(
+        _object(reliability.get("controlled_aborts")).get("count")
+    )
+    actionable_outcome_count = _safe_number(
+        _object(reliability.get("actionable_outcomes")).get("count")
+    )
+    reliability_alarm = (
+        reliability_state == "measured"
+        and isinstance(actionable_outcome_count, int)
+        and actionable_outcome_count > 0
+    )
+    attention_available = inspection_state != "unavailable"
+    attention_limitations = []
+    if attention_truncated:
+        attention_limitations.append("attention_truncated")
+    if not attention_available:
+        attention_limitations.append("inspection_unavailable")
     signals = [
         {
             "id": "promises_verified",
@@ -2585,20 +2698,22 @@ def _brief_document(
             "label": "Successful runs",
             "value": successful if successful is not None and successful >= 0 else None,
             "unit": "completed run" if successful == 1 else "completed runs",
-            "state": reliability_state,
+            "state": "alarm" if reliability_alarm else reliability_state,
             "observed": successful if successful is not None and successful >= 0 else None,
             "total": completed if completed is not None and completed >= 0 else None,
+            "controlled": controlled_abort_count,
+            "actionable": actionable_outcome_count,
             "limitations": _safe_limitations(reliability.get("limitations")),
         },
         {
             "id": "attention",
             "label": "Attention",
-            "value": len(grouped),
-            "unit": "group" if len(grouped) == 1 else "groups",
-            "state": bounded_groups[0]["state"] if bounded_groups else "unknown",
-            "observed": len(bounded_groups),
-            "total": len(grouped),
-            "limitations": ["attention_truncated"] if attention_truncated else [],
+            "value": len(grouped) if attention_available else None,
+            "unit": "group" if attention_available and len(grouped) == 1 else "groups",
+            "state": bounded_groups[0]["state"] if attention_available and bounded_groups else "unknown",
+            "observed": len(bounded_groups) if attention_available else None,
+            "total": len(grouped) if attention_available else None,
+            "limitations": attention_limitations,
         },
     ][:MAX_BRIEF_SIGNALS]
     if bounded_groups:
@@ -2606,6 +2721,16 @@ def _brief_document(
         state = lead["state"]
         takeaway = lead["label"]
         action = lead["action"]
+    elif reliability_alarm:
+        noun = "run" if actionable_outcome_count == 1 else "runs"
+        verb = "needs" if actionable_outcome_count == 1 else "need"
+        state = "alarm"
+        takeaway = f"{actionable_outcome_count} completed {noun} {verb} review"
+        action = "Review the linked terminal evidence"
+    elif inspection_state == "unavailable":
+        state = "unknown"
+        takeaway = "Fleet assessment is unavailable"
+        action = "Restore inspection coverage and reassess the fleet"
     else:
         state = "unknown" if inspection_state != "stale" else "waiting"
         takeaway = "No operator action is currently evidenced"
@@ -2648,13 +2773,35 @@ def _narrative_document(
     ]
     reliability = outcomes["reliability"]
     if reliability["state"] == "measured":
+        controlled_aborts = _safe_number(
+            _object(reliability.get("controlled_aborts")).get("count")
+        ) or 0
+        actionable_outcomes = _safe_number(
+            _object(reliability.get("actionable_outcomes")).get("count")
+        ) or 0
+        reliability_parts = [
+            f"{reliability['successful']} of {reliability['completed']} completed successfully"
+        ]
+        if controlled_aborts:
+            noun = "abort" if controlled_aborts == 1 else "aborts"
+            reliability_parts.append(f"{controlled_aborts} controlled {noun}")
+        if actionable_outcomes:
+            noun = "outcome" if actionable_outcomes == 1 else "outcomes"
+            verb = "needs" if actionable_outcomes == 1 else "need"
+            reliability_parts.append(
+                f"{actionable_outcomes} {noun} {verb} review"
+            )
         beats.append(
             {
                 "id": "story:reliability",
                 "heading": "Runs",
-                "body": f"{reliability['successful']} of {reliability['completed']} completed successfully",
-                "state": "clear" if reliability["successful"] == reliability["completed"] else "alarm",
-                "evidence_ids": [evidence_id for chain in outcomes["chains"] for evidence_id in chain["evidence_ids"]][:20],
+                "body": " · ".join(reliability_parts),
+                "state": (
+                    "alarm"
+                    if actionable_outcomes
+                    else ("waiting" if controlled_aborts else "clear")
+                ),
+                "evidence_ids": reliability["evidence_ids"],
             }
         )
     observed_calls = sum(edge["count"] for edge in topology["observed_edges"] if edge["kind"] == "call")
@@ -2913,7 +3060,16 @@ def make_expensive_loader(repo_root: Path) -> Callable[[str], dict[str, Any]]:
     def load(window: str) -> dict[str, Any]:
         days = WINDOW_DAYS[window]
         inspect_result = subprocess.run(
-            ["bash", str(repo_root / "skills" / "shipyard" / "shipyard.sh"), "inspect", "--json", "--days", str(days)],
+            [
+                "bash",
+                str(repo_root / "skills" / "shipyard" / "shipyard.sh"),
+                "inspect",
+                "--python-executable",
+                sys.executable,
+                "--json",
+                "--days",
+                str(days),
+            ],
             cwd=repo_root,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,

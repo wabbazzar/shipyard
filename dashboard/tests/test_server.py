@@ -170,6 +170,7 @@ class ServerTest(unittest.TestCase):
         status, _, summary = self.json_request("GET", "/api/summary?window=24h")
         self.assertEqual(status, 200)
         self.assertEqual(summary["counts"]["healthy"], 1)
+        self.assertNotIn("_services_truncated", summary)
         self.assertEqual(summary["errors"][0]["file"], self.today.name)
         status, _, events = self.json_request(
             "GET", "/api/events?window=24h&project=alpha&role=build&status=ok&event=job&limit=1"
@@ -578,16 +579,15 @@ class ServerTest(unittest.TestCase):
                 output.write(encode(event))
 
         reader = EventReader(self.root).refresh()
-        summary = {
-            "services": [
-                {
-                    "project": "fanout",
-                    "role": "build",
-                    "svc": event["svc"],
-                }
-                for event in fanout_rows
-            ]
-        }
+        with mock.patch.object(reader, "read_event", wraps=reader.read_event) as summary_read_event:
+            summary = server_module._summary_payload(
+                reader, "24h", service_limit=MAX_RUNTIME_IDENTITIES
+            )
+
+        self.assertEqual(summary["counts"]["healthy"], identity_count + 1)
+        self.assertEqual(len(summary["services"]), MAX_RUNTIME_IDENTITIES)
+        self.assertIs(summary.get("_services_truncated"), True)
+        self.assertLessEqual(summary_read_event.call_count, MAX_RUNTIME_IDENTITIES)
         original_window_refs = reader._window_refs
         scanned_references = 0
 
@@ -606,6 +606,7 @@ class ServerTest(unittest.TestCase):
         self.assertLessEqual(scanned_references, MAX_RUNTIME_SCAN_REFERENCES)
         self.assertLessEqual(read_event.call_count, MAX_RUNTIME_EVENTS_TOTAL)
         self.assertLessEqual(len(runtime_events), MAX_RUNTIME_EVENTS_TOTAL)
+        self.assertIn("runtime_identities_truncated", runtime_events.limitations)
         self.assertLessEqual(
             len({(event["project"], event["role"], event["svc"]) for event in runtime_events}),
             MAX_RUNTIME_IDENTITIES,
@@ -649,18 +650,52 @@ class ServerTest(unittest.TestCase):
         self.running = replacement
         previous.close()
 
+        request_durations = []
         for _ in range(100):
+            request_started = time.monotonic()
             status, _, payload = self.json_request("GET", "/api/operator?window=24h")
+            request_durations.append(time.monotonic() - request_started)
             if payload["metadata"]["inspection_state"] == "fresh":
                 break
             time.sleep(0.01)
 
         self.assertEqual(status, 200)
+        self.assertLess(max(request_durations), 2)
         self.assertIn("runtime_lifecycle_truncated", payload["metadata"]["limitations"])
         runtime_coverage = next(row for row in payload["coverage"] if row["source"] == "runtime_lifecycle")
         self.assertEqual(runtime_coverage["state"], "partial")
         self.assertEqual(runtime_coverage["reason"], "bounded_at_maximum")
         self.assertIn("runtime_lifecycle_truncated", runtime_coverage["limitations"])
+
+    def test_operator_summary_marks_one_identity_over_bound_without_scan_cap(self) -> None:
+        from dashboard.server import MAX_RUNTIME_IDENTITIES
+
+        with self.today.open("ab") as output:
+            for index in range(MAX_RUNTIME_IDENTITIES):
+                output.write(
+                    encode(
+                        row(
+                            "job.end",
+                            seconds_ago=100 + index,
+                            project="boundary",
+                            role="build",
+                            svc=f"boundary-build-{index:06d}",
+                            status="ok",
+                        )
+                    )
+                )
+
+        reader = EventReader(self.root).refresh()
+        summary = server_module._summary_payload(
+            reader, "24h", service_limit=MAX_RUNTIME_IDENTITIES
+        )
+        runtime_events = server_module._runtime_lifecycle_events(reader, "24h", summary)
+
+        self.assertEqual(summary["counts"]["healthy"], MAX_RUNTIME_IDENTITIES + 1)
+        self.assertEqual(len(summary["services"]), MAX_RUNTIME_IDENTITIES)
+        self.assertIs(summary.get("_services_truncated"), True)
+        self.assertIn("runtime_identities_truncated", runtime_events.limitations)
+        self.assertNotIn("runtime_scan_truncated", runtime_events.limitations)
 
     def test_provenance_covers_producers_and_detects_mutation_on_inspection_refresh(self) -> None:
         expected_producers = {

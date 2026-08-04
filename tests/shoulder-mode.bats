@@ -57,6 +57,15 @@ run_watch() {
     bash "$QUARTET_ROOT/$WATCH" --project "$project" "$@"
 }
 
+@test "native Bash watcher treats an empty queue set as an idle no-op" {
+  P="$(make_fixture_project critnativeidle)"
+
+  run env QUARTET_DIR="$QUARTET_ROOT" QUARTET_EVENTS_DIR="$EVENTS_DIR" \
+    /bin/bash "$QUARTET_ROOT/$WATCH" --project "$P" --once
+  [ "$status" -eq 0 ]
+  [ ! -e "$(events_file)" ]
+}
+
 # queue_files <project> <session> <n> — append n distinct entries, creating
 # each file on disk (untracked) so the watcher has real hunks to grade: an
 # empty-diff queue is skipped without spawning the critic.

@@ -28,11 +28,13 @@ OPT_TO=""       # learn: explicit route (project|generic|install)
 OPT_ROLE=""     # learn --to project: which .agents/<role>.md
 OPT_JSON=0      # inspect: emit the schema-v1 source document
 OPT_DAYS="7"    # inspect: rolling UTC window in days
+OPT_INSPECT_PYTHON="" # inspect: embedding process's exact Python interpreter
 OPT_OPEN=0      # dashboard: open the loopback URL after reporting health
 OPT_PROJECT_SET=0
 OPT_TO_SET=0
 OPT_ROLE_SET=0
 OPT_DAYS_SET=0
+OPT_INSPECT_PYTHON_SET=0
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -48,6 +50,9 @@ while [ $# -gt 0 ]; do
     --days)
       [ $# -ge 2 ] || { echo "shipyard: --days requires a value" >&2; exit 2; }
       OPT_DAYS="$2"; OPT_DAYS_SET=1; shift 2 ;;
+    --python-executable)
+      [ $# -ge 2 ] || { echo "shipyard: --python-executable requires a value" >&2; exit 2; }
+      OPT_INSPECT_PYTHON="$2"; OPT_INSPECT_PYTHON_SET=1; shift 2 ;;
     --json)    OPT_JSON=1; shift ;;
     --open)    OPT_OPEN=1; shift ;;
     -h|--help) SUBCMD="help"; shift ;;
@@ -68,6 +73,10 @@ if [ "$SUBCMD" != "dashboard" ] && [ "$OPT_OPEN" -eq 1 ]; then
   echo "shipyard $SUBCMD: --open applies only to dashboard" >&2
   exit 2
 fi
+if [ "$SUBCMD" != "inspect" ] && [ "$OPT_INSPECT_PYTHON_SET" -eq 1 ]; then
+  echo "shipyard $SUBCMD: --python-executable applies only to inspect" >&2
+  exit 2
+fi
 
 # ---- config (optional — status works on a bare dir too) --------------------
 # shellcheck disable=SC1091
@@ -76,7 +85,7 @@ CFG_JSON="{}"
 if [ -f "$PROJECT_DIR/.agents/config.toml" ]; then
   CFG_JSON="$(load_config_json "$PROJECT_DIR/.agents/config.toml" 2>/dev/null)" || CFG_JSON="{}"
 fi
-PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON" 2>/dev/null)"
+PROJECT_NAME="$(jq_from_json "$CFG_JSON" -r '.project_name // empty' 2>/dev/null)"
 [ -n "$PROJECT_NAME" ] || PROJECT_NAME="$(basename "$PROJECT_DIR")"
 
 _scheduler() {
@@ -114,37 +123,26 @@ EOF
 
 # ---- dashboard -------------------------------------------------------------
 _dashboard_manifest_value() {
-  python3 - "$1" "$2" <<'PY'
-import pathlib
-import plistlib
-import re
-import sys
-
-path = pathlib.Path(sys.argv[1])
-key = sys.argv[2]
-if not path.is_file() or path.is_symlink():
-    raise SystemExit(1)
+  python3 -c '
+import pathlib, plistlib, re, sys
+path, key = pathlib.Path(sys.argv[1]), sys.argv[2]
+if not path.is_file() or path.is_symlink(): raise SystemExit(1)
 if path.suffix == ".plist":
     with path.open("rb") as source:
         value = plistlib.load(source).get("EnvironmentVariables", {}).get(key, "")
 else:
-    value = ""
-    prefix = 'Environment="' + key + "="
+    value, prefix = "", "Environment=\"" + key + "="
     for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith(prefix) and line.endswith('"'):
+        if line.startswith(prefix) and line.endswith("\""):
             value = re.sub(r"\\(.)", r"\1", line[len(prefix):-1]).replace("%%", "%")
             break
-if isinstance(value, str):
-    print(value)
-PY
+if isinstance(value, str): print(value)
+' "$1" "$2"
 }
 
 _dashboard_health_record() {
-  python3 - "$1" "$2" "$3" <<'PY'
-import json
-import sys
-import urllib.request
-
+  python3 -c '
+import json, sys, urllib.request
 host, port_text, expected_events = sys.argv[1:]
 port = int(port_text)
 request = urllib.request.Request(
@@ -169,7 +167,7 @@ consistent = (
 print("ready" if consistent else "drift")
 print(actual_events if isinstance(actual_events, str) and actual_events else "unknown")
 print(latest if isinstance(latest, str) and latest else "none")
-PY
+' "$1" "$2" "$3"
 }
 
 _dashboard_valid_port() {
@@ -180,7 +178,7 @@ _dashboard_valid_port() {
 _dashboard_report() {
   local prefix="${1:-}" scheduler dash_home manifest service port host events
   local loaded="false" running="false" health="absent" latest="unknown"
-  local systemctl_cmd launchctl_cmd launch_output="" record="" value=""
+  local systemctl_cmd launchctl_cmd record="" value=""
   scheduler="$(_scheduler)" || { echo "shipyard: unsupported scheduler" >&2; return 2; }
   dash_home="${SHIPYARD_DASHBOARD_HOME:-$HOME}"
   host="127.0.0.1"
@@ -226,9 +224,13 @@ _dashboard_report() {
     if [ "$scheduler" = "launchd" ]; then
       launchctl_cmd="${SHIPYARD_DASHBOARD_LAUNCHCTL:-launchctl}"
       if command -v "$launchctl_cmd" >/dev/null 2>&1; then
-        if launch_output="$("$launchctl_cmd" print "gui/${SHIPYARD_DASHBOARD_UID:-$(id -u)}/$service" 2>/dev/null)"; then
+        if "$launchctl_cmd" print \
+          "gui/${SHIPYARD_DASHBOARD_UID:-$(id -u)}/$service" \
+          >/dev/null 2>&1; then
           loaded="true"
-          if printf '%s\n' "$launch_output" | grep -E 'state = running|pid = [0-9]+' >/dev/null; then
+          if "$launchctl_cmd" print \
+            "gui/${SHIPYARD_DASHBOARD_UID:-$(id -u)}/$service" 2>/dev/null \
+            | grep -E 'state = running|pid = [0-9]+' >/dev/null; then
             running="true"
           fi
         fi
@@ -321,7 +323,7 @@ cmd_inspect() {
     echo "shipyard inspect: unexpected positional argument '${ARGS[0]}'" >&2
     return 2
   }
-  local scheduler unit_dir
+  local scheduler unit_dir python_executable="python3"
   scheduler="$(_scheduler)" || {
     echo "shipyard inspect: unsupported scheduler" >&2
     return 2
@@ -330,8 +332,22 @@ cmd_inspect() {
     systemd) unit_dir="${SHIPYARD_SYSTEMD_DIR:-$HOME/.config/systemd/user}" ;;
     launchd) unit_dir="${SHIPYARD_LAUNCHD_DIR:-$HOME/Library/LaunchAgents}" ;;
   esac
+  if [ "$OPT_INSPECT_PYTHON_SET" -eq 1 ]; then
+    case "$OPT_INSPECT_PYTHON" in
+      /*) : ;;
+      *)
+        echo "shipyard inspect: --python-executable must be an absolute path" >&2
+        return 2
+        ;;
+    esac
+    if [ ! -f "$OPT_INSPECT_PYTHON" ] || [ ! -x "$OPT_INSPECT_PYTHON" ]; then
+      echo "shipyard inspect: --python-executable must be an executable file" >&2
+      return 2
+    fi
+    python_executable="$OPT_INSPECT_PYTHON"
+  fi
   local cmd=(
-    python3 "$QUARTET_DIR/skills/shipyard/inspect.py"
+    "$python_executable" "$QUARTET_DIR/skills/shipyard/inspect.py"
     --core-root "$QUARTET_DIR"
     --unit-dir "$unit_dir"
     --scheduler "$scheduler"
@@ -414,7 +430,28 @@ cmd_add_specialist() {
   [ -f "$log_abs" ] || \
     sed "s/<subsystem>/$sub/g" "$QUARTET_DIR/agents/specialist/decision-log.template.md" > "$log_abs"
 
-  # 2. the specialist subagent definition (archetype role + subsystem pointers)
+  # 2. neutral manifest + project prompt. The manifest is the executable
+  # routing contract shared by every harness; scaffolding validates local
+  # paths and URL shapes without evaluating values or fetching live docs.
+  local specialists_dir="$dir/.agents/specialists"
+  mkdir -p "$specialists_dir"
+  local prompt_rel=".agents/specialists/${sub}.md"
+  local prompt_abs="$dir/$prompt_rel"
+  [ -f "$prompt_abs" ] || \
+    sed -e "s/<slug>/$sub/g" -e "s#<decision_log>#$log_rel#g" \
+      "$QUARTET_DIR/agents/specialist/project-prompt.template.md" > "$prompt_abs"
+  local manifest_rel=".agents/specialists/${sub}.toml"
+  local manifest_abs="$dir/$manifest_rel"
+  [ -f "$manifest_abs" ] || \
+    sed -e "s/<slug>/$sub/g" -e "s#<decision_log>#$log_rel#g" \
+      "$QUARTET_DIR/agents/specialist/manifest.template.toml" > "$manifest_abs"
+  if ! python3 "$QUARTET_DIR/agents/specialist/validate-manifest.py" \
+      --project "$dir" "$manifest_abs"; then
+    echo "add-specialist: invalid manifest: $manifest_rel" >&2
+    return 2
+  fi
+
+  # 3. the Claude discovery surface (archetype role + subsystem pointers)
   mkdir -p "$dir/.claude/agents"
   local agent_file="$dir/.claude/agents/${sub}-specialist.md"
   if [ ! -f "$agent_file" ]; then
@@ -433,7 +470,7 @@ cmd_add_specialist() {
 
   local marker="<!-- shipyard:specialist:$sub -->"
 
-  # 3a. gates.md — a "consult the specialist" note (creates the file if absent)
+  # 4a. gates.md — a "consult the specialist" note (creates the file if absent)
   local gates="$dir/.agents/gates.md"
   if ! grep -qsF "$marker" "$gates"; then
     {
@@ -443,7 +480,7 @@ cmd_add_specialist() {
     } >> "$gates"
   fi
 
-  # 3b. release.md — a HUNK-KEYED file-conditional block (never membership-keyed)
+  # 4b. release.md — a HUNK-KEYED file-conditional block (never membership-keyed)
   local rel="$dir/.agents/release.md"
   if ! grep -qsF "$marker" "$rel"; then
     {
@@ -453,7 +490,7 @@ cmd_add_specialist() {
     } >> "$rel"
   fi
 
-  # 3c. [write_ticket].context_files += the decision log (idempotent line-edit)
+  # 4c. [write_ticket].context_files += the decision log (idempotent line-edit)
   local cfg="$dir/.agents/config.toml"
   if [ -f "$cfg" ]; then
     if ! QUARTET_LOG_REL="$log_rel" python3 - "$cfg" <<'PY'
@@ -502,6 +539,8 @@ PY
   fi
 
   echo "add-specialist: wired '$sub' specialist"
+  echo "  manifest: $manifest_rel"
+  echo "  prompt:   $prompt_rel"
   echo "  agent:   .claude/agents/${sub}-specialist.md"
   echo "  log:     $log_rel"
   echo "  gates:   .agents/gates.md (consult note)"
@@ -539,7 +578,7 @@ _ticket_dir() {
   if [ -f "$d/.agents/config.toml" ]; then
     cfg="$(load_config_json "$d/.agents/config.toml" 2>/dev/null)" || cfg="{}"
   fi
-  rel="$(jq -r '.write_ticket.ticket_dir // empty' <<<"$cfg" 2>/dev/null)"
+  rel="$(jq_from_json "$cfg" -r '.write_ticket.ticket_dir // empty' 2>/dev/null)"
   [ -n "$rel" ] || rel="docs/tickets"
   case "$rel" in /*) printf '%s\n' "$rel" ;; *) printf '%s/%s\n' "$d" "$rel" ;; esac
 }

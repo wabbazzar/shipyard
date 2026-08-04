@@ -1,0 +1,12 @@
+# Generated deterministically by `shipyard add-specialist`.
+# Populate matching paths and canonical live-document entries before enabling
+# executable specialist routing. Shipyard validates this file but never fetches
+# a URL or evaluates a value while scaffolding.
+schema_version = 1
+slug = "<slug>"
+prompt_definition = ".agents/specialists/<slug>.md"
+decision_log = "<decision_log>"
+hunk_path_patterns = []
+ticket_triggers = ["<slug>"]
+external_repository_triggers = []
+live_docs = []

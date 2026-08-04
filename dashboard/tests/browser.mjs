@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
 import {spawn, execFileSync} from "node:child_process";
 import {existsSync} from "node:fs";
-import {mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile} from "node:fs/promises";
+import {appendFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile} from "node:fs/promises";
 import {homedir, tmpdir} from "node:os";
 import {dirname, join, resolve} from "node:path";
 import {fileURLToPath} from "node:url";
@@ -238,7 +238,7 @@ function browserGraphs() {
       id: "graph:architecture", kind: "architecture", label: "Fleet architecture",
       scope: {kind: "current_user_fleet", project_id: null, project_label: null}, state: "declared",
       nodes: [
-        graphNode("role:human", "human", "Human", "declared"),
+        {...graphNode("role:human", "human", "Human", "declared"), reason_code: "inspection_snapshot_missing"},
         graphNode("skill:polish-ticket", "skill", "<img src=x onerror=window.__hostileGraph=1>", "unknown"),
         graphNode("role:build", "role", "Helldiver", "unknown"),
         graphNode("skill:execute-ticket", "skill", "Execute Ticket", "observed"),
@@ -313,6 +313,59 @@ async function main() {
   await mkdir(eventsDir);
   await mkdir(options.screenshotDir, {recursive: true});
   const sentinel = JSON.parse(await readFile(join(here, "fixtures", "operator-sentinel.json"), "utf8"));
+  sentinel.operator.outcomes.reliability.controlled_aborts = {count: 3, evidence_ids: ["ev:first"], limitations: []};
+  sentinel.operator.outcomes.reliability.actionable_outcomes = {count: 1, evidence_ids: ["ev:first"], limitations: []};
+  sentinel.unavailable = structuredClone(sentinel.operator);
+  sentinel.unavailable.metadata = {
+    ...sentinel.unavailable.metadata,
+    generated_at: "2026-08-01T11:59:00Z",
+    inspection_state: "unavailable",
+    refresh_age_seconds: null,
+    limitations: ["inspection_refresh_failed", "inspection_snapshot_missing", "relationship_snapshot_missing"],
+  };
+  sentinel.unavailable.brief = {
+    state: "alarm",
+    takeaway: "1 completed run needs review",
+    action: "Review the linked terminal evidence",
+    signals: [
+      {id: "promises_verified", label: "Promises verified", value: 0, unit: "promises", state: "waiting", observed: 0, total: 2, limitations: ["promise_evidence_incomplete"]},
+      {id: "successful_runs", label: "Successful runs", value: 3, unit: "completed runs", state: "alarm", observed: 3, total: 7, controlled: 3, actionable: 1, limitations: []},
+      {id: "attention", label: "Attention", value: null, unit: "groups", state: "unknown", observed: null, total: null, limitations: ["inspection_unavailable"]},
+    ],
+    attention_groups: [],
+    limitations: ["inspection_unavailable"],
+  };
+  sentinel.unavailable.promises = sentinel.operator.promises.map(promise => ({
+    ...promise,
+    state: "unverified",
+    target: {operator: null, value: null, unit: null},
+    observed_value: null,
+    evidence_ids: [],
+    limitations: ["inspection_unavailable"],
+  }));
+  sentinel.unavailable.outcomes = {
+    ...sentinel.operator.outcomes,
+    role_contracts: sentinel.operator.outcomes.role_contracts.map(contract => ({...contract, evidence_ids: ["ev:first"]})),
+    reliability: {...sentinel.operator.outcomes.reliability, state: "measured", evidence_ids: ["ev:first"], limitations: []},
+    operator_load: {state: "unknown", attention_items: null, evidence_ids: [], limitations: ["operator_attention_unavailable"]},
+  };
+  sentinel.unavailable.coverage = [
+    {source: "fleet_inspection", state: "unavailable", reason: "snapshot_missing", limitations: ["inspection_snapshot_missing", "inspection_unavailable"]},
+    {source: "operator_relationships", state: "unavailable", reason: "snapshot_missing", limitations: ["relationship_snapshot_missing"]},
+    {source: "operator_events", state: "available", reason: "ok", records_total: 19, limitations: []},
+  ];
+  sentinel.unavailable.attention = [];
+  sentinel.operator.evidence = sentinel.operator.evidence.map(row => row.id === "ev:first"
+    ? {...row, reason_code: "inspection_snapshot_missing"}
+    : row);
+  sentinel.unavailable.evidence = sentinel.operator.evidence;
+  sentinel.unavailable.narrative = {
+    heading: sentinel.unavailable.brief.takeaway,
+    subline: sentinel.unavailable.brief.action,
+    focus: sentinel.unavailable.brief.takeaway,
+    operator_action: sentinel.unavailable.brief.action,
+    beats: [{id: "story:inspection", heading: "Inspection", body: "Fleet inspection evidence is unavailable.", state: "unknown", evidence_ids: []}],
+  };
   sentinel.operator.graphs = browserGraphs();
   sentinel.unavailable.graphs = browserGraphs();
   const seed = JSON.parse(await readFile(join(here, "fixtures", "browser-seed.json"), "utf8"));
@@ -362,10 +415,17 @@ async function main() {
   const requestPaths = [];
   const responseStatuses = [];
   const pageErrors = [];
+  const consoleErrors = [];
+  const requestErrors = [];
   let operatorRequests = 0;
+  let unavailableResponses = 0;
+  let recoveredResponses = 0;
+  let allowRecovery = false;
   let pausedApi = true;
   const paused = [];
   let screenshotPath = "";
+  let degradedScreenshotPath = "";
+  let exhaustedScreenshotPath = "";
   let overflow = null;
   let focusOutline = "";
   let scrollBefore = 0;
@@ -384,7 +444,9 @@ async function main() {
       const url = new URL(params.request.url);
       if (url.pathname === "/api/operator") {
         operatorRequests += 1;
-        const document = operatorRequests === 1 ? sentinel.unavailable : sentinel.operator;
+        const document = allowRecovery ? sentinel.operator : sentinel.unavailable;
+        if (allowRecovery) recoveredResponses += 1;
+        else unavailableResponses += 1;
         const body = Buffer.from(JSON.stringify(document)).toString("base64");
         await browser.cdp.send("Fetch.fulfillRequest", {
           requestId: params.requestId,
@@ -414,6 +476,10 @@ async function main() {
       }
     });
     browser.cdp.on("Runtime.exceptionThrown", params => pageErrors.push(params.exceptionDetails.text));
+    browser.cdp.on("Runtime.consoleAPICalled", params => {
+      if (params.type === "error") consoleErrors.push(params.args.map(arg => arg.value ?? arg.description ?? "console error").join(" "));
+    });
+    browser.cdp.on("Network.loadingFailed", params => requestErrors.push(params.errorText));
     browser.cdp.on("Fetch.requestPaused", params => {
       if (pausedApi) paused.push(params);
       else handlePaused(params).catch(error => pageErrors.push(error.message));
@@ -426,10 +492,56 @@ async function main() {
     verify.equal(requestPaths.some(path => path.startsWith("/api/events")), false, "raw events were fetched outside Evidence");
     pausedApi = false;
     for (const params of paused.splice(0)) await handlePaused(params);
-    await waitFor(browser, "document.getElementById('operator-state').textContent.startsWith('Fleet evidence is still loading')", "supplied unavailable state");
-    verify.equal(await evaluate(browser, "document.getElementById('operator-state').textContent"), "Fleet evidence is still loading · retrying locally", "unavailable state or next step drifted");
+    await waitFor(browser, "document.getElementById('operator-state').textContent.startsWith('Fleet inspection unavailable')", "supplied unavailable state");
+    verify.equal(await evaluate(browser, "document.getElementById('operator-state').textContent"), "Fleet inspection unavailable · retrying locally", "failed inspection was presented as loading");
+    const degraded = await evaluate(browser, `({
+      hero: [document.getElementById('brief-takeaway').textContent, document.getElementById('brief-action').textContent, document.querySelector('.brief-hero').dataset.sourceState],
+      attention: [
+        document.querySelector('[data-signal-id="attention"] .signal-value').textContent,
+        document.querySelectorAll('[data-signal-id="attention"] .signal-unit').length,
+        document.querySelector('[data-signal-id="attention"] .signal-coverage').textContent,
+      ],
+      attentionEmpty: document.getElementById('attention-empty').textContent,
+      coverage: [...document.querySelectorAll('#coverage-list li')].map(item => item.textContent),
+      promiseLimits: [...document.querySelectorAll('.promise-card .quiet')].map(item => item.textContent),
+      stableCodesVisible: /inspection_unavailable|inspection_snapshot_missing|relationship_snapshot_missing|snapshot_missing/.test(document.body.innerText),
+      reviewControls: [...document.querySelectorAll('.evidence-action')].map(item => [item.textContent, item.disabled]),
+      zeroReviewControls: [...document.querySelectorAll('.evidence-action')].filter(item => item.textContent === 'Review 0 records').length,
+      overflow: document.documentElement.scrollWidth - innerWidth,
+      mutationControls: [...document.querySelectorAll('button')].map(item => item.textContent.trim()).filter(text => /restart|trigger|merge|deploy/i.test(text)),
+      mutationForms: document.querySelectorAll('form[method="post"], form[method="put"], form[method="delete"]').length,
+    })`);
+    verify.deepEqual(degraded.hero, ["1 completed run needs review", "Review the linked terminal evidence", "alarm"], "qualified measured alarm did not lead degraded inspection");
+    verify.deepEqual(degraded.attention, ["—", 0, "Coverage unknown"], "unavailable attention retained an inapplicable unit");
+    verify.equal(degraded.attentionEmpty, "Inspection-based attention is unavailable.", "unavailable attention retained no-action copy");
+    verify.deepEqual(degraded.coverage, [
+      "Fleet inspection · Unavailable · Snapshot missing · Limits: Inspection snapshot missing, Inspection unavailable",
+      "Operator relationships · Unavailable · Snapshot missing · Limits: Relationship snapshot missing",
+      "Operator events · Available · Ok",
+    ], "degraded coverage limitations were not human-readable");
+    verify.deepEqual(degraded.promiseLimits, ["Limits · Inspection unavailable", "Limits · Inspection unavailable"], "promise limitations leaked machine codes");
+    verify.equal(degraded.stableCodesVisible, false, "stable degraded-state codes leaked into operator copy");
+    verify.deepEqual(degraded.reviewControls, Array.from({length: 5}, () => ["Review 1 record", false]), "nonzero evidence navigation drifted");
+    verify.equal(degraded.zeroReviewControls, 0, "zero-evidence review control was rendered");
+    verify.ok(degraded.overflow <= 0, `degraded horizontal overflow: ${degraded.overflow}px`);
+    verify.deepEqual(degraded.mutationControls, [], "mutation-like controls appeared while degraded");
+    verify.equal(degraded.mutationForms, 0, "mutation form appeared while degraded");
+    degradedScreenshotPath = join(resolve(options.screenshotDir), `dashboard-degraded-${options.width}x${options.height}.png`);
+    await screenshot(browser, degradedScreenshotPath);
+    verify.ok(unavailableResponses >= 1, "unavailable fixture was not held for inspection");
+    await waitFor(browser, "document.getElementById('operator-state').textContent === 'Fleet inspection unavailable · automatic retries stopped'", "exhausted unavailable polling", 10000);
+    verify.equal(await evaluate(browser, "state.unavailablePolls"), 3, "unavailable polling did not stop at its bound");
+    verify.equal(unavailableResponses, 4, "bounded polling did not use the initial response plus three retries");
+    const exhaustedRequests = operatorRequests;
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 1200));
+    verify.equal(operatorRequests, exhaustedRequests, "operator polling continued after exhaustion");
+    exhaustedScreenshotPath = join(resolve(options.screenshotDir), `dashboard-exhausted-${options.width}x${options.height}.png`);
+    await screenshot(browser, exhaustedScreenshotPath);
+    allowRecovery = true;
+    await evaluate(browser, "refreshOperator({preserve: true})");
     await waitFor(browser, "document.getElementById('brief-takeaway').textContent === 'Repair observed Shipyard core job failure'", "bounded operator poll");
-    verify.equal(operatorRequests, 2, "unavailable state did not poll exactly once before fresh document arrived");
+    verify.equal(recoveredResponses, 1, "fresh recovery did not use one explicit operator response");
+    verify.equal(operatorRequests, unavailableResponses + recoveredResponses, "operator response accounting drifted");
     verify.match(await evaluate(browser, "document.getElementById('operator-state').textContent"), /^Updating fleet evidence · showing the last good snapshot from /, "refreshing snapshot was presented as current");
     verify.match(await evaluate(browser, `(() => {
       const original = state.document.metadata.limitations;
@@ -478,6 +590,11 @@ async function main() {
       fresh: "fresh", stale: "stale", unavailable: "unavailable", future_state: "unknown",
     }, "core enum to semantic-token mapping is incomplete");
     verify.equal(await evaluate(browser, "document.querySelector('[data-metric-group=operator_load]').textContent.includes('73')"), true, "supplied operator load lost");
+    verify.deepEqual(await evaluate(browser, `(() => {
+      const card = document.querySelector('[data-metric-group=reliability]');
+      const fields = Object.fromEntries([...card.querySelectorAll('dt')].map(term => [term.textContent, term.nextElementSibling.textContent]));
+      return {controlled: fields['controlled aborts'], actionable: fields['actionable outcomes'], raw: card.textContent.includes('{') || card.textContent.includes('evidence_ids')};
+    })()`), {controlled: "3", actionable: "1", raw: false}, "qualified reliability claims rendered as raw structured data");
     verify.equal(await evaluate(browser, "document.body.textContent.includes('RAW SAYS CLEAR SENTINEL')"), false, "raw event content escaped Evidence mode");
 
     await evaluate(browser, "document.getElementById('tab-outcomes').focus()");
@@ -510,6 +627,10 @@ async function main() {
     verify.ok(topology.firstWidth >= 44 && topology.firstHeight >= 44, "graph node target is below 44px");
     verify.notEqual(topology.activityDisplay, "none", "reduced motion removed the static activity mark");
     verify.equal(topology.activityAnimation, "none", "reduced motion retained an activity pulse");
+    verify.equal(await evaluate(browser, `(() => {
+      const term = [...document.querySelectorAll('#crew-selection dt')].find(item => item.textContent === 'reason code');
+      return term?.nextElementSibling?.textContent;
+    })()`), "Inspection snapshot missing", "Crew reason_code leaked a machine code");
     verify.deepEqual(await evaluate(browser, `(() => {
       const vertical = innerWidth <= 700;
       return [...document.querySelectorAll('#graph-edges > path')].map(path => {
@@ -534,7 +655,7 @@ async function main() {
     verify.equal(await evaluate(browser, "document.getElementById('graph-scope').textContent"), "Scope · project demo (project-safe)", "runtime project scope is ambiguous");
     const runtimeCard = await evaluate(browser, "document.querySelector('[data-node-id=\"runtime:demo:build\"] .node-card').textContent");
     verify.equal(runtimeCard.includes("2 observations"), true, "runtime card omits its observation count");
-    verify.equal(runtimeCard.includes("Terminal · abort / dirty"), true, "runtime card omits its terminal outcome and reason");
+    verify.equal(runtimeCard.includes("Terminal · abort / Dirty"), true, "runtime card omits its terminal outcome and reason");
     verify.equal(runtimeCard.includes("not an outage"), true, "runtime card omits the controlled impact");
     await evaluate(browser, "document.querySelector('[data-node-id=\"runtime:demo:build\"] .node-card').click()");
     verify.equal(await evaluate(browser, "document.getElementById('crew-selection').textContent.includes('not an outage')"), true, "Helldiver terminal outcome lacks its controlled explanation");
@@ -583,6 +704,10 @@ async function main() {
     verify.equal(await evaluate(browser, "document.getElementById('mode-evidence').innerText.includes('abcdef0123456789abcdef0123456789')"), true, "opaque ID was not reachable in Evidence");
     await evaluate(browser, "document.querySelector('[data-evidence-id=\"ev:first\"]').click()");
     verify.equal(await evaluate(browser, "document.querySelector('[data-evidence-id=\"ev:first\"]').getAttribute('aria-current')"), "true", "claim evidence selection was lost");
+    verify.equal(await evaluate(browser, `(() => {
+      const term = [...document.querySelectorAll('#evidence-detail dt')].find(item => item.textContent === 'reason code');
+      return term?.nextElementSibling?.textContent;
+    })()`), "Inspection snapshot missing", "evidence detail reason_code leaked a machine code");
     const hostileEvidence = await evaluate(browser, `({
       executed: window.__hostile === 1,
       elements: Boolean(document.querySelector('#evidence-detail img, #evidence-detail script')),
@@ -623,7 +748,7 @@ async function main() {
     await evaluate(browser, "document.querySelector('[data-evidence-id=\"ev:first\"]').click()");
     scrollBefore = await evaluate(browser, "window.scrollTo(0, Math.min(320, document.documentElement.scrollHeight - innerHeight)); window.scrollY");
     const appended = {ts: new Date().toISOString(), event: "job.end", project: "delta", role: "release", svc: "delta-release", status: "ok", duration_s: 3};
-    await writeFile(eventFile, `${await readFile(eventFile, "utf8")}${JSON.stringify(appended)}\n`);
+    await appendFile(eventFile, `${JSON.stringify(appended)}\n`);
     await waitFor(browser, "document.getElementById('raw-event-count').textContent === '20 raw events'", "SSE raw refresh", 10000);
     await waitFor(browser, `Math.abs(window.scrollY - ${scrollBefore}) <= 2`, "SSE scroll restoration");
     scrollAfter = await evaluate(browser, "window.scrollY");
@@ -671,6 +796,9 @@ async function main() {
     verify.equal(requestPaths.some(path => path.startsWith("/api/summary") || path.startsWith("/api/health")), false, "legacy semantic endpoints were fetched");
     verify.equal(responseStatuses.some(item => item === "/api/operator:200"), true, "operator HTTP 200 not observed");
     verify.equal(responseStatuses.some(item => item === "/api/events:200"), true, "events HTTP 200 not observed");
+    verify.deepEqual(responseStatuses.filter(item => !item.endsWith(":200")), [], "non-200 HTTP response observed");
+    verify.deepEqual(requestErrors, [], `request errors: ${requestErrors.join(" | ")}`);
+    verify.deepEqual(consoleErrors, [], `console errors: ${consoleErrors.join(" | ")}`);
     verify.deepEqual(pageErrors, [], `page errors: ${pageErrors.join(" | ")}`);
 
     await evaluate(browser, "document.getElementById('tab-crew').focus(); document.getElementById('tab-crew').click()");
@@ -684,7 +812,7 @@ async function main() {
 
     console.log(`browser=${browser.version.product} executable=${browser.executable}`);
     console.log(`viewport=${options.width}x${options.height} overflow=${overflow}px outcomes_height=${outcomesHeight}px`);
-    console.log(`operator_requests=${operatorRequests} unavailable_poll=true final_inspection_state=stale operator_wins=true`);
+    console.log(`operator_requests=${operatorRequests} unavailable_responses=${unavailableResponses} recovered_responses=${recoveredResponses} final_inspection_state=stale operator_wins=true`);
     console.log(`modes=Outcomes,Crew,Evidence,Story keyboard=skip,tabs,node,story focus_outline=${focusOutline}`);
     console.log(`graphs=architecture,runtime,branched_delivery paths_equal_supplied=true semantic_equal=true vertical=${options.width <= 700}`);
     console.log(`reduced_motion=static_activity_mark contrast=${JSON.stringify(contrast)}`);
@@ -692,6 +820,8 @@ async function main() {
     console.log(`network=operator:200,events:200 raw_only_in_evidence=true`);
     console.log(`sse=20_raw_events operator_selection_preserved=true raw_selection_preserved=true window_scroll=${scrollBefore}:${scrollAfter} raw_scroll=${rawScrollBefore}:${rawScrollAfter}`);
     console.log(`fixture_read_checksum=${fixtureBefore} unchanged_before_authorized_append=true`);
+    console.log(`degraded_screenshot=${degradedScreenshotPath}`);
+    console.log(`exhausted_screenshot=${exhaustedScreenshotPath}`);
     console.log(`screenshot=${screenshotPath}`);
     console.log(`server_port=${port} server_log_lines=${serverLog.trim().split("\n").filter(Boolean).length}`);
   } finally {

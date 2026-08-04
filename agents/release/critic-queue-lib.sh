@@ -1599,7 +1599,14 @@ cq_enqueue() {
     mkdir -p "$QUEUE_DIR" 2>/dev/null || return 0
   fi
 
-  if ! cq_append_line "$QUEUE_DIR/critic-queue-$SESSION_ID" \
+  local QUEUE_SESSION_ID="$SESSION_ID"
+  case "${CRITIC_QUEUE_NAMESPACE:-}" in
+    "") : ;;
+    claude|codex) QUEUE_SESSION_ID="${CRITIC_QUEUE_NAMESPACE}--$SESSION_ID" ;;
+    *) return 0 ;;
+  esac
+
+  if ! cq_append_line "$QUEUE_DIR/critic-queue-$QUEUE_SESSION_ID" \
       "$FILE_PATH $(date +%s)"; then
     case "$CQ_LAST_ERROR" in
       queue-write)

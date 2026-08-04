@@ -176,7 +176,7 @@ source "$QUARTET_DIR/agents/lib/spawn.sh"
 CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
 
-PROJECT_NAME="$(jq -r '.project_name' <<<"$CFG_JSON")"
+PROJECT_NAME="$(jq_from_json "$CFG_JSON" -r '.project_name')"
 
 # Canonical role identity + resolved display name. `design` resolves to
 # "design" with no [names] block, "mentat" under a spacetime theme.
@@ -187,9 +187,9 @@ source "$QUARTET_DIR/agents/lib/naming.sh"
 DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
 SVC="$PROJECT_NAME-$DISPLAY"
 
-RESULT_DIR_REL="$(jq -r '.paths.result_dir // "tmp"' <<<"$CFG_JSON")"
-BUDGET_TOKENS="$(jq -r '.design.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
-MAX_OPEN="$(jq -r '.design.max_open_proposals // 1' <<<"$CFG_JSON")"
+RESULT_DIR_REL="$(jq_from_json "$CFG_JSON" -r '.paths.result_dir // "tmp"')"
+BUDGET_TOKENS="$(jq_from_json "$CFG_JSON" -r '.design.budget_tokens_daily // 1000000')"
+MAX_OPEN="$(jq_from_json "$CFG_JSON" -r '.design.max_open_proposals // 1')"
 [[ "$BUDGET_TOKENS" =~ ^[0-9]+$ ]] || BUDGET_TOKENS=1000000
 [[ "$MAX_OPEN" =~ ^[0-9]+$ ]] || MAX_OPEN=1
 
@@ -314,7 +314,7 @@ GATES=""
 # North star: the repo's one-line compass, handed to mentat as a directional
 # prior (never a gate). [design].north_star in config wins; else the GitHub
 # repo description; else empty. Soft-fail — a missing gh must not kill the run.
-NORTH_STAR="$(jq -r '.design.north_star // empty' <<<"$CFG_JSON" 2>/dev/null)"
+NORTH_STAR="$(jq_from_json "$CFG_JSON" -r '.design.north_star // empty' 2>/dev/null)"
 if [ -z "$NORTH_STAR" ] && command -v gh >/dev/null 2>&1; then
   NORTH_STAR="$(cd "$PROJECT_DIR" && timeout 10 gh repo view --json description -q .description 2>/dev/null || true)"
 fi

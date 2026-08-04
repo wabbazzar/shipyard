@@ -45,6 +45,28 @@ function labelKey(value) {
   return String(value).replaceAll("_", " ");
 }
 
+function humanizeCode(value) {
+  if (value === null || value === undefined || value === "") return "Not reported";
+  const text = String(value);
+  if (!/^[a-z0-9]+(?:[_:-][a-z0-9]+)*$/.test(text)) return text;
+  const words = text.replaceAll(/[_:-]+/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function isReasonCodeField(key) {
+  return /(?:^|_)reason(?:_code)?$/.test(String(key));
+}
+
+function metricValue(key, value) {
+  if (isReasonCodeField(key)) return humanizeCode(value);
+  if (Array.isArray(value)) return value.map(humanizeCode).join(", ") || "—";
+  if (value && typeof value === "object") {
+    if (Number.isFinite(value.count)) return String(value.count);
+    return Array.isArray(value.evidence_ids) && value.evidence_ids.length ? "See linked evidence" : "Available";
+  }
+  return present(value);
+}
+
 function sourceState(value) {
   return typeof value === "string" && value ? value : "unknown";
 }
@@ -80,21 +102,26 @@ function eventKey(event) {
 }
 
 function limitationsText(value) {
-  return Array.isArray(value) && value.length ? value.map(String).join(", ") : "none";
+  return Array.isArray(value) && value.length ? value.map(humanizeCode).join(", ") : "None";
 }
 
 function evidenceButton(evidenceIds, suppliedCount = null) {
   const ids = Array.isArray(evidenceIds) ? evidenceIds.map(String) : [];
+  if (ids.length === 0) return null;
   const count = Number.isFinite(suppliedCount) && suppliedCount >= 0 ? suppliedCount : ids.length;
   const noun = count === 1 ? "record" : "records";
   const button = element("button", "evidence-action", `Review ${count} ${noun}`);
   button.type = "button";
-  button.disabled = ids.length === 0;
   button.addEventListener("click", () => {
-    state.selectedEvidenceId = ids[0] || null;
+    state.selectedEvidenceId = ids[0];
     setMode("evidence", {focus: true});
   });
   return button;
+}
+
+function appendEvidenceButton(root, evidenceIds, suppliedCount = null) {
+  const button = evidenceButton(evidenceIds, suppliedCount);
+  if (button) root.append(button);
 }
 
 function renderOperatorState() {
@@ -104,7 +131,13 @@ function renderOperatorState() {
   const notice = document.getElementById("operator-state");
   markState(notice, supplied);
   if (supplied === "unavailable") {
-    notice.textContent = "Fleet evidence is still loading · retrying locally";
+    if (state.unavailablePolls >= 3) {
+      notice.textContent = "Fleet inspection unavailable · automatic retries stopped";
+    } else {
+      notice.textContent = limitations.includes("inspection_refresh_failed")
+        ? "Fleet inspection unavailable · retrying locally"
+        : "Fleet inspection not yet available · retrying locally";
+    }
   } else if (limitations.includes("event_index_refresh_failed")) {
     notice.textContent = `Fleet evidence update failed · showing the last good snapshot from ${formatTimestamp(metadata.generated_at)}`;
   } else if (limitations.includes("event_index_refreshing") || supplied === "stale") {
@@ -128,7 +161,10 @@ function renderBrief() {
     card.dataset.order = String(index);
     markState(card, signal.state);
     const value = element("p", "signal-value", present(signal.value));
-    value.append(element("span", "signal-unit", present(signal.unit)));
+    if (signal.value !== null && signal.value !== undefined && signal.value !== ""
+      && signal.unit !== null && signal.unit !== undefined && signal.unit !== "") {
+      value.append(element("span", "signal-unit", present(signal.unit)));
+    }
     const coverage = signal.observed === null || signal.observed === undefined || signal.total === null || signal.total === undefined
       ? "Coverage unknown"
       : `${present(signal.observed)} of ${present(signal.total)} observed`;
@@ -162,7 +198,8 @@ function renderPromises() {
     );
     values.append(observed, target);
     const limitations = element("p", "quiet", `Limits · ${limitationsText(promise.limitations)}`);
-    card.append(title, values, stateMark(promise.state), limitations, evidenceButton(promise.evidence_ids));
+    card.append(title, values, stateMark(promise.state), limitations);
+    appendEvidenceButton(card, promise.evidence_ids);
     return card;
   });
   document.getElementById("promise-list").replaceChildren(...cards);
@@ -178,7 +215,8 @@ function metricCard(group, item, index) {
   const fields = element("dl", "metric-list");
   for (const [key, value] of Object.entries(item || {})) {
     if (key === "state" || key === "limitations" || key === "evidence_ids") continue;
-    fields.append(element("dt", "", labelKey(key)), element("dd", "", present(value)));
+    const display = metricValue(key, value);
+    fields.append(element("dt", "", labelKey(key)), element("dd", "", display));
   }
   fields.append(element("dt", "", "limitations"), element("dd", "", limitationsText(item?.limitations)));
   card.append(fields);
@@ -213,7 +251,11 @@ function renderAttention() {
   const attention = Array.isArray(brief.attention_groups) ? brief.attention_groups : [];
   const signal = (Array.isArray(brief.signals) ? brief.signals : []).find(item => item?.id === "attention");
   document.getElementById("attention-count").textContent = present(signal?.value);
-  document.getElementById("attention-empty").hidden = attention.length !== 0;
+  const empty = document.getElementById("attention-empty");
+  empty.textContent = Array.isArray(brief.limitations) && brief.limitations.includes("inspection_unavailable")
+    ? "Inspection-based attention is unavailable."
+    : "No operator action is currently evidenced.";
+  empty.hidden = attention.length !== 0;
   const cards = attention.map((item, index) => {
     const li = document.createElement("li");
     const card = element("article", "attention-card attention-summary");
@@ -231,8 +273,8 @@ function renderAttention() {
       element("p", "attention-scale", scale),
       stateMark(item.state),
       element("p", "utility", formatTimestamp(item.latest_at)),
-      evidenceButton(item.evidence_ids, item.evidence_count),
     );
+    appendEvidenceButton(card, item.evidence_ids, item.evidence_count);
     li.append(card);
     return li;
   });
@@ -327,9 +369,13 @@ function renderCrewSelection() {
   const fields = element("dl", "evidence-fields");
   for (const [key, value] of Object.entries(node)) {
     if (key === "evidence_ids") continue;
-    fields.append(element("dt", "", labelKey(key)), element("dd", "", key === "last_activity" ? formatTimestamp(value) : present(value)));
+    const display = key === "last_activity"
+      ? formatTimestamp(value)
+      : (key === "limitations" ? limitationsText(value) : (isReasonCodeField(key) ? humanizeCode(value) : present(value)));
+    fields.append(element("dt", "", labelKey(key)), element("dd", "", display));
   }
-  root.replaceChildren(heading, element("p", "card-title", present(node.label)), stateMark(node.state), fields, evidenceButton(node.evidence_ids));
+  root.replaceChildren(heading, element("p", "card-title", present(node.label)), stateMark(node.state), fields);
+  appendEvidenceButton(root, node.evidence_ids);
 }
 
 function renderCrew() {
@@ -382,7 +428,7 @@ function renderCrew() {
         ? node.terminal_status
         : null;
       const terminalReason = typeof node.terminal_reason === "string" && node.terminal_reason
-        ? node.terminal_reason
+        ? humanizeCode(node.terminal_reason)
         : null;
       runtimeDetails.push(
         element("span", "node-meta", observedCount),
@@ -426,7 +472,7 @@ function renderCrew() {
     markState(row, edge.state);
     const from = element("td", "route-endpoint", present(edge.from));
     const to = element("td", "route-endpoint", present(edge.to));
-    const reason = element("td", "route-reason", present(edge.reason));
+    const reason = element("td", "route-reason", humanizeCode(edge.reason));
     const routeState = element("td", "route-meta", `${present(edge.kind)} · ${sourceState(edge.state)}`);
     for (const [cell, label] of [[from, "From"], [to, "To"], [reason, "Why"], [routeState, "State"]]) cell.dataset.label = label;
     row.append(from, to, reason, routeState);
@@ -457,7 +503,10 @@ function evidenceById(id) {
 function detailFields(record) {
   const fields = element("dl", "evidence-fields");
   for (const [key, value] of Object.entries(record || {})) {
-    fields.append(element("dt", "", labelKey(key)), element("dd", "", key === "observed_at" || key === "ts" ? formatTimestamp(value) : present(value)));
+    const display = key === "observed_at" || key === "ts"
+      ? formatTimestamp(value)
+      : (isReasonCodeField(key) ? humanizeCode(value) : present(value));
+    fields.append(element("dt", "", labelKey(key)), element("dd", "", display));
   }
   return fields;
 }
@@ -489,7 +538,11 @@ function renderEvidence() {
   document.getElementById("evidence-list").replaceChildren(...items);
   const coverage = Array.isArray(state.document?.coverage) ? state.document.coverage : [];
   document.getElementById("coverage-list").replaceChildren(...coverage.map((row, index) => {
-    const li = element("li", "", `${present(row.source)} · ${sourceState(row.state)} · ${present(row.reason)}`);
+    const summary = [humanizeCode(row.source), humanizeCode(sourceState(row.state)), humanizeCode(row.reason)];
+    if (Array.isArray(row.limitations) && row.limitations.length) {
+      summary.push(`Limits: ${limitationsText(row.limitations)}`);
+    }
+    const li = element("li", "", summary.join(" · "));
     li.dataset.coverageSource = present(row.source);
     li.dataset.order = String(index);
     markState(li, row.state);
@@ -535,12 +588,14 @@ function renderStory() {
     card.dataset.storyId = present(beat.id);
     card.dataset.order = String(state.storyIndex);
     markState(card, beat.state);
-    card.replaceChildren(
+    const children = [
       element("p", "story-heading", present(beat.heading)),
       element("p", "story-body", present(beat.body)),
       stateMark(beat.state),
-      evidenceButton(beat.evidence_ids),
-    );
+    ];
+    const action = evidenceButton(beat.evidence_ids);
+    if (action) children.push(action);
+    card.replaceChildren(...children);
   }
   document.getElementById("story-previous").disabled = state.storyIndex <= 0;
   document.getElementById("story-next").disabled = !beats.length || state.storyIndex >= beats.length - 1;
@@ -569,6 +624,7 @@ async function fetchJson(path) {
 
 function scheduleUnavailablePoll() {
   clearTimeout(state.pollTimer);
+  state.pollTimer = null;
   if (state.document?.metadata?.inspection_state !== "unavailable" || state.unavailablePolls >= 3) return;
   state.unavailablePolls += 1;
   state.pollTimer = setTimeout(() => refreshOperator({preserve: true}), 1000);

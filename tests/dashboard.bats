@@ -67,7 +67,7 @@ start_dashboard() {
     "{\"ts\":\"$stamp\",\"event\":\"job.end\",\"project\":\"fixture\",\"role\":\"build\",\"svc\":\"fixture-build\",\"status\":\"ok\",\"duration_s\":2}" \
     "{\"ts\":\"$stamp\",\"event\":\"dashboard.fixture\",\"project\":\"fixture\",\"role\":\"release\",\"svc\":\"fixture-release\",\"status\":\"ok\"}" \
     >"$DASH_EVENTS/$today.jsonl"
-  python3 "$QUARTET_ROOT/dashboard/server.py" \
+  "${DASHBOARD_PYTHON:-python3}" "$QUARTET_ROOT/dashboard/server.py" \
     --events-dir "$DASH_EVENTS" --host 127.0.0.1 --port 0 \
     --port-file "$DASH_PORT_FILE" >"$DASH_SERVER_LOG" 2>&1 &
   SERVER_PID=$!
@@ -79,6 +79,43 @@ start_dashboard() {
   [ -s "$DASH_PORT_FILE" ]
   DASH_PORT="$(tr -d '\n' <"$DASH_PORT_FILE")"
   export DASH_PORT SHIPYARD_DASHBOARD_PORT="$DASH_PORT"
+}
+
+@test "operator loader preserves the dashboard Python when ambient python3 is incompatible" {
+  good_python="$(command -v python3)"
+  project="$(make_fixture_project dashboard-interpreter clean-install.toml)"
+  export SHIPYARD_SYSTEMD_DIR="$DASH_UNITS"
+  export CLAUDE_PROJECTS_DIR="$TEST_ROOT/no-claude-transcripts"
+  export CODEX_SESSIONS_DIR="$TEST_ROOT/no-codex-transcripts"
+  mkdir -p "$CLAUDE_PROJECTS_DIR" "$CODEX_SESSIONS_DIR"
+  cat >"$DASH_UNITS/dashboard-interpreter-build.service" <<EOF
+[Service]
+WorkingDirectory=$project
+ExecStart=/bin/bash $QUARTET_ROOT/agents/build/runner.sh --project $project --mode fixture
+EOF
+  make_stub_script python3 '
+printf "%s\n" "ambient python3 cannot import tomllib" >&2
+exit 71
+'
+
+  DASHBOARD_PYTHON="$good_python" start_dashboard
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 \
+    21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40; do
+    payload="$(curl --fail --silent --show-error \
+      "http://127.0.0.1:$DASH_PORT/api/operator?window=24h")"
+    [ "$(jq -r '.metadata.inspection_state' <<<"$payload")" = "fresh" ] && break
+    sleep 0.1
+  done
+
+  jq -e '
+    .metadata.inspection_state == "fresh" and
+    .metadata.inspection_rule_version == "shipyard-inspect-v1" and
+    (.metadata.limitations | index("inspection_refresh_failed") | not)
+  ' <<<"$payload"
+
+  run run_shipyard inspect --json
+  [ "$status" -eq 71 ]
+  [[ "$output" == *"ambient python3 cannot import tomllib"* ]]
 }
 
 install_dashboard_fixture() {

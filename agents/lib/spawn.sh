@@ -44,7 +44,10 @@ _normalize_outcome_usage() {
     [[ "$value" =~ ^[0-9]+$ ]] || printf -v "$name" '%s' ""
   done
   [[ "$SPAWN_PROVIDER" =~ ^[A-Za-z0-9._:@/-]{1,128}$ ]] || SPAWN_PROVIDER=""
-  [[ "$SPAWN_MODEL" =~ ^[A-Za-z0-9._:@/-]{1,256}$ ]] || SPAWN_MODEL=""
+  if [ -z "$SPAWN_MODEL" ] || [ "${#SPAWN_MODEL}" -gt 256 ] ||
+     [[ ! "$SPAWN_MODEL" =~ ^[A-Za-z0-9._:@/-]+$ ]]; then
+    SPAWN_MODEL=""
+  fi
 }
 
 # _run_harness <stdin_mode> <cmd...>

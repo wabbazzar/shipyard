@@ -84,6 +84,40 @@ do_install() {
   [ -z "$(printf '%s' "$output" | grep '^DOCTOR ' || true)" ]
 }
 
+@test "launchd Codex shoulder install prepares private runtime verification state" {
+  launchd_fixture
+  # macOS exposes /var as a symlink to /private/var. The security boundary
+  # intentionally rejects symlinked state-path components, so exercise it with
+  # the physical Bats temp path just as a real configured XDG root should.
+  export XDG_STATE_HOME="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/state"
+  export CODEX_HOME="$BATS_TEST_TMPDIR/codex"
+  mkdir -p "$CODEX_HOME"
+  printf 'model = "gpt-5.6"\n' >"$CODEX_HOME/config.toml"
+  cat >>"$P/.agents/config.toml" <<'EOF'
+
+[shoulder]
+auto_wire = true
+harness = "codex"
+critic_harness = "codex"
+EOF
+
+  run do_install --wire-shoulder
+  echo "$output"
+  [ "$status" -eq 0 ]
+  marker_dir="$XDG_STATE_HOME/shipyard/critic-feedback/runtime-seen"
+  [ -d "$marker_dir" ]
+  [ "$(stat -c '%a' "$marker_dir" 2>/dev/null || stat -f '%Lp' "$marker_dir")" = "700" ]
+  watcher="$JOBS/macp-release-watch.plist"
+  [ -f "$watcher" ]
+  grep -Fq "$QUARTET_ROOT/agents/release/critic-watch.sh" "$watcher"
+  grep -Fq "$P/.agents/shoulder.env" "$watcher"
+  grep -Fq 'set -a; . "$1"; set +a' "$watcher"
+  grep -Fq '<key>RunAtLoad</key><true/>' "$watcher"
+  grep -Fq '<key>KeepAlive</key><true/>' "$watcher"
+  grep -Fq "bootstrap gui/" "$SHIM_LOG/launchctl.argv"
+  grep -Fq "$watcher" "$SHIM_LOG/launchctl.argv"
+}
+
 @test "launchd uninstall boots out jobs and removes plists but keeps config" {
   launchd_fixture
   do_install >/dev/null

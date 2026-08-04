@@ -157,6 +157,23 @@ esac'
   [ "$status" -eq 2 ]
 }
 
+@test "large project config streams through validation and jq without a here-string deadlock" {
+  proj="$(make_fixture_project large-config)"
+  payload="$(printf '%*s' 4096 '' | tr ' ' x)"
+  printf '\n[large_fixture]\npayload = "%s"\n' "$payload" \
+    >>"$proj/.agents/config.toml"
+  source "$QUARTET_ROOT/agents/lib/load-config.sh"
+
+  run timeout 5 bash -c '
+    source "$1/agents/lib/load-config.sh"
+    cfg="$(load_config_json "$2")"
+    jq_from_json "$cfg" -er ".large_fixture.payload | length"
+  ' _ "$QUARTET_ROOT" "$proj/.agents/config.toml"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "4096" ]
+}
+
 # ---------------------------------------------------------------------------
 # Git topology — both trunk commit shapes
 # ---------------------------------------------------------------------------

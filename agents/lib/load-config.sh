@@ -21,8 +21,11 @@ load_config_json() {
     echo "load_config_json: file not found: $cfg_file" >&2
     return 2
   fi
-  local raw
-  raw="$(python3 - "$cfg_file" <<'PY' 2>/dev/null
+  local raw toml_python
+  # shellcheck source=agents/lib/toml-python.sh
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/toml-python.sh"
+  toml_python="$(toml_python_bin)" || return 1
+  raw="$("$toml_python" - "$cfg_file" <<'PY' 2>/dev/null
 import json, sys
 try:
     import tomllib
@@ -40,6 +43,15 @@ PY
   # (The legacy section/merge-key normalization from the old display names is retired;
   # configs were migrated fleet-wide 2026-07-22.)
   printf '%s\n' "$raw"
+}
+
+# Feed JSON through a real producer/consumer pipe. Bash here-strings are backed
+# by a bounded pipe on macOS and can deadlock before jq starts reading once a
+# project config or model response crosses that platform-dependent boundary.
+jq_from_json() {
+  local json="${1:-}"
+  shift || true
+  printf '%s\n' "$json" | command jq "$@"
 }
 
 # Make the validated opt-in helpers available to every caller that sources the

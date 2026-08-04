@@ -17,6 +17,9 @@ csg_gate() {
   [ "${CRITIC_BLOCK:-0}" = "1" ] || return 0
   local SESSION_ID="${1:-}" PROJECT_DIR="${2:-$PWD}" QUEUE_DIR FF BLOCKS
   [ -n "$SESSION_ID" ] || SESSION_ID="default"
+  case "${CRITIC_QUEUE_NAMESPACE:-}" in
+    claude|codex) SESSION_ID="${CRITIC_QUEUE_NAMESPACE}--$SESSION_ID" ;;
+  esac
   if [ -d "$PROJECT_DIR/tmp" ]; then
     QUEUE_DIR="$PROJECT_DIR/tmp"
   else
@@ -264,7 +267,7 @@ csg_status_kind() {
 # Exit 2 is reserved for invalid required-feedback configuration or the legacy
 # CRITIC_BLOCK compatibility path.
 csg_codex_stop() {
-  local input="$1" project session turn active last session_hash turn_hash
+  local input="$1" project session session_key turn active last session_hash turn_hash
   local queue_dir queue flush status state phase state_reason wait_sec poll_sec
   local pending_reason terminal_reason state_json marker_json
   jq -e 'type == "object"' <<<"$input" >/dev/null 2>&1 || {
@@ -302,6 +305,10 @@ csg_codex_stop() {
     return 2
   }
   csg_read_required_feedback "$project" || return $?
+  session_key="$session"
+  case "${CRITIC_QUEUE_NAMESPACE:-}" in
+    claude|codex) session_key="${CRITIC_QUEUE_NAMESPACE}--$session" ;;
+  esac
 
   if [ -d "$project/tmp" ]; then
     queue_dir="$project/tmp"
@@ -309,9 +316,9 @@ csg_codex_stop() {
     queue_dir="/tmp/shipyard-critic-$(id -u)/$(basename "$project")"
   fi
   CSG_QUEUE_DIR="$queue_dir"
-  queue="$queue_dir/critic-queue-$session"
-  session_hash="$(csg_hash_text "shipyard-session-v1:$session")" || return 2
-  turn_hash="$(csg_hash_text "shipyard-turn-v1:$session:$turn")" || return 2
+  queue="$queue_dir/critic-queue-$session_key"
+  session_hash="$(csg_hash_text "shipyard-session-v1:$session_key")" || return 2
+  turn_hash="$(csg_hash_text "shipyard-turn-v1:$session_key:$turn")" || return 2
   flush="$queue_dir/critic-flush-$session_hash"
   status="$queue_dir/critic-status-$session_hash"
   state="$queue_dir/critic-stop-state-$session_hash-$turn_hash"

@@ -4,13 +4,13 @@
 outcome_lineage_validate() {
   local cfg="${1:-}"
   [ -n "$cfg" ] || cfg='{}'
-  jq -e '
+  printf '%s\n' "$cfg" | jq -e '
     if has("telemetry") then
       (.telemetry | type) == "object" and
       ((.telemetry | has("outcome_lineage") | not) or
        ((.telemetry.outcome_lineage | type) == "boolean"))
     else true end
-  ' <<<"$cfg" >/dev/null 2>&1 || {
+  ' >/dev/null 2>&1 || {
     echo "telemetry.outcome_lineage must be boolean" >&2
     return 2
   }
@@ -21,7 +21,7 @@ outcome_lineage_configure() {
   [ -n "$cfg" ] || cfg='{}'
   outcome_lineage_validate "$cfg" || return 2
   QUARTET_OUTCOME_LINEAGE="$(
-    jq -r '.telemetry.outcome_lineage // false' <<<"$cfg"
+    printf '%s\n' "$cfg" | jq -r '.telemetry.outcome_lineage // false'
   )"
   export QUARTET_OUTCOME_LINEAGE
   unset QUARTET_RUN_ID
@@ -50,7 +50,9 @@ outcome_lineage_token_fields() {
   outcome_lineage_enabled || return 0
   [[ "${SPAWN_PROVIDER:-}" =~ ^[A-Za-z0-9._:@/-]{1,128}$ ]] &&
     OUTCOME_TOKEN_FIELDS+=("provider=$SPAWN_PROVIDER")
-  [[ "${SPAWN_MODEL:-}" =~ ^[A-Za-z0-9._:@/-]{1,256}$ ]] &&
+  [ -n "${SPAWN_MODEL:-}" ] &&
+    [ "${#SPAWN_MODEL}" -le 256 ] &&
+    [[ "$SPAWN_MODEL" =~ ^[A-Za-z0-9._:@/-]+$ ]] &&
     OUTCOME_TOKEN_FIELDS+=("model=$SPAWN_MODEL")
   [[ "${SPAWN_INPUT_TOKENS:-}" =~ ^[0-9]+$ ]] &&
     OUTCOME_TOKEN_FIELDS+=("input_tokens=$SPAWN_INPUT_TOKENS")

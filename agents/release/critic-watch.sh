@@ -82,23 +82,23 @@ if [ -f "$PROJECT_DIR/.agents/config.toml" ]; then
   fi
 fi
 outcome_lineage_configure "$CFG_JSON" || exit 2
-PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON")"
+PROJECT_NAME="$(jq_from_json "$CFG_JSON" -r '.project_name // empty')"
 [ -n "$PROJECT_NAME" ] || PROJECT_NAME="$(basename "$PROJECT_DIR")"
-BUDGET_TOKENS="$(jq -r '.release.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
+BUDGET_TOKENS="$(jq_from_json "$CFG_JSON" -r '.release.budget_tokens_daily // 1000000')"
 # When true, annotate any CHANGED FILES entry that has NO diff hunk with a
 # "(no hunks)" marker, so a project-authored file-conditional critic check can
 # key on real +/- hunks instead of mere list membership (the changed-file list
 # is a superset of the files that actually have hunks — a hook-queued but
 # reverted tracked file lands in the list with no delta). Default false ⇒ the
 # CHANGED FILES block is byte-identical to before.
-HUNK_SAFE="$(jq -r '.release.hunk_safe_gates // false' <<<"$CFG_JSON")"
-REQUIRE_FEEDBACK="$(jq -cr '
+HUNK_SAFE="$(jq_from_json "$CFG_JSON" -r '.release.hunk_safe_gates // false')"
+REQUIRE_FEEDBACK="$(jq_from_json "$CFG_JSON" -cr '
   if (.shoulder | type) == "object" and
      (.shoulder | has("require_feedback"))
   then .shoulder.require_feedback
   else false
   end
-' <<<"$CFG_JSON" 2>/dev/null || echo invalid)"
+' 2>/dev/null || echo invalid)"
 case "$REQUIRE_FEEDBACK" in
   true|false) ;;
   *)
@@ -331,6 +331,8 @@ emit_delivery_disposition() {
 deliver_findings() {
   local queue="$1" session="$2" findings_file="$3" n_files="$4"
   local supplied_id="${5:-}"
+  local delivery_session="${6:-$session}"
+  local author_harness="${7:-${CRITIC_NOTE_HARNESS:-claude}}"
   local findings n_block n_warn n_note
   DELIVERY_STATUS=delivery
   findings="$(cat "$findings_file" 2>/dev/null || true)"
@@ -391,8 +393,15 @@ deliver_findings() {
     return 0
   fi
   # shellcheck disable=SC2086 — word-splitting CLAUDE_NOTE_CMD is intentional
-  CRITIC_NOTE_ID="$note_id" CRITIC_PROJECT_DIR="$PROJECT_DIR" \
-    $CLAUDE_NOTE_CMD "$session" "$summary"
+  if [ "${CRITIC_MULTI_AUTHOR:-false}" = "true" ]; then
+    CRITIC_NOTE_ID="$note_id" CRITIC_PROJECT_DIR="$PROJECT_DIR" \
+      CRITIC_NOTE_HARNESS="$author_harness" \
+      "$QUARTET_DIR/agents/release/critic-note.sh" --harness "$author_harness" \
+      "$delivery_session" "$summary"
+  else
+    CRITIC_NOTE_ID="$note_id" CRITIC_PROJECT_DIR="$PROJECT_DIR" \
+      $CLAUDE_NOTE_CMD "$session" "$summary"
+  fi
   note_rc=$?
   case "$note_rc" in
     0)
@@ -434,7 +443,8 @@ deliver_findings() {
         local failed_lineage=()
         outcome_lineage_enabled && failed_lineage+=("critique_id=$note_id")
         emit_event release.critique.delivery_failed source=shoulder \
-          rc="$note_rc" attempts="$attempts" "${failed_lineage[@]}"
+          rc="$note_rc" attempts="$attempts" \
+          ${failed_lineage[@]+"${failed_lineage[@]}"}
         emit_delivery_disposition "$note_id" failed
         if [ "$REQUIRE_FEEDBACK" = true ]; then
           write_retry_state "$attempts_file" "$attempts" \
@@ -462,16 +472,19 @@ deliver_findings() {
 # queued files, whose header carries the absolute path ending in the relative
 # one). Used only when [release].hunk_safe_gates=true.
 _annotate_no_hunk() {
-  local list="$1" d="$2" f headers
-  headers="$(printf '%s\n' "$d" | grep -E '^(diff --git |\+\+\+ |--- )' || true)"
+  local list="$1" d="$2" f headers_file
+  headers_file="$(mktemp "${TMPDIR:-/tmp}/shipyard-hunk-headers.XXXXXX")" || return 1
+  printf '%s\n' "$d" |
+    grep -E '^(diff --git |\+\+\+ |--- )' >"$headers_file" || true
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    if printf '%s\n' "$headers" | grep -qF -- "$f"; then
+    if grep -qF -- "$f" "$headers_file"; then
       printf '%s\n' "$f"
     else
       printf '%s (no hunks)\n' "$f"
     fi
   done <<<"$list"
+  rm -f "$headers_file"
 }
 
 # Keep the release prompt portable across every selectable critic harness.
@@ -499,6 +512,8 @@ sys.stdout.buffer.write(data.decode("utf-8", "ignore").encode("utf-8"))' \
 # ---------- one critique over a queue file ----------------------------------
 critique_queue() {
   local queue="$1" session="$2"
+  local delivery_session="${3:-$session}"
+  local author_harness="${4:-${CRITIC_NOTE_HARNESS:-claude}}"
   local findings_file="$QUEUE_DIR/critic-findings-$session"
   local findings_files_count="$QUEUE_DIR/critic-findings-files-$session"
   local retry_snapshot="$QUEUE_DIR/critic-snapshot-$session"
@@ -515,7 +530,8 @@ critique_queue() {
         sort -u | grep -c . || true)"
     fi
     log "reusing cached critique for session $session (delivery retry)"
-    deliver_findings "$queue" "$session" "$findings_file" "$cached_n"
+    deliver_findings "$queue" "$session" "$findings_file" "$cached_n" "" \
+      "$delivery_session" "$author_harness"
     return 0
   fi
 
@@ -569,10 +585,21 @@ critique_queue() {
   fi
 
   # ---- gather the diff for the exact queued edit batch ----------------------
-  local trunk="" diff="" changed=""
+  local trunk="" remote_trunk="" diff="" changed=""
   # shellcheck disable=SC1091
   source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
   trunk="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR" 2>/dev/null)" || trunk=""
+  # Shoulder review is read-only and should grade against the fetched remote
+  # trunk when detect_trunk returns a simple configured branch name. A local
+  # branch may have advanced independently and would contaminate the queued
+  # hunk. Explicit refs (origin/main, refs/heads/main, tags/...) are already
+  # intentional and remain untouched; missing remotes retain the old fallback.
+  if [ -n "$trunk" ] && [[ "$trunk" != */* ]]; then
+    remote_trunk="refs/remotes/origin/$trunk"
+    if git -C "$PROJECT_DIR" show-ref --verify --quiet "$remote_trunk"; then
+      trunk="$remote_trunk"
+    fi
+  fi
   if [ -z "$trunk" ] ||
      ! git -C "$PROJECT_DIR" rev-parse -q --verify "$trunk" >/dev/null 2>&1; then
     trunk=HEAD
@@ -729,14 +756,162 @@ $diff"
   result_text="$SPAWN_TEXT"
   tokens="$SPAWN_TOKENS"
 
+  # ---- matching specialist reviews -----------------------------------------
+  # The generic cold critic above always runs first. Only then do validated
+  # specialist manifests select a second review from actual diff hunks. The
+  # helper parses data only: it executes no manifest values and performs no
+  # network access.
+  local specialist_helper="$QUARTET_DIR/agents/release/specialist-review.py"
+  local generic_findings specialist_findings selection_file diff_file
+  local response_file evidence_file reviewed_at specialist_count=0
+  generic_findings="$(mktemp "$QUEUE_DIR/.critic-generic.XXXXXX")" || return 0
+  specialist_findings="$(mktemp "$QUEUE_DIR/.critic-specialist.XXXXXX")" || {
+    rm -f "$generic_findings"; return 0;
+  }
+  selection_file="$(mktemp "$QUEUE_DIR/.critic-selection.XXXXXX")" || {
+    rm -f "$generic_findings" "$specialist_findings"; return 0;
+  }
+  diff_file="$(mktemp "$QUEUE_DIR/.critic-diff.XXXXXX")" || {
+    rm -f "$generic_findings" "$specialist_findings" "$selection_file"; return 0;
+  }
+  response_file="$(mktemp "$QUEUE_DIR/.critic-response.XXXXXX")" || {
+    rm -f "$generic_findings" "$specialist_findings" "$selection_file" "$diff_file"; return 0;
+  }
+  printf '%s\n' "$result_text" | grep -E '^(block|warn|note)\|' \
+    >"$generic_findings" || true
+  : >"$specialist_findings"
+  printf '%s' "$full_diff" >"$diff_file"
+  evidence_file="$QUEUE_DIR/critic-specialist-sources-$session"
+  rm -f "$evidence_file"
+  if ! python3 "$specialist_helper" select --project "$PROJECT_DIR" \
+      --shipyard "$QUARTET_DIR" --diff-file "$diff_file" >"$selection_file"; then
+    log "specialist selection failed; generic findings withheld and queue kept"
+    emit_event release.critique.specialist_failed source=shoulder \
+      reason=manifest_or_selection files="$n_files"
+    rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+      "$diff_file" "$response_file"
+    return 0
+  fi
+  specialist_count="$(jq -r 'length' "$selection_file" 2>/dev/null || echo invalid)"
+  if ! [[ "$specialist_count" =~ ^[0-9]+$ ]]; then
+    log "specialist selection returned malformed output; queue kept"
+    rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+      "$diff_file" "$response_file"
+    return 0
+  fi
+
+  local specialist_entry slug prompt_rel log_rel specialist_project specialist_log
+  local specialist_gates specialist_hunks live_docs registry specialist_prompt
+  local specialist_rc specialist_tokens=0
+  while IFS= read -r specialist_entry; do
+    [ -n "$specialist_entry" ] || continue
+    slug="$(jq -r '.slug' <<<"$specialist_entry")"
+    prompt_rel="$(jq -r '.prompt_definition' <<<"$specialist_entry")"
+    log_rel="$(jq -r '.decision_log' <<<"$specialist_entry")"
+    specialist_project="$(_bounded_prompt_section \
+      "$(cat "$PROJECT_DIR/$prompt_rel")" 16000 "SPECIALIST PROJECT PROMPT")"
+    specialist_log="$(_bounded_prompt_section \
+      "$(cat "$PROJECT_DIR/$log_rel")" 24000 "SPECIALIST DECISION LOG")"
+    specialist_gates=""
+    [ ! -f "$PROJECT_DIR/.agents/gates.md" ] || \
+      specialist_gates="$(cat "$PROJECT_DIR/.agents/gates.md")"
+    specialist_gates="$(_bounded_prompt_section "$specialist_gates" 16000 \
+      "PROJECT GATES")"
+    specialist_hunks="$(jq -r '.hunks' <<<"$specialist_entry")"
+    specialist_hunks="$(_bounded_prompt_section "$specialist_hunks" 60000 \
+      "MATCHING HUNKS")"
+    live_docs="$(jq -c '.live_docs' <<<"$specialist_entry")"
+    registry="$(jq -c 'del(.hunks)' <<<"$specialist_entry")"
+    registry="$(_bounded_prompt_section "$registry" 12000 \
+      "SPECIALIST MANIFEST REGISTRY")"
+    specialist_prompt="$(cat "$QUARTET_DIR/agents/specialist/role.md")
+
+---
+
+SHOULDER REVIEW CONTRACT:
+
+This is a review-only, cold-context invocation for specialist '$slug'. Do not
+write files, change code, mutate cloud state, or create a pull request. Review
+only the exact matching hunks below. Use only read-only documentation retrieval.
+For every LIVE SOURCE REGISTRY entry, attempt current retrieval when access
+permits and return one evidence line:
+source|URL|UTC_RETRIEVAL_TIME|success|EXACT_CLAIM_SUPPORTED
+Use status failure or unverified with the precise evidence gap when retrieval
+does not succeed. Never replace failed retrieval with model memory.
+
+SPECIALIST MANIFEST REGISTRY:
+
+$registry
+
+---
+
+PROJECT SPECIALIST PROMPT:
+
+$specialist_project
+
+---
+
+DECISION LOG:
+
+$specialist_log
+
+---
+
+PROJECT GATES:
+
+$specialist_gates
+
+---
+
+LIVE SOURCE REGISTRY (canonical pointers only; read-only retrieval):
+
+$live_docs
+
+---
+
+EXACT MATCHING HUNKS:
+
+$specialist_hunks"
+
+    spawn_model --harness "${CRITIC_HARNESS:-claude}" \
+      --model "${CRITIC_MODEL:-}" --provider "${CRITIC_PROVIDER:-}" \
+      --prompt "$specialist_prompt" --log /dev/null --json
+    specialist_rc="$SPAWN_RC"
+    if [ "$specialist_rc" -ne 0 ] || [ -z "$SPAWN_RAW" ]; then
+      log "specialist '$slug' review failed (exit=$specialist_rc); queue kept"
+      emit_event release.critique.specialist_failed source=shoulder \
+        reason=spawn specialist="$slug" rc="$specialist_rc" files="$n_files"
+      rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+        "$diff_file" "$response_file" "$evidence_file"
+      return 0
+    fi
+    specialist_tokens=$((specialist_tokens + SPAWN_TOKENS))
+    printf '%s\n' "$SPAWN_TEXT" >"$response_file"
+    grep -E '^(block|warn|note)\|' "$response_file" \
+      >>"$specialist_findings" || true
+    reviewed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    python3 "$specialist_helper" source-evidence \
+      --live-docs-json "$live_docs" --response-file "$response_file" \
+      --reviewed-at "$reviewed_at" >>"$evidence_file" || {
+        log "specialist '$slug' source evidence was malformed; queue kept"
+        rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+          "$diff_file" "$response_file" "$evidence_file"
+        return 0
+      }
+  done < <(jq -c '.[]' "$selection_file")
+
   local findings n_block n_warn n_note
-  findings="$(grep -E '^(block|warn|note)\|' <<<"$result_text" || true)"
+  findings="$(python3 "$specialist_helper" merge-findings \
+    "$generic_findings" "$specialist_findings")"
+  tokens=$((tokens + specialist_tokens))
   n_block="$(grep -c '^block|' <<<"$findings" || true)"
   n_warn="$(grep -c '^warn|' <<<"$findings" || true)"
   n_note="$(grep -c '^note|' <<<"$findings" || true)"
 
   printf '%s\n' "$findings" >"$findings_file"
   printf '%s\n' "$n_files" >"$findings_files_count"
+  rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+    "$diff_file" "$response_file"
 
   local critique_id="" critique_lineage=() summary
   if outcome_lineage_enabled; then
@@ -746,15 +921,18 @@ $diff"
       return 0
     }
     outcome_lineage_token_fields
-    critique_lineage=("critique_id=$critique_id" "${OUTCOME_TOKEN_FIELDS[@]}")
+    critique_lineage=("critique_id=$critique_id" \
+      ${OUTCOME_TOKEN_FIELDS[@]+"${OUTCOME_TOKEN_FIELDS[@]}"})
   fi
   emit_event release.critique source=shoulder files="$n_files" \
     block="$n_block" warn="$n_warn" note="$n_note" tokens="$tokens" \
-    "${critique_lineage[@]}"
+    specialists="$specialist_count" \
+    ${critique_lineage[@]+"${critique_lineage[@]}"}
   log "critique: $n_block block, $n_warn warn, $n_note note across $n_files files (tokens=$tokens)"
 
   # ---- deliver to the dev session -------------------------------------------
-  deliver_findings "$queue" "$session" "$findings_file" "$n_files" "$critique_id"
+  deliver_findings "$queue" "$session" "$findings_file" "$n_files" "$critique_id" \
+    "$delivery_session" "$author_harness"
   return 0
 }
 
@@ -769,10 +947,20 @@ eval_pass() {
       [ -e "$q" ] && queues+=("$q")
     done
   fi
-  local queue session now mtime idle distinct urgent
-  for queue in "${queues[@]}"; do
+  local queue session delivery_session author_harness now mtime idle distinct urgent
+  # Bash 3.2 (the native macOS /bin/bash) considers an empty local array
+  # unbound under `set -u`; the + expansion keeps an idle watcher a no-op.
+  for queue in ${queues[@]+"${queues[@]}"}; do
     [ -s "$queue" ] || continue
     session="${queue##*/critic-queue-}"
+    delivery_session="$session"
+    author_harness="${CRITIC_PRIMARY_HARNESS:-${CRITIC_NOTE_HARNESS:-claude}}"
+    case "$session" in
+      claude--*|codex--*)
+        author_harness="${session%%--*}"
+        delivery_session="${session#*--}"
+        ;;
+    esac
     now="$(date +%s)"
     mtime="$(stat -c %Y "$queue" 2>/dev/null || stat -f %m "$queue" 2>/dev/null || echo "$now")"
     idle=$(( now - mtime ))
@@ -784,7 +972,7 @@ eval_pass() {
     fi
     if [ "$urgent" -eq 1 ] || [ "$idle" -ge "$IDLE_SEC" ] ||
        [ "$distinct" -ge "$BATCH_FILES" ]; then
-      critique_queue "$queue" "$session"
+      critique_queue "$queue" "$session" "$delivery_session" "$author_harness"
     fi
   done
 }
