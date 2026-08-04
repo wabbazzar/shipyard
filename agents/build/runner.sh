@@ -60,7 +60,7 @@ source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
 CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
 
-PROJECT_NAME="$(jq -r '.project_name' <<<"$CFG_JSON")"
+PROJECT_NAME="$(jq_from_json "$CFG_JSON" -r '.project_name')"
 
 # Canonical role identity + resolved display name (svc string). Legacy
 # configs (no [names] block) resolve the display to the role id "build";
@@ -75,8 +75,8 @@ SVC="$PROJECT_NAME-$DISPLAY"
 
 # Trunk branch — config wins, else origin/HEAD; unresolvable fails loudly.
 TRUNK_BRANCH="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")" || exit 2
-RESULT_DIR_REL="$(jq -r '.paths.result_dir // "tmp"' <<<"$CFG_JSON")"
-WORKTREE_DIR_REL="$(jq -r '.paths.worktree_dir // ".worktrees"' <<<"$CFG_JSON")"
+RESULT_DIR_REL="$(jq_from_json "$CFG_JSON" -r '.paths.result_dir // "tmp"')"
+WORKTREE_DIR_REL="$(jq_from_json "$CFG_JSON" -r '.paths.worktree_dir // ".worktrees"')"
 
 # ---------- --check-config: print effective gates, then stop ----------------
 # STRICTLY read-only: no result files, no events, no claude, no gh.
@@ -117,14 +117,14 @@ if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
   [ -f "$ROLE_FILE" ]      || { echo "role.md missing: $ROLE_FILE" >&2; exit 2; }
   [ -f "$PROJECT_PROMPT" ] || { echo "project build.md missing: $PROJECT_DIR/.agents/" >&2; exit 2; }
 
-  WALL_CLOCK="$(jq -r '.build.wall_clock_sec // 3600' <<<"$CFG_JSON")"
-  BUDGET_TOKENS="$(jq -r '.build.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
+  WALL_CLOCK="$(jq_from_json "$CFG_JSON" -r '.build.wall_clock_sec // 3600')"
+  BUDGET_TOKENS="$(jq_from_json "$CFG_JSON" -r '.build.budget_tokens_daily // 1000000')"
   [[ "$BUDGET_TOKENS" =~ ^[0-9]+$ ]] || BUDGET_TOKENS=1000000
-  PROJECT_OWNER="$(jq -r '.project_owner // ""' <<<"$CFG_JSON")"
+  PROJECT_OWNER="$(jq_from_json "$CFG_JSON" -r '.project_owner // ""')"
 
   RESULT_FILE="$RESULT_DIR/$SVC-result.json"
   LOG_FILE="$RESULT_DIR/$SVC-last-run.log"
-  FYI_LOG="$PROJECT_DIR/$(jq -r '.build.fyi_log // "data/fyi-requests.jsonl"' <<<"$CFG_JSON")"
+  FYI_LOG="$PROJECT_DIR/$(jq_from_json "$CFG_JSON" -r '.build.fyi_log // "data/fyi-requests.jsonl"')"
 
   JOB_START="$(date +%s)"
   echo "[$SVC] $(now_iso) start mode=$MODE" > "$LOG_FILE"
@@ -346,7 +346,7 @@ fi
 # behind [build] ticket_mode — an unset/false flag is EXACTLY today's
 # behavior (no timer uses this mode), so the live fleet is unaffected.
 if [ "$MODE" = "ticket" ]; then
-  TICKET_MODE="$(jq -r '.build.ticket_mode // false' <<<"$CFG_JSON")"
+  TICKET_MODE="$(jq_from_json "$CFG_JSON" -r '.build.ticket_mode // false')"
   if [ "$TICKET_MODE" != "true" ]; then
     echo "ticket_mode disabled ([build].ticket_mode is not true) — --mode ticket is a no-op" >&2
     exit 2
@@ -371,7 +371,7 @@ if [ "$MODE" = "ticket" ]; then
     TICKET_LINEAGE+=("ticket_id=$TICKET_ID")
   fi
 
-  WALL_CLOCK="$(jq -r '.build.wall_clock_sec // 3600' <<<"$CFG_JSON")"
+  WALL_CLOCK="$(jq_from_json "$CFG_JSON" -r '.build.wall_clock_sec // 3600')"
   LOG_FILE="$RESULT_DIR/$SVC-ticket-last-run.log"
   JOB_START="$(date +%s)"
   echo "[$SVC] $(now_iso) start mode=ticket ticket=$TICKET_FILE" > "$LOG_FILE"

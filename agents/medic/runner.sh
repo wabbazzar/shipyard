@@ -834,7 +834,7 @@ if [ "$INCIDENTS_DETECTED" -eq 0 ]; then
 fi
 
 # ---------- daily token budget gate (D-O1: caps are token-based) ------------
-BUDGET_TOKENS="$(jq -r '.medic.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
+BUDGET_TOKENS="$(jq_from_json "$CFG_JSON" -r '.medic.budget_tokens_daily // 1000000')"
 [[ "$BUDGET_TOKENS" =~ ^[0-9]+$ ]] || BUDGET_TOKENS=1000000
 
 # Sum today's job.end token usage for THIS svc only — the events dir is

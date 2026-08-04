@@ -82,23 +82,23 @@ if [ -f "$PROJECT_DIR/.agents/config.toml" ]; then
   fi
 fi
 outcome_lineage_configure "$CFG_JSON" || exit 2
-PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON")"
+PROJECT_NAME="$(jq_from_json "$CFG_JSON" -r '.project_name // empty')"
 [ -n "$PROJECT_NAME" ] || PROJECT_NAME="$(basename "$PROJECT_DIR")"
-BUDGET_TOKENS="$(jq -r '.release.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
+BUDGET_TOKENS="$(jq_from_json "$CFG_JSON" -r '.release.budget_tokens_daily // 1000000')"
 # When true, annotate any CHANGED FILES entry that has NO diff hunk with a
 # "(no hunks)" marker, so a project-authored file-conditional critic check can
 # key on real +/- hunks instead of mere list membership (the changed-file list
 # is a superset of the files that actually have hunks — a hook-queued but
 # reverted tracked file lands in the list with no delta). Default false ⇒ the
 # CHANGED FILES block is byte-identical to before.
-HUNK_SAFE="$(jq -r '.release.hunk_safe_gates // false' <<<"$CFG_JSON")"
-REQUIRE_FEEDBACK="$(jq -cr '
+HUNK_SAFE="$(jq_from_json "$CFG_JSON" -r '.release.hunk_safe_gates // false')"
+REQUIRE_FEEDBACK="$(jq_from_json "$CFG_JSON" -cr '
   if (.shoulder | type) == "object" and
      (.shoulder | has("require_feedback"))
   then .shoulder.require_feedback
   else false
   end
-' <<<"$CFG_JSON" 2>/dev/null || echo invalid)"
+' 2>/dev/null || echo invalid)"
 case "$REQUIRE_FEEDBACK" in
   true|false) ;;
   *)

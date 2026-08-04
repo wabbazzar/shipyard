@@ -64,7 +64,7 @@ source "$QUARTET_DIR/agents/lib/spawn.sh"
 CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
 
-PROJECT_NAME="$(jq -r '.project_name' <<<"$CFG_JSON")"
+PROJECT_NAME="$(jq_from_json "$CFG_JSON" -r '.project_name')"
 
 # Canonical role identity + resolved display name (svc string). scribe is
 # already a role id; legacy configs (no [names] block) resolve it to
@@ -76,14 +76,14 @@ source "$QUARTET_DIR/agents/lib/naming.sh"
 DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
 SVC="$PROJECT_NAME-$DISPLAY"
 
-RESULT_DIR_REL="$(jq -r '.paths.result_dir // "tmp"' <<<"$CFG_JSON")"
-BUDGET_TOKENS="$(jq -r '.scribe.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
+RESULT_DIR_REL="$(jq_from_json "$CFG_JSON" -r '.paths.result_dir // "tmp"')"
+BUDGET_TOKENS="$(jq_from_json "$CFG_JSON" -r '.scribe.budget_tokens_daily // 1000000')"
 [[ "$BUDGET_TOKENS" =~ ^[0-9]+$ ]] || BUDGET_TOKENS=1000000
-WALL_CLOCK="$(jq -r '.scribe.wall_clock_sec // 3600' <<<"$CFG_JSON")"
-COMMIT_PREFIX="$(jq -r '.scribe.commit_message_prefix // "scribe: nightly refresh"' <<<"$CFG_JSON")"
-AUTO_COMMIT="$(jq -r '.scribe.auto_commit // true' <<<"$CFG_JSON")"
-AUTO_PUSH="$(jq -r '.scribe.auto_push // false' <<<"$CFG_JSON")"
-CONTENT_PATHS_JSON="$(jq -c '.scribe.content_paths // []' <<<"$CFG_JSON")"
+WALL_CLOCK="$(jq_from_json "$CFG_JSON" -r '.scribe.wall_clock_sec // 3600')"
+COMMIT_PREFIX="$(jq_from_json "$CFG_JSON" -r '.scribe.commit_message_prefix // "scribe: nightly refresh"')"
+AUTO_COMMIT="$(jq_from_json "$CFG_JSON" -r '.scribe.auto_commit // true')"
+AUTO_PUSH="$(jq_from_json "$CFG_JSON" -r '.scribe.auto_push // false')"
+CONTENT_PATHS_JSON="$(jq_from_json "$CFG_JSON" -c '.scribe.content_paths // []')"
 
 # ---------- --check-config: print effective gates, then stop ----------------
 # STRICTLY read-only: no result files, no events, no claude, no network.

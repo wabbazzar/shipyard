@@ -42,6 +42,15 @@ PY
   printf '%s\n' "$raw"
 }
 
+# Feed JSON through a real producer/consumer pipe. Bash here-strings are backed
+# by a bounded pipe on macOS and can deadlock before jq starts reading once a
+# project config or model response crosses that platform-dependent boundary.
+jq_from_json() {
+  local json="${1:-}"
+  shift || true
+  printf '%s\n' "$json" | command jq "$@"
+}
+
 # Make the validated opt-in helpers available to every caller that sources the
 # config loader, without requiring five runner-specific implementations.
 # shellcheck source=agents/lib/outcome-lineage.sh

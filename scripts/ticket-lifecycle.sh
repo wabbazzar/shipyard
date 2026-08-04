@@ -93,17 +93,17 @@ source "$QUARTET_DIR/agents/lib/load-config.sh"
 CFG_JSON="$(load_config_json "$CONFIG_FILE" 2>/dev/null)" || noop
 [ -n "$CFG_JSON" ] || noop
 
-LIFECYCLE="$(jq -r '(.write_ticket.lifecycle_dirs // false) | tostring' <<<"$CFG_JSON" 2>/dev/null)"
+LIFECYCLE="$(jq_from_json "$CFG_JSON" -r '(.write_ticket.lifecycle_dirs // false) | tostring' 2>/dev/null)"
 [ "$LIFECYCLE" = "true" ] || noop
 
 strip_slash() { printf '%s\n' "${1%/}"; }
 
-PENDING_DIR="$(jq -r '.write_ticket.ticket_dir // "docs/tickets/pending"' <<<"$CFG_JSON")"
+PENDING_DIR="$(jq_from_json "$CFG_JSON" -r '.write_ticket.ticket_dir // "docs/tickets/pending"')"
 PENDING_DIR="$(strip_slash "$PENDING_DIR")"
 BASE_DIR="$(dirname "$PENDING_DIR")"
-COMPLETE_DIR="$(jq -r --arg b "$BASE_DIR" '.write_ticket.archive_dir // ($b + "/complete")' <<<"$CFG_JSON")"
+COMPLETE_DIR="$(jq_from_json "$CFG_JSON" -r --arg b "$BASE_DIR" '.write_ticket.archive_dir // ($b + "/complete")')"
 COMPLETE_DIR="$(strip_slash "$COMPLETE_DIR")"
-FREEZER_DIR="$(jq -r --arg b "$BASE_DIR" '.write_ticket.backlog_dir // ($b + "/freezer")' <<<"$CFG_JSON")"
+FREEZER_DIR="$(jq_from_json "$CFG_JSON" -r --arg b "$BASE_DIR" '.write_ticket.backlog_dir // ($b + "/freezer")')"
 FREEZER_DIR="$(strip_slash "$FREEZER_DIR")"
 
 # ---- status parsing -------------------------------------------------------

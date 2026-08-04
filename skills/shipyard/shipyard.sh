@@ -76,7 +76,7 @@ CFG_JSON="{}"
 if [ -f "$PROJECT_DIR/.agents/config.toml" ]; then
   CFG_JSON="$(load_config_json "$PROJECT_DIR/.agents/config.toml" 2>/dev/null)" || CFG_JSON="{}"
 fi
-PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON" 2>/dev/null)"
+PROJECT_NAME="$(jq_from_json "$CFG_JSON" -r '.project_name // empty' 2>/dev/null)"
 [ -n "$PROJECT_NAME" ] || PROJECT_NAME="$(basename "$PROJECT_DIR")"
 
 _scheduler() {
@@ -114,37 +114,26 @@ EOF
 
 # ---- dashboard -------------------------------------------------------------
 _dashboard_manifest_value() {
-  python3 - "$1" "$2" <<'PY'
-import pathlib
-import plistlib
-import re
-import sys
-
-path = pathlib.Path(sys.argv[1])
-key = sys.argv[2]
-if not path.is_file() or path.is_symlink():
-    raise SystemExit(1)
+  python3 -c '
+import pathlib, plistlib, re, sys
+path, key = pathlib.Path(sys.argv[1]), sys.argv[2]
+if not path.is_file() or path.is_symlink(): raise SystemExit(1)
 if path.suffix == ".plist":
     with path.open("rb") as source:
         value = plistlib.load(source).get("EnvironmentVariables", {}).get(key, "")
 else:
-    value = ""
-    prefix = 'Environment="' + key + "="
+    value, prefix = "", "Environment=\"" + key + "="
     for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith(prefix) and line.endswith('"'):
+        if line.startswith(prefix) and line.endswith("\""):
             value = re.sub(r"\\(.)", r"\1", line[len(prefix):-1]).replace("%%", "%")
             break
-if isinstance(value, str):
-    print(value)
-PY
+if isinstance(value, str): print(value)
+' "$1" "$2"
 }
 
 _dashboard_health_record() {
-  python3 - "$1" "$2" "$3" <<'PY'
-import json
-import sys
-import urllib.request
-
+  python3 -c '
+import json, sys, urllib.request
 host, port_text, expected_events = sys.argv[1:]
 port = int(port_text)
 request = urllib.request.Request(
@@ -169,7 +158,7 @@ consistent = (
 print("ready" if consistent else "drift")
 print(actual_events if isinstance(actual_events, str) and actual_events else "unknown")
 print(latest if isinstance(latest, str) and latest else "none")
-PY
+' "$1" "$2" "$3"
 }
 
 _dashboard_valid_port() {
@@ -180,7 +169,7 @@ _dashboard_valid_port() {
 _dashboard_report() {
   local prefix="${1:-}" scheduler dash_home manifest service port host events
   local loaded="false" running="false" health="absent" latest="unknown"
-  local systemctl_cmd launchctl_cmd launch_output="" record="" value=""
+  local systemctl_cmd launchctl_cmd record="" value=""
   scheduler="$(_scheduler)" || { echo "shipyard: unsupported scheduler" >&2; return 2; }
   dash_home="${SHIPYARD_DASHBOARD_HOME:-$HOME}"
   host="127.0.0.1"
@@ -226,9 +215,13 @@ _dashboard_report() {
     if [ "$scheduler" = "launchd" ]; then
       launchctl_cmd="${SHIPYARD_DASHBOARD_LAUNCHCTL:-launchctl}"
       if command -v "$launchctl_cmd" >/dev/null 2>&1; then
-        if launch_output="$("$launchctl_cmd" print "gui/${SHIPYARD_DASHBOARD_UID:-$(id -u)}/$service" 2>/dev/null)"; then
+        if "$launchctl_cmd" print \
+          "gui/${SHIPYARD_DASHBOARD_UID:-$(id -u)}/$service" \
+          >/dev/null 2>&1; then
           loaded="true"
-          if printf '%s\n' "$launch_output" | grep -E 'state = running|pid = [0-9]+' >/dev/null; then
+          if "$launchctl_cmd" print \
+            "gui/${SHIPYARD_DASHBOARD_UID:-$(id -u)}/$service" 2>/dev/null \
+            | grep -E 'state = running|pid = [0-9]+' >/dev/null; then
             running="true"
           fi
         fi
@@ -539,7 +532,7 @@ _ticket_dir() {
   if [ -f "$d/.agents/config.toml" ]; then
     cfg="$(load_config_json "$d/.agents/config.toml" 2>/dev/null)" || cfg="{}"
   fi
-  rel="$(jq -r '.write_ticket.ticket_dir // empty' <<<"$cfg" 2>/dev/null)"
+  rel="$(jq_from_json "$cfg" -r '.write_ticket.ticket_dir // empty' 2>/dev/null)"
   [ -n "$rel" ] || rel="docs/tickets"
   case "$rel" in /*) printf '%s\n' "$rel" ;; *) printf '%s/%s\n' "$d" "$rel" ;; esac
 }

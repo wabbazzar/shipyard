@@ -4,13 +4,13 @@
 outcome_lineage_validate() {
   local cfg="${1:-}"
   [ -n "$cfg" ] || cfg='{}'
-  jq -e '
+  printf '%s\n' "$cfg" | jq -e '
     if has("telemetry") then
       (.telemetry | type) == "object" and
       ((.telemetry | has("outcome_lineage") | not) or
        ((.telemetry.outcome_lineage | type) == "boolean"))
     else true end
-  ' <<<"$cfg" >/dev/null 2>&1 || {
+  ' >/dev/null 2>&1 || {
     echo "telemetry.outcome_lineage must be boolean" >&2
     return 2
   }
@@ -21,7 +21,7 @@ outcome_lineage_configure() {
   [ -n "$cfg" ] || cfg='{}'
   outcome_lineage_validate "$cfg" || return 2
   QUARTET_OUTCOME_LINEAGE="$(
-    jq -r '.telemetry.outcome_lineage // false' <<<"$cfg"
+    printf '%s\n' "$cfg" | jq -r '.telemetry.outcome_lineage // false'
   )"
   export QUARTET_OUTCOME_LINEAGE
   unset QUARTET_RUN_ID

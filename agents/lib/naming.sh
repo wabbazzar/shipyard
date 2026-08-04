@@ -25,7 +25,7 @@ role_display() {
   local role="$1" cfg="${2:-}"
   local name=""
   if [ -n "$cfg" ]; then
-    name="$(jq -r --arg r "$role" '.names[$r] // empty' <<<"$cfg" 2>/dev/null)"
+    name="$(jq_from_json "$cfg" -r --arg r "$role" '.names[$r] // empty' 2>/dev/null)"
   fi
   if [ -n "$name" ]; then
     printf '%s\n' "$name"

@@ -208,18 +208,17 @@ CFG="$PROJECT_DIR/.agents/config.toml"
 source "$QUARTET_DIR/agents/lib/load-config.sh"
 CFG_JSON="$(load_config_json "$CFG")" || { echo "failed to parse $CFG" >&2; exit 2; }
 
-PROJECT_NAME="$(jq -r '.project_name // empty' <<<"$CFG_JSON")"
+PROJECT_NAME="$(jq_from_json "$CFG_JSON" -r '.project_name // empty')"
 [ -z "$PROJECT_NAME" ] && { echo "config missing project_name" >&2; exit 2; }
 IDENTITY_POLICY_FILE="$PROJECT_DIR/.shipyard-git-identity.toml"
 
-SHOULDER_AUTO="$(jq -r '.shoulder.auto_wire // false' <<<"$CFG_JSON")"
+SHOULDER_AUTO="$(jq_from_json "$CFG_JSON" -r '.shoulder.auto_wire // false')"
 SHOULDER_HARNESS="$(
-  jq -r '.shoulder.harness // .harness.default // "claude"' <<<"$CFG_JSON"
+  jq_from_json "$CFG_JSON" -r '.shoulder.harness // .harness.default // "claude"'
 )"
 SHOULDER_CRITIC_HARNESS="$(
-  jq -r \
+  jq_from_json "$CFG_JSON" -r \
     '.shoulder.critic_harness // .shoulder.harness // .harness.default // "claude"' \
-    <<<"$CFG_JSON"
 )"
 for shoulder_key in harness critic_harness; do
   case "$shoulder_key" in
@@ -241,7 +240,7 @@ done
 run_configure_git_identity() {
   local owner policy_json policy_enabled policy_name
   local effective_name effective_email root
-  owner="$(jq -r '.project_owner // empty' <<<"$CFG_JSON")"
+  owner="$(jq_from_json "$CFG_JSON" -r '.project_owner // empty')"
   [ -f "$IDENTITY_POLICY_FILE" ] || {
     echo "git-identity: tracked policy is missing" >&2
     return 2
@@ -250,8 +249,8 @@ run_configure_git_identity() {
     echo "git-identity: tracked policy is malformed" >&2
     return 2
   }
-  policy_enabled="$(jq -r '(.git_identity.enforce // false) == true' <<<"$policy_json")"
-  policy_name="$(jq -r '.git_identity.name // empty' <<<"$policy_json")"
+  policy_enabled="$(jq_from_json "$policy_json" -r '(.git_identity.enforce // false) == true')"
+  policy_name="$(jq_from_json "$policy_json" -r '.git_identity.name // empty')"
 
   [ "$policy_enabled" = "true" ] || {
     echo "git-identity: tracked policy is not enabled" >&2
@@ -403,7 +402,7 @@ resolve_effective_roles() {
   fi
 
   timer_roles="$(
-    jq -r '(.install.timers // {}) | keys[]' <<<"$CFG_JSON" 2>/dev/null
+    jq_from_json "$CFG_JSON" -r '(.install.timers // {}) | keys[]' 2>/dev/null
   )"
   for role in $QUARTET_ROLES; do
     if printf '%s\n' "$timer_roles" | grep -Fxq "$role"; then
@@ -563,14 +562,14 @@ run_doctor() {
     )" || emit "identity: tracked policy is malformed"
     if [ -n "$identity_policy_json" ]; then
       identity_enabled="$(
-        jq -r '(.git_identity.enforce // false) == true' \
-          <<<"$identity_policy_json"
+        jq_from_json "$identity_policy_json" -r \
+          '(.git_identity.enforce // false) == true'
       )"
     fi
   fi
   if [ "$identity_enabled" = "true" ]; then
-    identity_name="$(jq -r '.git_identity.name // empty' <<<"$identity_policy_json")"
-    identity_owner="$(jq -r '.project_owner // empty' <<<"$CFG_JSON")"
+    identity_name="$(jq_from_json "$identity_policy_json" -r '.git_identity.name // empty')"
+    identity_owner="$(jq_from_json "$CFG_JSON" -r '.project_owner // empty')"
     if [ -z "$identity_name" ]; then
       emit "identity: tracked name is missing"
     elif [ -n "$identity_owner" ] && [ "$identity_name" != "$identity_owner" ]; then
@@ -991,9 +990,9 @@ preflight_required_prompts || exit $?
 # config is the operator's prior choice — honor it. Defaulting to plain here
 # once wrote a DUPLICATE role-id unit set alongside a live themed fleet.
 if [ "$THEME_EXPLICIT" = "0" ]; then
-  cfg_design="$(jq -r '.names.design // empty' <<<"$CFG_JSON")"
+  cfg_design="$(jq_from_json "$CFG_JSON" -r '.names.design // empty')"
   if [ -n "$cfg_design" ]; then
-    THEME="custom:$(jq -r '[.names.design, .names.build, .names.release, .names.medic, .names.scribe] | map(. // "") | join(",")' <<<"$CFG_JSON")"
+    THEME="custom:$(jq_from_json "$CFG_JSON" -r '[.names.design, .names.build, .names.release, .names.medic, .names.scribe] | map(. // "") | join(",")')"
     echo "==> no --theme given; honoring existing [names] block ($THEME)"
   fi
 fi
@@ -1038,8 +1037,8 @@ echo "==> theme '$THEME' → [names] block in $CFG"
 names_json="$(for role in $QUARTET_ROLES; do
     printf '%s\t%s\n' "$role" "$(theme_name "$role")"
   done | jq -R 'split("\t") | {(.[0]): .[1]}' | jq -s 'add')"
-names_unchanged="$(jq --argjson n "$names_json" '.names == $n' <<<"$CFG_JSON")"
-CFG_JSON="$(jq --argjson n "$names_json" '.names = $n' <<<"$CFG_JSON")"
+names_unchanged="$(jq_from_json "$CFG_JSON" --argjson n "$names_json" '.names == $n')"
+CFG_JSON="$(jq_from_json "$CFG_JSON" --argjson n "$names_json" '.names = $n')"
 if [ "$names_unchanged" = "true" ]; then
   echo "  [names] unchanged"
 elif [ "$DRY_RUN" = "1" ]; then
@@ -1216,8 +1215,8 @@ fi
 for role in $ROLES_LIST; do
   # Timer schedule: config's [install.timers] wins (accept role id OR the
   # legacy display key), else the baked-in default.
-  schedule="$(jq -r --arg r "$role" \
-    '.install.timers[$r] // empty' <<<"$CFG_JSON")"
+  schedule="$(jq_from_json "$CFG_JSON" -r --arg r "$role" \
+    '.install.timers[$r] // empty')"
   [ -z "$schedule" ] && schedule="$(default_schedule "$role")"
   [ -z "$schedule" ] && { echo "  skip $role: no schedule"; continue; }
   mode="$(default_mode "$role")"
@@ -1276,9 +1275,9 @@ for role in $ROLES_LIST; do
   # claude/sonnet default — today's behavior, byte-identical. Secrets
   # (OPENROUTER_API_KEY &c.) are NEVER baked here; they are sourced at runtime.
   role_upper="$(tr '[:lower:]' '[:upper:]' <<<"$role")"
-  h_val="$(jq -r --arg r "$role" '(.[$r].harness  // .harness.default  // empty)' <<<"$CFG_JSON")"
-  m_val="$(jq -r --arg r "$role" '(.[$r].model     // .harness.model    // empty)' <<<"$CFG_JSON")"
-  p_val="$(jq -r --arg r "$role" '(.[$r].provider  // .harness.provider // empty)' <<<"$CFG_JSON")"
+  h_val="$(jq_from_json "$CFG_JSON" -r --arg r "$role" '(.[$r].harness  // .harness.default  // empty)')"
+  m_val="$(jq_from_json "$CFG_JSON" -r --arg r "$role" '(.[$r].model     // .harness.model    // empty)')"
+  p_val="$(jq_from_json "$CFG_JSON" -r --arg r "$role" '(.[$r].provider  // .harness.provider // empty)')"
   if [ -n "$h_val" ]; then
     quartet_env+="Environment=${role_upper}_HARNESS=$h_val"$'\n'
     launchd_env+="    <key>${role_upper}_HARNESS</key><string>$(xml_escape "$h_val")</string>"$'\n'
@@ -1520,8 +1519,8 @@ fi
 # same posture as the gates.md drop above.
 echo "==> ticket lifecycle folders"
 LC_BASE="docs/tickets"
-lc_ticket_dir="$(jq -r '.write_ticket.ticket_dir // empty' <<<"$CFG_JSON")"
-lc_flag_set="$(jq -r '((.write_ticket // {}) | has("lifecycle_dirs")) | tostring' <<<"$CFG_JSON")"
+lc_ticket_dir="$(jq_from_json "$CFG_JSON" -r '.write_ticket.ticket_dir // empty')"
+lc_flag_set="$(jq_from_json "$CFG_JSON" -r '((.write_ticket // {}) | has("lifecycle_dirs")) | tostring')"
 
 if [ "$lc_flag_set" = "true" ]; then
   echo "  ticket lifecycle: already configured (lifecycle_dirs present) — leaving as-is"
@@ -1625,8 +1624,8 @@ if [ "$WIRE_SHOULDER" = "1" ] || [ "$sh_auto" = "true" ]; then
 
   # Delivery/reviewer env sourced by the persistent watcher. Write the complete
   # fragment atomically before installing or restarting the watcher.
-  sh_target="$(jq -r '.notify.target // empty' <<<"$CFG_JSON")"
-  sh_deliver="$(jq -r '.notify.cmd // empty' <<<"$CFG_JSON")"
+  sh_target="$(jq_from_json "$CFG_JSON" -r '.notify.target // empty')"
+  sh_deliver="$(jq_from_json "$CFG_JSON" -r '.notify.cmd // empty')"
   sh_env="$PROJECT_DIR/.agents/shoulder.env"
   sh_env_content="$(
     printf '# generated by install.sh --wire-shoulder — source before critic-watch.sh\n'

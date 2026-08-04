@@ -65,7 +65,7 @@ source "$QUARTET_DIR/agents/lib/release-verdict.sh"
 CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
 
-PROJECT_NAME="$(jq -r '.project_name' <<<"$CFG_JSON")"
+PROJECT_NAME="$(jq_from_json "$CFG_JSON" -r '.project_name')"
 
 # Canonical role identity + resolved display name (svc string). Legacy
 # configs (no [names] block) resolve the display to the role id "release";
@@ -78,22 +78,23 @@ DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
 DISPLAY_TITLE="$(display_title "$DISPLAY")"
 SVC="$PROJECT_NAME-$DISPLAY"
 
-RESULT_DIR_REL="$(jq -r '.paths.result_dir // "tmp"' <<<"$CFG_JSON")"
-TEST_CMD="$(jq -r '.release.test_cmd // "npx vitest run"' <<<"$CFG_JSON")"
-TYPECHECK_CMD="$(jq -r '.release.typecheck // "npx tsc --noEmit"' <<<"$CFG_JSON")"
-BUDGET_TOKENS="$(jq -r '.release.budget_tokens_daily // 1000000' <<<"$CFG_JSON")"
+RESULT_DIR_REL="$(jq_from_json "$CFG_JSON" -r '.paths.result_dir // "tmp"')"
+TEST_CMD="$(jq_from_json "$CFG_JSON" -r '.release.test_cmd // "npx vitest run"')"
+TYPECHECK_CMD="$(jq_from_json "$CFG_JSON" -r '.release.typecheck // "npx tsc --noEmit"')"
+BUDGET_TOKENS="$(jq_from_json "$CFG_JSON" -r '.release.budget_tokens_daily // 1000000')"
 [[ "$BUDGET_TOKENS" =~ ^[0-9]+$ ]] || BUDGET_TOKENS=1000000
-WALL_CLOCK="$(jq -r '.release.wall_clock_sec // 3600' <<<"$CFG_JSON")"
+WALL_CLOCK="$(jq_from_json "$CFG_JSON" -r '.release.wall_clock_sec // 3600')"
 
 # ---------- optional runner-owned blocking gate -----------------------------
 # Validate the complete opt-in table before job.start, model invocation, or
 # result-file creation. Unset remains byte-for-byte the legacy path.
 BLOCKING_GATE_CONFIGURED=0
 BLOCKING_GATE_JSON="null"
-if jq -e '.release | type == "object" and has("blocking_gate")' \
-     <<<"$CFG_JSON" >/dev/null 2>&1; then
+if jq_from_json "$CFG_JSON" -e \
+     '.release | type == "object" and has("blocking_gate")' \
+     >/dev/null 2>&1; then
   BLOCKING_GATE_CONFIGURED=1
-  BLOCKING_GATE_JSON="$(jq -c '.release.blocking_gate' <<<"$CFG_JSON")"
+  BLOCKING_GATE_JSON="$(jq_from_json "$CFG_JSON" -c '.release.blocking_gate')"
   if ! jq -e '
     type == "object"
     and keys == ["command", "modes", "result_key", "timeout_sec"]
@@ -299,7 +300,7 @@ $RUN_CONTEXT"
 # one-off network stall self-heals in-process instead of triggering a medic
 # retry storm (proposal shipyard:3b5a75e8). A run that WROTE a verdict (pass
 # OR fail) is a real result and is NEVER retried; only a no-result stall is.
-STALL_RETRIES="$(jq -r '.release.stall_retries // 0' <<<"$CFG_JSON")"
+STALL_RETRIES="$(jq_from_json "$CFG_JSON" -r '.release.stall_retries // 0')"
 [[ "$STALL_RETRIES" =~ ^[0-9]+$ ]] || STALL_RETRIES=0
 [ "$STALL_RETRIES" -gt 3 ] && STALL_RETRIES=3   # runaway guard
 
@@ -509,7 +510,7 @@ fi
 # typecheck + test_cmd and OVERRIDE a claimed pass to fail if either really
 # fails — so a false green can't reach medic or the dispatch. post-merge already
 # runs the gate deterministically, so it is exempt.
-VERIFY_GATE="$(jq -r '.release.verify_gate // false' <<<"$CFG_JSON")"
+VERIFY_GATE="$(jq_from_json "$CFG_JSON" -r '.release.verify_gate // false')"
 if [ "$VERIFY_GATE" = "true" ] && [ "$PASS" = "true" ] && [ "$INCOMPLETE" -eq 0 ] && [ "$MODE" != "post-merge" ]; then
   echo "[$SVC] verify_gate: reconciling model pass against the real gate" >> "$LOG_FILE"
   eval "$TYPECHECK_CMD" >> "$LOG_FILE" 2>&1; VG_TC=$?
