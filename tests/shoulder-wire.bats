@@ -164,6 +164,73 @@ _install_project() {
   grep -q 'CLAUDE_NOTE_CMD' "$P/.agents/shoulder.env"
 }
 
+@test "tracked Claude settings.json is preserved and shoulder wiring uses settings.local.json" {
+  P="$(make_fixture_project shptracked clean-install.toml)"
+  mkdir -p "$P/.claude"
+  printf '{"permissions":{"allow":["Read"]}}\n' >"$P/.claude/settings.json"
+  git -C "$P" add .claude/settings.json
+  git -C "$P" commit -m "track Claude settings" >/dev/null
+  tracked_before="$(cksum "$P/.claude/settings.json")"
+
+  run _install_project "$P" --wire-shoulder
+  [ "$status" -eq 0 ]
+  [ "$(cksum "$P/.claude/settings.json")" = "$tracked_before" ]
+  [ -f "$P/.claude/settings.local.json" ]
+  run bash -c ". '$QUARTET_ROOT/$WIRE'; sw_wired claude '$P/.claude/settings.local.json' '$QUARTET_ROOT/agents/release/critic-queue.sh'"
+  [ "$status" -eq 0 ]
+
+  local_before="$(cksum "$P/.claude/settings.local.json")"
+  run _install_project "$P" --wire-shoulder
+  [ "$status" -eq 0 ]
+  [ "$(cksum "$P/.claude/settings.local.json")" = "$local_before" ]
+}
+
+@test "untracked Claude settings.json retains legacy in-place wiring" {
+  P="$(make_fixture_project shpuntracked clean-install.toml)"
+  mkdir -p "$P/.claude"
+  printf '{"permissions":{"allow":["Read"]}}\n' >"$P/.claude/settings.json"
+
+  run _install_project "$P" --wire-shoulder
+  [ "$status" -eq 0 ]
+  [ ! -e "$P/.claude/settings.local.json" ]
+  run bash -c ". '$QUARTET_ROOT/$WIRE'; sw_wired claude '$P/.claude/settings.json' '$QUARTET_ROOT/agents/release/critic-queue.sh'"
+  [ "$status" -eq 0 ]
+}
+
+@test "tracked Claude settings dry-run previews local target without mutation" {
+  P="$(make_fixture_project shptrackeddry clean-install.toml)"
+  mkdir -p "$P/.claude"
+  printf '{"permissions":{"allow":["Read"]}}\n' >"$P/.claude/settings.json"
+  git -C "$P" add .claude/settings.json
+  git -C "$P" commit -m "track Claude settings" >/dev/null
+  tracked_before="$(cksum "$P/.claude/settings.json")"
+
+  run _install_project "$P" --dry-run --wire-shoulder
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$P/.claude/settings.local.json"* ]]
+  [ "$(cksum "$P/.claude/settings.json")" = "$tracked_before" ]
+  [ ! -e "$P/.claude/settings.local.json" ]
+}
+
+@test "doctor scans the selected tracked Claude local settings target" {
+  P="$(make_fixture_project shptrackeddoctor clean-install.toml)"
+  mkdir -p "$P/.claude"
+  printf '{}\n' >"$P/.claude/settings.json"
+  git -C "$P" add .claude/settings.json
+  git -C "$P" commit -m "track Claude settings" >/dev/null
+  run _install_project "$P" --wire-shoulder
+  [ "$status" -eq 0 ]
+  jq '.hooks.PostToolUse += [{matcher:"Edit",hooks:[{type:"command",command:"scripts/missing-local-hook.sh"}]}]' \
+    "$P/.claude/settings.local.json" >"$P/.claude/settings.local.tmp"
+  mv "$P/.claude/settings.local.tmp" "$P/.claude/settings.local.json"
+
+  run env QUARTET_DIR="$QUARTET_ROOT" bash "$QUARTET_ROOT/install.sh" \
+    --doctor --project "$P"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"missing-local-hook.sh"* ]]
+  [[ "$output" != *"capture hook not wired"* ]]
+}
+
 @test "install --dry-run --wire-shoulder previews without writing" {
   P="$(make_fixture_project shpd clean-install.toml)"
   run env QUARTET_DIR="$QUARTET_ROOT" QUARTET_NOTIFY_CMD="true" \

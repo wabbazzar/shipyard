@@ -658,9 +658,12 @@ run_doctor() {
     emit "skill bridge: AGENTS.md missing"
   fi
 
-  # (g) dead hook wiring: a .claude/settings.json hook command that names a
-  #     script file which does not exist (the retired post-push class).
-  local settings="$PROJECT_DIR/.claude/settings.json" cmd tok path
+  # (g) dead hook wiring in the same Claude settings target shoulder wiring
+  #     owns. A tracked settings.json is policy, so the local sibling is used.
+  # shellcheck source=agents/lib/shoulder-wire.sh
+  . "$QUARTET_DIR/agents/lib/shoulder-wire.sh"
+  local settings cmd tok path
+  settings="$(sw_config_path claude "$PROJECT_DIR")"
   if [ -f "$settings" ]; then
     while IFS= read -r cmd; do
       [ -z "$cmd" ] && continue

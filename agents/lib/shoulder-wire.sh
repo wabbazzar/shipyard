@@ -426,9 +426,19 @@ sw_wired() {
 }
 
 # sw_config_path <harness> <project_dir> — the native config file for a harness.
+# Claude's tracked settings.json is project policy, so shoulder wiring belongs
+# in its gitignored local sibling. An absent or untracked settings.json retains
+# the historical target exactly.
 sw_config_path() {
   case "$1" in
-    claude) printf '%s/.claude/settings.json\n' "$2" ;;
+    claude)
+      if git -C "$2" ls-files --error-unmatch -- \
+           .claude/settings.json >/dev/null 2>&1; then
+        printf '%s/.claude/settings.local.json\n' "$2"
+      else
+        printf '%s/.claude/settings.json\n' "$2"
+      fi
+      ;;
     codex)  printf '%s/config.toml\n' "${CODEX_HOME:-$HOME/.codex}" ;;
     hermes) printf '%s/config.yaml\n' "${HERMES_HOME:-$HOME/.hermes}" ;;
     *) return 2 ;;
