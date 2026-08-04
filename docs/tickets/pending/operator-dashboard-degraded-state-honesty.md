@@ -122,6 +122,86 @@ The completed operator-dashboard ticket locks these invariants:
 - **Responsive proof:** inspect both `1440×900` and `390×844`; narrow mode must
   recompose the hierarchy without horizontal overflow or clipped status copy.
 
+## Decisions
+
+### Locked by the existing observable contract
+
+- Treat inspection availability as provenance, not as a numeric measurement.
+  Missing inspection therefore yields nullable attention, an explicit
+  limitation, and no healthy/no-action inference.
+- Keep independently observed event outcomes usable and qualified while
+  inspection is unavailable.
+- Preserve the current API schema version and existing UI design system; this
+  is a contract repair, not an event-schema or information-architecture change.
+- Use the dashboard process's `sys.executable` only as a single argv value at
+  the embedded inspection boundary. Direct CLI callers retain portable
+  `python3` resolution.
+- Suppress an evidence action when its bounded evidence list is empty. Do not
+  replace it with a disabled control.
+
+### Open implementation defaults
+
+- Prefer the smallest composer changes that reuse existing evidence IDs,
+  bounding, redaction, and ordering helpers.
+- Keep machine-readable reason and limitation codes in the API while mapping
+  them to concise human copy in the browser.
+- A measured reliability alarm outranks unavailable inspection in the hero;
+  when no independent alarm exists, inability to assess leads.
+
+### User decisions required
+
+None. The completed operator-dashboard ticket already decides the observable
+semantics, and this ticket does not authorize a schema bump or external action.
+
+## Verified Polishing Baseline — 2026-08-04
+
+- Repository shape: `main` is the required live-fleet branch; no worktree or
+  feature branch is permitted by `CLAUDE.md`. The concurrent specialist ticket
+  owns its ticket/manifests and must be kept out of this ticket's commits.
+- Skill front doors: the ignored `.agents/skills/` and `.claude/skills/`
+  symlinks were restored for all eight repository skills. The generated hub
+  intentionally has no `.agents/config.toml`, so `install.sh --relink` and the
+  lifecycle engine return the documented flat-layout no-op/exit `3` here.
+- Specialist routing: no `.agents/specialists/*.toml` manifests are installed
+  for this slice, so specialist pre-routing is a verified no-op.
+- Toolchain: Bash `5.3.15`, Bats `1.14.0`, Python `3.11.7`, Node `v25.8.1`,
+  Chrome `145`. Bash syntax and Python compilation passed.
+- Unit baseline: 91 of 92 operator/reader/server tests passed. The pre-existing
+  `ServerTest.test_runtime_lifecycle_fanout_is_globally_bounded_and_reported`
+  exceeded its fixed two-second HTTP timeout under host load above 9 on both
+  Python 3.11 and native Python 3.14; the endpoint eventually returned `503`.
+  Do not weaken the timeout. Re-run after each phase and distinguish a product
+  regression from this recorded baseline condition.
+- Browser baseline: 87 assertions passed in real Chrome at `1440×900`, with
+  zero overflow, console/page/request errors, external origins, or stale
+  browser processes. The captured unavailable document nevertheless exposed
+  the semantic defect described above, which existing browser assertions skip.
+- Installed reproduction: the `127.0.0.1:8766` service reports ready with 65
+  rows while inspection is unavailable, 12/24 terminal successes, all promises
+  unverified, zero linked evidence, and the contradictory no-action/zero brief.
+
+## Orchestration Protocol
+
+- The root agent owns phase order, exact reproduction, acceptance decisions,
+  commits, installed-service mutation, and the final Linux handoff. Delegates
+  may edit only their named files and must not commit, push, merge, install, or
+  restart services.
+- Before each delegation, record or verify `git status --short --branch` and
+  `git log -5 --oneline`. After return, root reviews the diff, reruns the exact
+  focused proof independently, and only then runs the phase gates and commits
+  explicit paths.
+- Every delegation brief inherits this anti-cheating clause verbatim:
+  **Do not weaken, skip, delete, narrow, mock away, or rewrite an existing test,
+  timeout, assertion, gate, or acceptance criterion to obtain green output;
+  report the honest failure and its evidence instead.**
+- Each delegate return is capped at 40 lines and must contain: changed files;
+  exact RED and GREEN commands with exit codes; key assertion/output; tests not
+  run; blockers; and confirmation that no commit, push, install, restart, or
+  unrelated-file edit occurred.
+- A phase cannot advance on a delegate's claim alone. Root must close every
+  emitted evidence ID over the response, inspect changed UI at both required
+  viewports, and record honest residual failures in the Ledger.
+
 ## Technical Requirements
 
 1. Preserve the Python interpreter selected by `install-dashboard.sh` across
@@ -157,9 +237,12 @@ The completed operator-dashboard ticket locks these invariants:
 - Keep direct interactive `shipyard inspect --json` behavior unchanged.
 - Files: `skills/shipyard/shipyard.sh`, `dashboard/operator.py`, focused tests
   under `tests/` and/or `dashboard/tests/`.
-- Delegation: subagent — implement interpreter-provenance behavior and its
-  hermetic regression test; return files, commands/exits, and the RED/GREEN
-  signature in at most 40 lines.
+- Delegation: subagent — in only `skills/shipyard/shipyard.sh`,
+  `dashboard/operator.py`, and the smallest focused test files, reproduce the
+  LaunchAgent-like incompatible ambient `python3`, implement a single-argv
+  validated interpreter override supplied from `sys.executable`, and prove
+  direct CLI behavior is unchanged. Apply the Orchestration Protocol and
+  anti-cheating clause; return the required evidence in at most 40 lines.
 - Proving it works: focused shell/operator tests plus syntax/compile gates show
   the wrong ambient interpreter can no longer poison the cache.
 
@@ -175,9 +258,13 @@ The completed operator-dashboard ticket locks these invariants:
   cover the measured-alarm case, and assert every emitted evidence link closes
   over the bounded evidence set.
 - Files: `dashboard/operator.py`, `dashboard/tests/test_operator.py`.
-- Delegation: subagent — implement and regression-test the pure composer slice;
-  return files, commands/exits, exact JSON assertions, and blockers in at most
-  40 lines.
+- Delegation: subagent — in only `dashboard/operator.py` and
+  `dashboard/tests/test_operator.py`, implement the pure composer slice using
+  existing bounded evidence helpers: nullable unavailable attention,
+  deterministic alarm precedence, explicit missing-source coverage, and
+  evidence closure for reliability/role aggregates. Apply the Orchestration
+  Protocol and anti-cheating clause; return exact JSON assertions and the
+  required evidence in at most 40 lines.
 - Proving it works: the deterministic fixture and live-shaped contract probe
   no longer report no-action/zero under unavailable inspection.
 
@@ -194,9 +281,13 @@ The completed operator-dashboard ticket locks these invariants:
 - Files: `dashboard/static/app.js`, optionally `dashboard/static/index.html`
   and `dashboard/static/styles.css`, `dashboard/tests/browser.mjs`, dashboard
   smoke tests, and this ticket Ledger.
-- Delegation: subagent — implement the presentation/test slice under the design
-  thesis; return changed files, browser assertions, screenshot paths, process
-  cleanup, commands/exits, and blockers in at most 40 lines.
+- Delegation: subagent — in only `dashboard/static/app.js`, any strictly needed
+  existing style/template file, and `dashboard/tests/browser.mjs`, implement
+  the presentation slice under the Design intent and hold the unavailable
+  fixture long enough to assert it before recovery. Do not install/restart the
+  dashboard. Apply the Orchestration Protocol and anti-cheating clause; return
+  browser assertions, screenshot paths, process cleanup, and the required
+  evidence in at most 40 lines.
 - Proving it works: real Chrome at `1440×900` and `390×844`, visual inspection,
   zero overflow/errors/off-origin traffic, and no surviving browser process.
 
