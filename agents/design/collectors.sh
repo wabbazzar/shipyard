@@ -16,8 +16,8 @@
 #      the last N days (default 7). Read with `jq -R 'fromjson?'` so a
 #      corrupt line can never abort the scan.
 #   3. <project>/data/fyi-requests.jsonl — user feedback lines.
-#   4. <project>/data/usage/*.jsonl — pilot usage beacons, counted by
-#      action and by path.
+#   4. <project>/<design.usage_path>/*.jsonl — pilot usage beacons, counted by
+#      action and by path. The optional path defaults to data/usage.
 #   5. <project>/tmp/*incident*.json — open medic incident files modified
 #      within the last N days (default 7, same window as source 2). Stale
 #      files are excluded from the summary, never touched on disk (this
@@ -73,6 +73,161 @@ _domain_from_config() {
       then ($u[0] | sub("^https?://"; "") | sub("/.*$"; ""))
       else empty end
   ' <<<"$1" 2>/dev/null
+}
+
+# _usage_summary <project-dir> <cfg-json> — validate the optional
+# [design].usage_path and summarize its JSONL objects. The path must stay
+# project-relative even through symlinks. Coverage states intentionally match
+# the fleet inspector: available/(ok|empty), unavailable/(missing|unreadable),
+# error/invalid_config, or partial/malformed.
+_usage_summary() {
+  local project_dir="$1" cfg_json="$2" configured value_json
+  configured="$(jq -r '
+    ((.design | type) == "object") and (.design | has("usage_path"))
+  ' <<<"$cfg_json" 2>/dev/null || printf 'false')"
+  value_json="$(jq -c '
+    if ((.design | type) == "object") and (.design | has("usage_path"))
+    then .design.usage_path else null end
+  ' <<<"$cfg_json" 2>/dev/null || printf 'null')"
+
+  python3 - "$project_dir" "$configured" "$value_json" <<'PY'
+import json
+from pathlib import Path, PureWindowsPath
+import stat
+import sys
+
+project = Path(sys.argv[1]).resolve()
+configured = sys.argv[2] == "true"
+try:
+    configured_value = json.loads(sys.argv[3])
+except (json.JSONDecodeError, TypeError):
+    configured_value = None
+
+
+def result(state, reason, *, total=0, valid=0, invalid=0, records=None):
+    records = records or []
+    by_action = {}
+    by_path = {}
+    examples = []
+    for record in records:
+        action = record.get("action")
+        action = action if isinstance(action, str) and action else "unknown"
+        path = record.get("path")
+        path = path if isinstance(path, str) and path else "unknown"
+        by_action[action] = by_action.get(action, 0) + 1
+        by_path[path] = by_path.get(path, 0) + 1
+        examples.append({
+            "ts": record.get("ts") if isinstance(record.get("ts"), str) else None,
+            "action": record.get("action") if isinstance(record.get("action"), str) else None,
+            "path": record.get("path") if isinstance(record.get("path"), str) else None,
+        })
+    print(json.dumps({
+        "state": state,
+        "reason": reason,
+        "configured": configured,
+        "count": valid,
+        "records_total": total,
+        "records_valid": valid,
+        "records_invalid": invalid,
+        "by_action": by_action,
+        "by_path": by_path,
+        "examples": list(reversed(examples))[:5],
+    }, separators=(",", ":")))
+
+
+def invalid_relative(value):
+    if not isinstance(value, str) or not value or len(value) > 512:
+        return True
+    if any(ord(char) < 32 for char in value):
+        return True
+    if Path(value).is_absolute() or PureWindowsPath(value).is_absolute():
+        return True
+    return ".." in value.replace("\\", "/").split("/")
+
+
+relative = configured_value if configured else "data/usage"
+if invalid_relative(relative):
+    result("error", "invalid_config")
+    raise SystemExit(0)
+
+candidate = project / relative
+try:
+    resolved = candidate.resolve(strict=False)
+    resolved.relative_to(project)
+except (OSError, RuntimeError, ValueError):
+    result("error", "invalid_config")
+    raise SystemExit(0)
+
+try:
+    if not candidate.exists():
+        result("unavailable", "missing")
+        raise SystemExit(0)
+    mode = stat.S_IMODE(candidate.stat().st_mode)
+    if not candidate.is_dir() or not (mode & 0o444) or not (mode & 0o111):
+        result("unavailable", "unreadable")
+        raise SystemExit(0)
+    usage_root = candidate.resolve(strict=True)
+    paths = sorted(candidate.glob("*.jsonl"))
+    for path in paths:
+        path.resolve(strict=True).relative_to(usage_root)
+        file_mode = stat.S_IMODE(path.stat().st_mode)
+        if not path.is_file() or not (file_mode & 0o444):
+            raise PermissionError
+except (OSError, PermissionError, RuntimeError, ValueError):
+    result("unavailable", "unreadable")
+    raise SystemExit(0)
+
+if not paths:
+    result("available", "empty")
+    raise SystemExit(0)
+
+
+def strict_object(raw):
+    def reject_constant(_value):
+        raise ValueError
+
+    def unique_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError
+            value[key] = item
+        return value
+
+    value = json.loads(
+        raw,
+        parse_constant=reject_constant,
+        object_pairs_hook=unique_object,
+    )
+    if not isinstance(value, dict):
+        raise ValueError
+    return value
+
+
+records = []
+total = invalid = 0
+try:
+    for path in paths:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                total += 1
+                try:
+                    records.append(strict_object(line.rstrip("\r\n")))
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    invalid += 1
+except (OSError, UnicodeError):
+    result("unavailable", "unreadable")
+    raise SystemExit(0)
+
+valid = len(records)
+if invalid:
+    state, reason = "partial", "malformed"
+elif total == 0:
+    state, reason = "available", "empty"
+else:
+    state, reason = "available", "ok"
+result(state, reason, total=total, valid=valid, invalid=invalid, records=records)
+PY
 }
 
 # ---- the collector ---------------------------------------------------------
@@ -157,16 +312,8 @@ collect_signals() {
 
   # --- (4) usage beacons ----------------------------------------------------
   local usage_summary
-  if compgen -G "$project_dir/data/usage/*.jsonl" >/dev/null 2>&1; then
-    usage_summary="$(cat "$project_dir"/data/usage/*.jsonl 2>/dev/null | jq -R 'fromjson?' 2>/dev/null | jq -s '
-      { count: length,
-        by_action: (reduce .[] as $e ({}; .[$e.action // "unknown"] += 1)),
-        by_path:   (reduce .[] as $e ({}; .[$e.path   // "unknown"] += 1)),
-        examples:  [.[] | {ts:(.ts // null), action:(.action // null), path:(.path // null)}] | (reverse | .[0:5]) }' \
-      2>/dev/null || echo '{"count":0,"by_action":{},"by_path":{},"examples":[]}')"
-  else
-    usage_summary='{"count":0,"by_action":{},"by_path":{},"examples":[]}'
-  fi
+  usage_summary="$(_usage_summary "$project_dir" "$cfg_json")" ||
+    usage_summary='{"state":"unavailable","reason":"unreadable","configured":false,"count":0,"records_total":0,"records_valid":0,"records_invalid":0,"by_action":{},"by_path":{},"examples":[]}'
 
   # --- (5) medic incident files under tmp/ ----------------------------------
   # Bounded by the same $days window as source 2 (mtime-based: simplest,

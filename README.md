@@ -23,7 +23,8 @@ A config with no `[names]` block displays the role ids verbatim.
 
 **Design.** Nightly, mentat's collectors aggregate the telemetry the project
 already produces — the JSONL event stream, access-log path counts, user
-feedback in `data/fyi-requests.jsonl`, `data/usage/*.jsonl` beacons, open
+feedback in `data/fyi-requests.jsonl`, real-usage beacons from
+`[design].usage_path` (default `data/usage`), open
 medic incidents — and mentat drafts **at most 3** proposals. Every proposal's
 `evidence` field must quote a real datum from that summary (an exact event
 count, a verbatim feedback line, a path + request count); a quiet night
@@ -203,6 +204,7 @@ configuration, and it is YOUR job:
 | control | key / mechanism | default |
 |---|---|---|
 | PR reviewer | `project_owner` in `.agents/config.toml` — build opens PRs, a human reviews | required |
+| real usage source | `[design].usage_path` — readable project-relative directory containing JSONL beacons; invalid, missing, empty, and unreadable sources stay explicit coverage rather than becoming measured zero | `data/usage` |
 | self-merge | `[medic] can_merge` | **false** |
 | zero-CI merges | `[build] allow_no_ci` — a repo with no CI checks cannot pass the merge gate vacuously | **false** |
 | forbidden paths | `[build] forbidden_paths` — any edit inside one is refused (`forbidden_path:<path>`); medic never escalates failures there | `[]` |

@@ -12,13 +12,14 @@ import plistlib
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tomllib
 from collections import defaultdict
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import urlsplit
 from xml.parsers.expat import ExpatError
@@ -2169,17 +2170,71 @@ def _bounded_jsonl_adapter(
     )
 
 
+def _usage_source_paths(
+    project_path: Path, config: dict[str, Any] | None
+) -> tuple[str, str, list[Path]]:
+    """Resolve [design].usage_path without permitting a project escape."""
+    relative: Any = "data/usage"
+    if isinstance(config, dict):
+        design = config.get("design")
+        if isinstance(design, dict) and "usage_path" in design:
+            relative = design["usage_path"]
+
+    invalid = (
+        not isinstance(relative, str)
+        or not relative
+        or len(relative) > 512
+        or any(ord(char) < 32 for char in relative)
+    )
+    if not invalid:
+        invalid = (
+            Path(relative).is_absolute()
+            or PureWindowsPath(relative).is_absolute()
+            or ".." in relative.replace("\\", "/").split("/")
+        )
+    if invalid:
+        return "error", "invalid_config", []
+
+    try:
+        project_root = project_path.resolve(strict=True)
+        usage_dir = project_root / relative
+        usage_dir.resolve(strict=False).relative_to(project_root)
+    except (OSError, RuntimeError, ValueError):
+        return "error", "invalid_config", []
+
+    try:
+        if not usage_dir.exists():
+            return "unavailable", "missing", []
+        mode = stat.S_IMODE(usage_dir.stat().st_mode)
+        if not usage_dir.is_dir() or not (mode & 0o444) or not (mode & 0o111):
+            return "unavailable", "unreadable", []
+        usage_root = usage_dir.resolve(strict=True)
+        paths = sorted(usage_dir.glob("*.jsonl"))
+        for path in paths:
+            path.resolve(strict=True).relative_to(usage_root)
+            file_mode = stat.S_IMODE(path.stat().st_mode)
+            if not path.is_file() or not (file_mode & 0o444):
+                return "unavailable", "unreadable", []
+    except (OSError, RuntimeError, ValueError):
+        return "unavailable", "unreadable", []
+
+    if not paths:
+        return "available", "empty", []
+    return "available", "ok", paths
+
+
 def _fyi_usage_adapters(
-    project: dict[str, Any], window_start: datetime, started_at: datetime
+    project: dict[str, Any],
+    config: dict[str, Any] | None,
+    window_start: datetime,
+    started_at: datetime,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     project_path = Path(project["project_path"])
     fyi_path = project_path / "data" / "fyi-requests.jsonl"
-    usage_dir = project_path / "data" / "usage"
     fyi_paths = [fyi_path] if fyi_path.is_file() else []
-    try:
-        usage_paths = sorted(usage_dir.glob("*.jsonl")) if usage_dir.is_dir() else []
-    except OSError:
-        usage_paths = []
+    usage_state, usage_reason, usage_paths = _usage_source_paths(
+        project_path, config
+    )
     fyi_coverage, fyi_evidence = _bounded_jsonl_adapter(
         project=project,
         source="fyi",
@@ -2187,13 +2242,24 @@ def _fyi_usage_adapters(
         window_start=window_start,
         started_at=started_at,
     )
-    usage_coverage, usage_evidence = _bounded_jsonl_adapter(
-        project=project,
-        source="usage",
-        paths=usage_paths,
-        window_start=window_start,
-        started_at=started_at,
-    )
+    if usage_state == "available" and usage_paths:
+        usage_coverage, usage_evidence = _bounded_jsonl_adapter(
+            project=project,
+            source="usage",
+            paths=usage_paths,
+            window_start=window_start,
+            started_at=started_at,
+        )
+        if (
+            usage_coverage["state"] == "available"
+            and usage_coverage["records_total"] == 0
+        ):
+            usage_coverage["reason"] = "empty"
+    else:
+        usage_coverage = _coverage(
+            project["project_id"], "usage", usage_state, usage_reason
+        )
+        usage_evidence = []
     return (
         {"fyi": fyi_coverage, "usage": usage_coverage},
         fyi_evidence + usage_evidence,
@@ -4719,7 +4785,7 @@ def build_document(
         project_id = project["project_id"]
         config = config_by_path[project_path]
         auxiliary_coverage, auxiliary_evidence = _fyi_usage_adapters(
-            project, window_start_at, started_at
+            project, config, window_start_at, started_at
         )
         for source, record in auxiliary_coverage.items():
             coverage_by_key[(project_id, source)] = record

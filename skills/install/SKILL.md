@@ -92,6 +92,7 @@ can't infer. The genuinely project-specific forks:
 |---|---|
 | **`--theme`** — display names for units/svc/notification voice: `plain` (role IDs verbatim), `spacetime` (five themed names), or `custom:d,b,r,m,s`. Role IDs underneath never change. | `[names]` block in config.toml (`--theme` flag) |
 | **Conventions** — the operator's stated taste the release critic grades against: LOC economy, dependency policy (new deps need justification?), naming, comment density. Ask explicitly; taste is not inferable. | `## Conventions` block in `.agents/release.md` |
+| **What is real usage here, and which project-relative directory contains its JSONL beacons?** | `[design].usage_path`; unset means `data/usage` |
 | What feeds **build's** "what to fix" queue? (a `/fyi` jsonl, the in-app chat DB, telemetry error events) | `[build].fyi_log` + build.md intake section |
 | May build autonomously edit the **security/auth path**, or test-only + human-fix? | `[build].forbidden_paths` + build.md guardrails |
 | On a failed liveness probe, may **medic** auto-restart prod, or alert-only? | `[medic].restart_systemd` + `[medic].restart_cmd` |
@@ -120,6 +121,7 @@ load_config_json <dir>/.agents/config.toml | jq .
 Config keys the runners actually read (canonical role IDs; don't invent
 others): `project_name, project_dir, project_owner, branch, dev_port`;
 `[names]`; `[install.timers]`; `[paths].{result_dir,worktree_dir,db}`;
+`[design].{usage_path,...}`;
 `[release].{test_cmd,typecheck,budget_hook,budget_daily,is_pwa,...}`;
 `[build].{in_scope_paths,forbidden_paths,fyi_log,budget,budget_incident,wall_clock_sec,allow_no_ci}`;
 `[medic].{poll_interval_sec,sync_to_build,daily_escalation_cap,restart_systemd,restart_cmd,can_merge,probes[],checks[]}`;

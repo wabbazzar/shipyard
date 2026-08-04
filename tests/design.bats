@@ -128,6 +128,89 @@ PY
   [ "$(echo "$output" | jq -r '.sources.fyi.count')" = "1" ]
   [ "$(echo "$output" | jq -r '.sources.usage.count')" = "3" ]
   [ "$(echo "$output" | jq -r '.sources.usage.by_action.view')" = "2" ]
+  echo "$output" | jq -e '.sources.usage
+    | .state=="available" and .reason=="ok" and .configured==false' >/dev/null
+}
+
+@test "collectors usage_path reads a valid project-relative non-zero source" {
+  P="$(make_fixture_project mentusagecustom names-spacetime.toml)"
+  cat >>"$P/.agents/config.toml" <<'EOF'
+
+[design]
+usage_path = "telemetry/real-usage"
+EOF
+  mkdir -p "$P/telemetry/real-usage"
+  printf '%s\n' \
+    '{"ts":"2026-01-01T00:00:00Z","action":"export","path":"/report"}' \
+    >"$P/telemetry/real-usage/beacons.jsonl"
+
+  run bash -c "QUARTET_DIR='$QUARTET_ROOT' QUARTET_EVENTS_DIR='$EVENTS_DIR' \
+    bash '$QUARTET_ROOT/$COLLECTORS' --project '$P' --json"
+
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.sources.usage
+    | .state=="available" and .reason=="ok" and .configured==true
+      and .count==1 and .by_action.export==1' >/dev/null
+}
+
+@test "collectors usage coverage distinguishes missing, empty, and unreadable" {
+  P="$(make_fixture_project mentusagemissing names-spacetime.toml)"
+  run bash -c "QUARTET_DIR='$QUARTET_ROOT' QUARTET_EVENTS_DIR='$EVENTS_DIR' \
+    bash '$QUARTET_ROOT/$COLLECTORS' --project '$P' --json"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.sources.usage
+    | .state=="unavailable" and .reason=="missing"
+      and .configured==false and .count==0' >/dev/null
+
+  cat >>"$P/.agents/config.toml" <<'EOF'
+
+[design]
+usage_path = "telemetry/real-usage"
+EOF
+  run bash -c "QUARTET_DIR='$QUARTET_ROOT' QUARTET_EVENTS_DIR='$EVENTS_DIR' \
+    bash '$QUARTET_ROOT/$COLLECTORS' --project '$P' --json"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.sources.usage
+    | .state=="unavailable" and .reason=="missing"
+      and .configured==true and .count==0' >/dev/null
+
+  mkdir -p "$P/telemetry/real-usage"
+  : >"$P/telemetry/real-usage/empty.jsonl"
+  run bash -c "QUARTET_DIR='$QUARTET_ROOT' QUARTET_EVENTS_DIR='$EVENTS_DIR' \
+    bash '$QUARTET_ROOT/$COLLECTORS' --project '$P' --json"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.sources.usage
+    | .state=="available" and .reason=="empty"
+      and .configured==true and .count==0' >/dev/null
+
+  rm "$P/telemetry/real-usage/empty.jsonl"
+  chmod 000 "$P/telemetry/real-usage"
+  run bash -c "QUARTET_DIR='$QUARTET_ROOT' QUARTET_EVENTS_DIR='$EVENTS_DIR' \
+    bash '$QUARTET_ROOT/$COLLECTORS' --project '$P' --json"
+  chmod 700 "$P/telemetry/real-usage"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.sources.usage
+    | .state=="unavailable" and .reason=="unreadable"
+      and .configured==true and .count==0' >/dev/null
+}
+
+@test "collectors usage_path rejects absolute escaping and non-string values" {
+  local name value
+  for name in absolute escaping nonstring; do
+    P="$(make_fixture_project "mentusage$name" names-spacetime.toml)"
+    case "$name" in
+      absolute)  value='"/var/tmp/usage"' ;;
+      escaping)  value='"../usage"' ;;
+      nonstring) value='7' ;;
+    esac
+    printf '\n[design]\nusage_path = %s\n' "$value" >>"$P/.agents/config.toml"
+    run bash -c "QUARTET_DIR='$QUARTET_ROOT' QUARTET_EVENTS_DIR='$EVENTS_DIR' \
+      bash '$QUARTET_ROOT/$COLLECTORS' --project '$P' --json"
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.sources.usage
+      | .state=="error" and .reason=="invalid_config"
+        and .configured==true and .count==0' >/dev/null
+  done
 }
 
 @test "collectors drop fyi-requests an existing proposal already addresses (no re-proposal)" {

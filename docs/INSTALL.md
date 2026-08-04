@@ -55,6 +55,10 @@ token-based, never dollars), `test_cmd` / `typecheck`, paths. Plus the gate
 file `.agents/gates.md` (test/build/lint commands, which gate classes apply,
 the Traps appendix) that polish-ticket and execute-ticket read.
 
+| Project key | Purpose | Default and validation |
+|---|---|---|
+| `[design].usage_path` | Directory whose `*.jsonl` beacons count as real product usage for mentat and fleet inspection | `data/usage`; when set, it must be a readable project-relative directory. Absolute paths, `..`, non-strings, and project-escaping symlinks are invalid. Missing, empty, unreadable, and malformed sources remain explicit coverage states rather than measured zero. |
+
 ### L4 — roles + conventions
 **Where:** `.agents/<role>.md`.
 **What:** project-specific prompt extensions per crew role, and — on
@@ -97,7 +101,9 @@ recon  →  interview  →  write L2–L5  →  bake units  →  verify
    tracked-secrets sweep, medic service surface, chat-DB shape, checked-in
    subagents.
 2. **Interview.** Theme, gates, service surface, conventions, the merge/data
-   forks — bring a concrete proposal, confirm only what can't be inferred.
+   forks, and “What is real usage here, and which project-relative directory
+   contains its JSONL beacons?” — bring a concrete proposal, confirm only what
+   can't be inferred.
 3. **Write L2–L5.** Author `.agents/config.toml` + per-role blocks; drop
    `gates.md` (installer, from the template — never clobbering an existing
    one) and fill it in; the theme block; the conventions block.

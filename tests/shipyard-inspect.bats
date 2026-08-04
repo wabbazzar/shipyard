@@ -1993,9 +1993,97 @@ EOF
     and ([.coverage[] | select(.source=="fyi")][0]
       | .state=="available" and .records_total==0)
     and ([.coverage[] | select(.source=="usage")][0]
-      | .state=="available" and .records_total==0)
+      | .state=="available" and .reason=="empty" and .records_total==0)
     and ([.coverage[] | select(.source=="incident_state")][0]
       | .state=="unavailable" and .reason=="missing")
+  ' <<<"$output"
+}
+
+@test "inspect: usage_path reads a valid project-relative non-zero source" {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-usage-custom"
+  mkdir -p "$root"
+  make_phase3_project usage-custom "build" "$root"
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    'max_open_proposals = 1' \
+    'max_open_proposals = 1\nusage_path = "telemetry/real-usage"'
+  mkdir -p "$P3_PROJECT/telemetry/real-usage"
+  cat >"$P3_PROJECT/telemetry/real-usage/beacons.jsonl" <<'EOF'
+{"ts":"2026-07-28T10:00:00Z","action":"open","path":"/configured"}
+EOF
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.coverage[] | select(.source=="usage")][0]
+      | .state=="available" and .reason=="ok"
+        and .records_total==1 and .records_valid==1)
+    and ([.evidence[] | select(.kind=="usage_beacon")][0].fields
+      | .action=="open" and .path=="/configured")
+  ' <<<"$output"
+}
+
+@test "inspect: usage coverage distinguishes default missing and unreadable" {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-usage-unavailable"
+  mkdir -p "$root"
+  make_phase3_project usage-unavailable "build" "$root"
+  rm -rf "$P3_PROJECT/data/usage"
+
+  run run_phase3
+  [ "$status" -eq 0 ]
+  jq -e '([.coverage[] | select(.source=="usage")][0]
+    | .state=="unavailable" and .reason=="missing"
+      and .records_total==0 and .records_valid==0)' <<<"$output"
+
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    'max_open_proposals = 1' \
+    'max_open_proposals = 1\nusage_path = "telemetry/real-usage"'
+  run run_phase3
+  [ "$status" -eq 0 ]
+  jq -e '([.coverage[] | select(.source=="usage")][0]
+    | .state=="unavailable" and .reason=="missing"
+      and .records_total==0 and .records_valid==0)' <<<"$output"
+
+  mkdir -p "$P3_PROJECT/telemetry/real-usage"
+  chmod 000 "$P3_PROJECT/telemetry/real-usage"
+  run run_phase3
+  chmod 700 "$P3_PROJECT/telemetry/real-usage"
+  [ "$status" -eq 0 ]
+  jq -e '([.coverage[] | select(.source=="usage")][0]
+    | .state=="unavailable" and .reason=="unreadable"
+      and .records_total==0 and .records_valid==0)' <<<"$output"
+}
+
+@test "inspect: usage_path rejects absolute escaping and non-string values" {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-usage-invalid"
+  mkdir -p "$root"
+  local name value project
+  for name in absolute escaping nonstring; do
+    make_phase3_project "usage-$name" "build" "$root"
+    project="$P3_PROJECT"
+    case "$name" in
+      absolute)  value='"/var/tmp/usage"' ;;
+      escaping)  value='"../usage"' ;;
+      nonstring) value='7' ;;
+    esac
+    fixture_replace_in_place "$project/.agents/config.toml" \
+      'max_open_proposals = 1' \
+      "max_open_proposals = 1\\nusage_path = $value"
+  done
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    . as $doc
+    | ([.fleet[] | select(.project_name | startswith("usage-")) | .project_id]) as $ids
+    | ($ids | length)==3
+      and all($ids[]; . as $id | any($doc.coverage[];
+        .project_id==$id and .source=="usage" and .state=="error"
+          and .reason=="invalid_config" and .records_total==0))
   ' <<<"$output"
 }
 
