@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-04
 - **Owner:** wabbazzar
-- **Status:** Polished — original trial adjudicated; ready to execute
+- **Status:** Implemented through Phase 3 — Phase 4 awaits a real third usage project
 - **Priority:** high
 - **Type:** chore
 - **Estimated Points:** 13 (Phase 1: 3 · Phase 2: 3 · Phase 3: 5 · Phase 4: 2)
@@ -365,18 +365,18 @@ boundary must be personally verified by the orchestrator).**
 
 ## Roll-up Definition of Done
 
-- [ ] Ice's Phase 12 has five dated ledger rows and a sign-off row recording
+- [x] Ice's Phase 12 has five dated ledger rows and a sign-off row recording
       T1 PASS, T2 MISS, T3 MISS, T4 PASS without altering the window.
-- [ ] README and the public presentation state **2/4**, name both misses, and
+- [x] README and the public presentation state **2/4**, name both misses, and
       link this follow-up; generated presentation data is fresh.
-- [ ] No late Work Mac commit or synthetic event receives trial credit.
-- [ ] `[design].usage_path` is documented, validated, honored by collector,
+- [x] No late Work Mac commit or synthetic event receives trial credit.
+- [x] `[design].usage_path` is documented, validated, honored by collector,
       inspector, and Dispatch, with unset preserving `data/usage` exactly.
-- [ ] The installer interview asks what real usage means and where its beacons
+- [x] The installer interview asks what real usage means and where its beacons
       live.
-- [ ] Complete prospective chains produce measured numeric values; incomplete
+- [x] Complete prospective chains produce measured numeric values; incomplete
       chains remain partial with exact missing links; build-before-stamp fails.
-- [ ] Operator promise IDs are unchanged and map measured pass/fail to
+- [x] Operator promise IDs are unchanged and map measured pass/fail to
       verified/violated while partial remains unverified.
 - [ ] A real third-project non-zero beacon appears in the Daily Dispatch before
       the T2 repair is called closed.
@@ -560,6 +560,44 @@ complete.
   pass/fail values, incomplete chains remain partial, and operator promises use
   unchanged IDs. The original trial remains **2/4**, and the real third-project
   usage dependency remains open for Phase 4.
+
+### Phase 4 — Full gate, live proof, and graduation
+
+- **Plan:** run the entire canonical suite and every declared release gate;
+  exercise the live inspector and loopback operator adapter; build a read-only
+  Daily Dispatch edition to count declared non-zero usage sources; verify the
+  deployed Ice PWA, deck viewports, browser cleanup, and fleet skill links;
+  publish Shipyard and its configured deck mirror only from a clean committed
+  main; leave the ticket pending unless a genuine third usage project appears.
+- **builder: inline (operating constraint)** — the phase owns final canonical
+  Git, live services, and outward publication, which the ticket reserves for
+  the orchestrator; no implementation slice remains to delegate.
+- **Starting state:** Shipyard `dd16a95`, clean and seven commits ahead of
+  `origin/main`; Ice `1b13da7`, clean and nine inherited/local commits ahead of
+  `origin/master`. Ice remains explicitly excluded from push.
+- **Local release gate:** canonical Bats passes 793/793. The full shell syntax
+  sweep, Python byte-compile, leak firewall, deck freshness, deck completeness
+  (8 skills), browser render, lifecycle, and diff checks exit 0. The literal
+  worktree-link probe prints `0`; an explicit zero-count assertion exits 0.
+- **Live inspector/operator proof:** the five-day inspector exits 0 with
+  `usage_projects_observed=2`, `usage_records=1571`, and all four trial promises
+  partial for their exact lineage reasons. The real loopback operator endpoint
+  returns HTTP 200, schema 1, `kind=shipyard.operator`, a fresh
+  `shipyard-inspect-v1` snapshot, stable promise IDs, and all four rows
+  `unverified/evidence_incomplete` rather than green.
+- **Dispatch proof:** `.venv/bin/python scripts/newspaper.py --no-prose
+  --stdout` is read-only and produces exactly two `kind=usage` rows: Aurora and
+  Shredly. No Bopthere or Starbird non-zero assessment exists, so T2 remains
+  **2/3** and no lineage event or historical credit was fabricated.
+- **Deployed Ice proof:** the dashboard service is active; `/operations` and
+  `/news` return 200; the production build and complete test surfaces are green.
+  A `390x844` `/news` render has zero horizontal overflow and no console/page
+  errors, and no browser process remains.
+- **Outcome:** Phase 4 is intentionally **not complete**. The code, local
+  release gates, and live read-only proofs are green, but graduation remains
+  blocked on a real third-project non-zero beacon followed by its Dispatch
+  assessment. Publication, remote CI, Pages equality, and canonical convergence
+  are recorded after the Shipyard push; the ticket stays in `pending`.
 
 ---
 
