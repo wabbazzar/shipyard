@@ -185,17 +185,17 @@
     {
       "id": "promise:usage_assessed_projects",
       "label": "Projects assessed",
-      "state": "verified",
+      "state": "violated",
       "target": {
         "operator": "gte",
-        "value": 1,
+        "value": 3,
         "unit": "projects"
       },
       "observed_value": 2,
-      "reason_code": "target_met",
-      "reason": "The observed evidence meets the configured target.",
-      "impact": "No promise gap is evidenced in this window.",
-      "action": "Keep monitoring the next evidence window.",
+      "reason_code": "target_missed",
+      "reason": "The observed evidence does not meet the configured target.",
+      "impact": "The promised outcome is below its target in this window.",
+      "action": "Review the linked evidence and restore the target.",
       "evidence_ids": [
         "inspect:summary"
       ],
@@ -223,17 +223,17 @@
     {
       "id": "promise:consequential_decisions_surfaced",
       "label": "Decisions surfaced",
-      "state": "violated",
+      "state": "verified",
       "target": {
         "operator": "gte",
         "value": 1,
         "unit": "decisions"
       },
-      "observed_value": 0,
-      "reason_code": "target_missed",
-      "reason": "The observed evidence does not meet the configured target.",
-      "impact": "The promised outcome is below its target in this window.",
-      "action": "Review the linked evidence and restore the target.",
+      "observed_value": 1,
+      "reason_code": "target_met",
+      "reason": "The observed evidence meets the configured target.",
+      "impact": "No promise gap is evidenced in this window.",
+      "action": "Keep monitoring the next evidence window.",
       "evidence_ids": [
         "inspect:attention-1"
       ],

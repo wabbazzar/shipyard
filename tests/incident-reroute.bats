@@ -272,12 +272,43 @@ esac'
   [[ "$run_id" =~ ^[0-9a-f]{32}$ ]]
   ticket_id="$(events_json | jq -r 'select(.event=="job.start") | .ticket_id')"
   [[ "$ticket_id" =~ ^ticket:[0-9a-f]{64}$ ]]
-  events_json | jq -s -e --arg id "$run_id" --arg ticket "$ticket_id" '
-    length == 3 and all(.[];
-      .run_id==$id and .ticket_id==$ticket and
+  head_sha="$(git -C "$p" rev-parse HEAD)"
+  events_json | jq -s -e --arg id "$run_id" --arg ticket "$ticket_id" \
+    --arg sha "$head_sha" '
+    length == 3 and all(.[]; .run_id==$id and .ticket_id==$ticket and
       .upstream_work_id=="proposal:opaque-1") and
     any(.[]; .event=="build.ticket.outcome" and
-      .work_id==$ticket and .outcome=="ok")
+      .work_id==$ticket and .outcome=="ok" and .commit_sha==$sha) and
+    any(.[]; .event=="job.end" and .commit_sha==$sha)
   ' >/dev/null
   ! events_json | grep -qE 'docs/tickets|secret-ticket-name|\.md|prompt|message|diff|filename|result|/tmp/'
+}
+
+@test "outcome lineage: ticket producer false and unset preserve exact legacy bytes" {
+  p="$(make_git_topology "$BATS_TEST_TMPDIR/topo")"
+  install_agents "$p" branch-present.toml rrlegacybytes
+  fixture_replace_in_place "$p/.agents/config.toml" '^\[build\]$' \
+    $'[build]\nticket_mode = true'
+  printf '# ticket\n' >"$p/ticket.md"
+  topo_commit_all "$p"
+  make_stub claude 0 '{"result":"done","usage":{"input_tokens":3,"output_tokens":2}}'
+  make_stub_script date '
+case "$*" in
+  "-u +%Y-%m-%d") printf "2026-08-04\n" ;;
+  "-u +%Y-%m-%dT%H:%M:%SZ") printf "2026-08-04T12:00:00Z\n" ;;
+  "+%s") printf "100\n" ;;
+  *) exit 2 ;;
+esac'
+
+  run run_runner build "$p" --mode ticket --ticket-file "$p/ticket.md"
+  [ "$status" -eq 0 ]
+  unset_bytes="$(cat "$(events_file)")"
+  : >"$(events_file)"
+
+  printf '\n[telemetry]\noutcome_lineage = false\n' >>"$p/.agents/config.toml"
+  run run_runner build "$p" --mode ticket --ticket-file "$p/ticket.md"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$(events_file)")" = "$unset_bytes" ]
+  [[ "$unset_bytes" != *"commit_sha"* ]]
+  [[ "$unset_bytes" != *"run_id"* ]]
 }

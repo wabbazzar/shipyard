@@ -378,6 +378,110 @@ EOF
 EOF
 }
 
+make_phase6_lineage_fixture() {
+  local mode="$1" source_id
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-lineage-$mode"
+  mkdir -p "$root"
+  make_phase3_project "lineage-$mode" "design build release medic" "$root"
+  printf '\n[telemetry]\noutcome_lineage = true\n' \
+    >>"$P3_PROJECT/.agents/config.toml"
+
+  git -C "$P3_PROJECT" init -q -b main
+  git -C "$P3_PROJECT" config user.name "Fixture"
+  git -C "$P3_PROJECT" config user.email "fixture@example.invalid"
+  printf 'base\n' >"$P3_PROJECT/base.txt"
+  git -C "$P3_PROJECT" add .
+  git -C "$P3_PROJECT" commit -qm "fixture base"
+  printf 'shipped\n' >"$P3_PROJECT/shipped.txt"
+  git -C "$P3_PROJECT" add shipped.txt
+  git -C "$P3_PROJECT" commit -qm "fixture shipped"
+  lineage_sha="$(git -C "$P3_PROJECT" rev-parse HEAD)"
+  source_id="$(python3 -c 'import hashlib; print("usage:" + hashlib.sha256(b"data/usage").hexdigest())')"
+  mkdir -p "$P3_PROJECT/data"
+  : >"$P3_PROJECT/data/decisions.jsonl"
+  : >"$P3_PROJECT/data/usage/lineage.jsonl"
+  : >"$root/2026-07-28.jsonl"
+
+  case "$mode" in
+    complete)
+      cat >"$P3_PROJECT/data/decisions.jsonl" <<'EOF'
+{"proposal_id":"bug-proposal","decision":"approve","ts":"2026-07-28T10:00:00Z","decision_class":"consequential","decided_by":"human","default_withheld":true}
+{"proposal_id":"feature-proposal","decision":"approve","ts":"2026-07-28T10:05:00Z","decided_by":"human"}
+EOF
+      cat >"$P3_PROJECT/data/usage/lineage.jsonl" <<'EOF'
+{"ts":"2026-07-28T10:30:00Z","action":"view","path":"/LINEAGE_PRIVATE_PATH?secret=DROP_ME"}
+EOF
+      cat >"$root/2026-07-28.jsonl" <<EOF
+{"ts":"2026-07-28T08:59:00Z","svc":"lineage-complete-medic","event":"medic.incident.detected","incident_id":"incident-1","summary":"LINEAGE_PRIVATE_SUMMARY"}
+{"ts":"2026-07-28T09:00:00Z","svc":"lineage-complete-design","event":"design.proposal.opened","proposal_id":"bug-proposal","type":"bug","severity":"high"}
+{"ts":"2026-07-28T09:01:00Z","svc":"lineage-complete-medic","event":"medic.incident.repair_proposed","incident_id":"incident-1","proposal_id":"bug-proposal"}
+{"ts":"2026-07-28T09:02:00Z","svc":"lineage-complete-design","event":"design.proposal.opened","proposal_id":"feature-proposal","type":"feature","severity":"med"}
+{"ts":"2026-07-28T11:00:00Z","svc":"lineage-complete-build","event":"build.work.outcome","work_id":"bug-work","upstream_work_id":"bug-proposal","outcome":"ok","commit_sha":"$lineage_sha"}
+{"ts":"2026-07-28T11:05:00Z","svc":"lineage-complete-build","event":"build.work.outcome","work_id":"feature-work","upstream_work_id":"feature-proposal","outcome":"ok","commit_sha":"$lineage_sha"}
+{"ts":"2026-07-28T11:30:00Z","svc":"lineage-complete-release","event":"job.end","status":"ok","merge_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+{"ts":"2026-07-28T12:00:00Z","svc":"lineage-complete-release","event":"job.end","status":"ok","merge_sha":"$lineage_sha"}
+{"ts":"2026-07-28T12:05:00Z","svc":"lineage-complete-design","event":"dispatch.usage.assessed","assessment_id":"usage-assessment-1","usage_source_id":"$source_id","project":"lineage-complete","window_start_at":"2026-07-28T10:00:00Z","window_end_at":"2026-07-28T11:00:00Z","records":1}
+{"ts":"2026-07-28T12:06:00Z","svc":"lineage-complete-design","event":"dispatch.usage.assessed","assessment_id":"usage-assessment-1","usage_source_id":"$source_id","project":"lineage-complete","window_start_at":"2026-07-28T10:00:00Z","window_end_at":"2026-07-28T11:00:00Z","records":1}
+EOF
+      ;;
+    t1-missing-release)
+      cat >"$P3_PROJECT/data/decisions.jsonl" <<'EOF'
+{"proposal_id":"bug-proposal","decision":"approve","ts":"2026-07-28T10:00:00Z","decided_by":"human"}
+EOF
+      cat >"$root/2026-07-28.jsonl" <<EOF
+{"ts":"2026-07-28T08:59:00Z","svc":"lineage-t1-missing-release-medic","event":"medic.incident.detected","incident_id":"incident-1"}
+{"ts":"2026-07-28T09:00:00Z","svc":"lineage-t1-missing-release-design","event":"design.proposal.opened","proposal_id":"bug-proposal","type":"bug"}
+{"ts":"2026-07-28T09:01:00Z","svc":"lineage-t1-missing-release-medic","event":"medic.incident.repair_proposed","incident_id":"incident-1","proposal_id":"bug-proposal"}
+{"ts":"2026-07-28T11:00:00Z","svc":"lineage-t1-missing-release-build","event":"build.work.outcome","work_id":"bug-work","upstream_work_id":"bug-proposal","outcome":"ok","commit_sha":"$lineage_sha"}
+EOF
+      ;;
+    t2-missing-assessment)
+      cat >"$P3_PROJECT/data/usage/lineage.jsonl" <<'EOF'
+{"ts":"2026-07-28T10:30:00Z","action":"view","path":"/safe"}
+EOF
+      ;;
+    t2-mismatched-assessments)
+      cat >"$P3_PROJECT/data/usage/lineage.jsonl" <<'EOF'
+{"ts":"2026-07-28T10:30:00Z","action":"view","path":"/safe"}
+EOF
+      cat >"$root/2026-07-28.jsonl" <<EOF
+{"ts":"2026-07-28T12:00:00Z","svc":"lineage-t2-mismatched-assessments-design","event":"dispatch.usage.assessed","assessment_id":"wrong-source","usage_source_id":"usage:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","project":"lineage-t2-mismatched-assessments","window_start_at":"2026-07-28T10:00:00Z","window_end_at":"2026-07-28T11:00:00Z","records":1}
+{"ts":"2026-07-28T12:01:00Z","svc":"lineage-t2-mismatched-assessments-design","event":"dispatch.usage.assessed","assessment_id":"old-window","usage_source_id":"$source_id","project":"lineage-t2-mismatched-assessments","window_start_at":"2026-07-01T10:00:00Z","window_end_at":"2026-07-01T11:00:00Z","records":1}
+EOF
+      ;;
+    t3-build-before-approval)
+      cat >"$P3_PROJECT/data/decisions.jsonl" <<'EOF'
+{"proposal_id":"feature-proposal","decision":"approve","ts":"2026-07-28T10:00:00Z","decided_by":"human"}
+EOF
+      cat >"$root/2026-07-28.jsonl" <<EOF
+{"ts":"2026-07-28T09:00:00Z","svc":"lineage-t3-build-before-approval-design","event":"design.proposal.opened","proposal_id":"feature-proposal","type":"feature"}
+{"ts":"2026-07-28T09:30:00Z","svc":"lineage-t3-build-before-approval-build","event":"build.work.outcome","work_id":"feature-work","upstream_work_id":"feature-proposal","outcome":"ok","commit_sha":"$lineage_sha"}
+{"ts":"2026-07-28T11:00:00Z","svc":"lineage-t3-build-before-approval-release","event":"job.end","status":"ok","merge_sha":"$lineage_sha"}
+EOF
+      ;;
+    t3-missing-release)
+      cat >"$P3_PROJECT/data/decisions.jsonl" <<'EOF'
+{"proposal_id":"feature-proposal","decision":"approve","ts":"2026-07-28T10:00:00Z","decided_by":"human"}
+EOF
+      cat >"$root/2026-07-28.jsonl" <<EOF
+{"ts":"2026-07-28T09:00:00Z","svc":"lineage-t3-missing-release-design","event":"design.proposal.opened","proposal_id":"feature-proposal","type":"feature"}
+{"ts":"2026-07-28T10:30:00Z","svc":"lineage-t3-missing-release-build","event":"build.work.outcome","work_id":"feature-work","upstream_work_id":"feature-proposal","outcome":"ok","commit_sha":"$lineage_sha"}
+EOF
+      ;;
+    t4-bare-approval)
+      cat >"$P3_PROJECT/data/decisions.jsonl" <<'EOF'
+{"proposal_id":"bare-proposal","decision":"approve","ts":"2026-07-28T10:00:00Z"}
+EOF
+      ;;
+    t4-missing-withhold)
+      cat >"$P3_PROJECT/data/decisions.jsonl" <<'EOF'
+{"proposal_id":"consequential-proposal","decision":"approve","ts":"2026-07-28T10:00:00Z","decision_class":"consequential","decided_by":"human"}
+EOF
+      ;;
+  esac
+}
+
 @test "inspect: discovers only matching current-root manifests and emits schema v1" {
   alpha="$BATS_TEST_TMPDIR/projects/alpha"
   beta="$BATS_TEST_TMPDIR/projects/beta"
@@ -2263,6 +2367,7 @@ EOF
 {"id":"malformed-only","decision":"approve","ts":"2026-07-28T10:02:00Z"}
 {"proposal_id":"unknown-only","decision":"later","ts":"2026-07-28T10:03:00Z"}
 {"proposal_id":"bad-ts-only","decision":"deny","ts":"not-a-time"}
+{"proposal_id":"metadata-invalid","decision":"approve","ts":"2026-07-28T10:04:00Z","decision_class":"PRIVATE_CLASS","decided_by":"PRIVATE_ACTOR","default_withheld":"yes"}
 EOF
 
   make_phase3_project duplicate-result "design" "$root"
@@ -2293,7 +2398,7 @@ EOF
         and .records_total==13 and .records_valid==7 and .records_invalid==6)
     and ([.coverage[] | select(.project_id==$pid and .source=="decisions")][0]
       | .state=="partial" and .reason=="malformed"
-        and .records_total==5 and .records_valid==2 and .records_invalid==3)
+        and .records_total==6 and .records_valid==2 and .records_invalid==4)
     and ([.evidence[] | select(.kind=="decision")]|length)==2
     and ([.evidence[] | select(.kind=="decision") | .source_ref]
       | sort | map(endswith(":line:1") or endswith(":line:2")) | all)
@@ -2306,6 +2411,8 @@ EOF
   [[ "$output" != *"SYNTHETIC_SECRET"* ]]
   [[ "$output" != *"RAW_RATIONALE"* ]]
   [[ "$output" != *"RAW_EVIDENCE"* ]]
+  [[ "$output" != *"PRIVATE_CLASS"* ]]
+  [[ "$output" != *"PRIVATE_ACTOR"* ]]
 }
 
 @test "inspect: conflicting valid decisions suppress with partial mixed coverage" {
@@ -2660,6 +2767,143 @@ EOF
     and (.effectiveness[4].components.critique_findings==2)
   ' <<<"$output"
   [[ "$output" != *"BENCHMARK_SECRET"* ]]
+}
+
+@test "inspect: exact prospective chains measure T1-T4 without payloads" {
+  make_phase6_lineage_fixture complete
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.effectiveness[0:4][] | [.key,.state,.value,.reason]]) == [
+      ["bugs_caught_and_fixed","measured",1,"measured_outcome_lineage"],
+      ["usage_assessed_projects","measured",1,"measured_outcome_lineage"],
+      ["features_shipped_end_to_end","measured",1,"measured_outcome_lineage"],
+      ["consequential_decisions_surfaced","measured",1,"measured_outcome_lineage"]
+    ]
+    and (.effectiveness[1].value < .effectiveness[1].target_value)
+    and ([.effectiveness[0:4][].evidence_ids | length] | all(.>0))
+    and ([.effectiveness[0:4][].limitations] | all(length==0))
+    and .effectiveness[1].components.usage_assessments==1
+    and ([.evidence[] | select(.kind=="usage_assessment")]|length)==2
+    and ([.evidence[] | select(.kind=="work_event")]|length)==2
+  ' <<<"$output"
+  [[ "$output" != *"LINEAGE_PRIVATE_SUMMARY"* ]]
+  [[ "$output" != *"LINEAGE_PRIVATE_PATH"* ]]
+  [[ "$output" != *"DROP_ME"* ]]
+}
+
+@test "inspect: exact chains do not measure when outcome lineage is false" {
+  make_phase6_lineage_fixture complete
+  fixture_replace_in_place "$P3_PROJECT/.agents/config.toml" \
+    '^outcome_lineage = true$' 'outcome_lineage = false'
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    ([.effectiveness[0:4][].state] | all(.=="partial" or .=="unmeasured"))
+    and ([.effectiveness[0:4][].value] | all(.==null))
+  ' <<<"$output"
+}
+
+@test "inspect: T1 missing release commit stays partial with exact code" {
+  make_phase6_lineage_fixture t1-missing-release
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    .effectiveness[0]
+    | .key=="bugs_caught_and_fixed" and .state=="partial" and .value==null
+      and .reason=="missing_bug_release_commit"
+      and (.limitations|index("missing_bug_release_commit"))!=null
+  ' <<<"$output"
+}
+
+@test "inspect: T2 missing dispatch assessment stays partial with exact code" {
+  make_phase6_lineage_fixture t2-missing-assessment
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    .effectiveness[1]
+    | .key=="usage_assessed_projects" and .state=="partial" and .value==null
+      and .reason=="missing_usage_assessment"
+      and (.limitations|index("missing_usage_assessment"))!=null
+  ' <<<"$output"
+}
+
+@test "inspect: T2 rejects mismatched source ID and backfilled window" {
+  make_phase6_lineage_fixture t2-mismatched-assessments
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    .effectiveness[1]
+    | .state=="partial" and .value==null
+      and .reason=="missing_usage_assessment"
+      and .components.usage_assessments==2
+  ' <<<"$output"
+}
+
+@test "inspect: T3 build before human stamp fails ordering" {
+  make_phase6_lineage_fixture t3-build-before-approval
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    .effectiveness[2]
+    | .key=="features_shipped_end_to_end" and .state=="partial" and .value==null
+      and .reason=="feature_build_before_approval"
+      and (.limitations|index("feature_build_before_approval"))!=null
+  ' <<<"$output"
+}
+
+@test "inspect: T3 missing release commit stays partial with exact code" {
+  make_phase6_lineage_fixture t3-missing-release
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    .effectiveness[2]
+    | .key=="features_shipped_end_to_end" and .state=="partial" and .value==null
+      and .reason=="missing_feature_release_commit"
+      and (.limitations|index("missing_feature_release_commit"))!=null
+  ' <<<"$output"
+}
+
+@test "inspect: T4 bare approval cannot substitute for consequential human decision" {
+  make_phase6_lineage_fixture t4-bare-approval
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    .effectiveness[3]
+    | .key=="consequential_decisions_surfaced" and .state=="partial" and .value==null
+      and .reason=="missing_consequential_decision_metadata"
+      and (.limitations|index("missing_consequential_decision_metadata"))!=null
+  ' <<<"$output"
+}
+
+@test "inspect: T4 missing default-withheld link stays partial with exact code" {
+  make_phase6_lineage_fixture t4-missing-withhold
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    .effectiveness[3]
+    | .key=="consequential_decisions_surfaced" and .state=="partial" and .value==null
+      and .reason=="missing_consequential_decision_metadata"
+      and (.limitations|index("missing_consequential_decision_metadata"))!=null
+  ' <<<"$output"
 }
 
 @test "inspect: successful delegation cohort is measured with partial window coverage" {

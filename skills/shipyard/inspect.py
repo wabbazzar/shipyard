@@ -73,6 +73,8 @@ RFC3339 = re.compile(
     r"(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
 )
 ASCII_DECIMAL_MICROSECONDS = re.compile(r"^[0-9]+$")
+OUTCOME_LINEAGE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$")
+COMMIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 CONSUMERS = (
     ("design_runner", "design"),
     ("build_runner", "build"),
@@ -572,6 +574,10 @@ def _available_config(
     design = config.get("design")
     design = design if isinstance(design, dict) else {}
     max_open = _max_open_value(design.get("max_open_proposals"))
+    telemetry = config.get("telemetry")
+    telemetry = telemetry if isinstance(telemetry, dict) else {}
+    outcome_lineage = telemetry.get("outcome_lineage") is True
+    usage_source_id = _usage_source_id(config)
     shoulder = config.get("shoulder")
     shoulder = shoulder if isinstance(shoulder, dict) else {}
     shoulder_auto = shoulder.get("auto_wire", False)
@@ -608,6 +614,8 @@ def _available_config(
         "daily_escalation_cap": daily_cap,
         "budget_tokens_daily_by_role": budgets,
         "max_open_proposals": max_open,
+        "outcome_lineage": outcome_lineage,
+        "usage_source_id": usage_source_id,
         "shoulder_auto_wire": shoulder_auto,
     }
     source_ref = f"file:{config_path}:pointer:/"
@@ -1557,8 +1565,21 @@ def _event_route(
             numeric_invalid = True
         return parsed
 
+    def lineage_id(key: str) -> str | None:
+        value = record.get(key)
+        if not isinstance(value, str) or not OUTCOME_LINEAGE_ID.fullmatch(value):
+            return None
+        return value
+
+    def commit_sha(key: str) -> str | None:
+        value = record.get(key)
+        if not isinstance(value, str) or not COMMIT_SHA.fullmatch(value):
+            return None
+        return value.lower()
+
     if event == "job.end":
         status = _string(record.get("status"))
+        merge_sha = commit_sha("merge_sha")
         fields = {
             "svc": _string(record.get("svc")),
             "role": role,
@@ -1567,12 +1588,13 @@ def _event_route(
             "mode": _string(record.get("mode")),
             "duration_s": number("duration_s"),
             "tokens": number("tokens"),
+            "merge_sha": merge_sha,
         }
         return (
             "job_end",
             fields,
             f"job:{role}:{status or ''}:{reason or ''}",
-            numeric_invalid,
+            numeric_invalid or ("merge_sha" in record and merge_sha is None),
         )
 
     incident_events = {
@@ -1588,6 +1610,7 @@ def _event_route(
         incident_id = _nonempty_string(record.get("incident_id"))
         fields = {
             "incident_id": incident_id,
+            "proposal_id": lineage_id("proposal_id"),
             "event": event,
             "source": _string(record.get("source")),
             "surface": _string(record.get("surface")),
@@ -1599,7 +1622,14 @@ def _event_route(
                 isinstance(record.get("summary"), str) and record["summary"]
             ),
         }
-        return "incident_event", fields, None, numeric_invalid or incident_id is None
+        return (
+            "incident_event",
+            fields,
+            None,
+            numeric_invalid
+            or incident_id is None
+            or ("proposal_id" in record and fields["proposal_id"] is None),
+        )
 
     critique_events = {
         "release.critique",
@@ -1629,11 +1659,19 @@ def _event_route(
     if event == "design.proposal.opened" or (
         event == "design.proposal.skipped" and reason == "open_cap"
     ):
+        proposal_id = lineage_id("proposal_id")
+        proposal_type_raw = record.get("type")
+        proposal_type = (
+            proposal_type_raw
+            if proposal_type_raw
+            in {"bug", "feature", "instrumentation", "incident-repair"}
+            else None
+        )
         fields = {
             "svc": _string(record.get("svc")),
             "event": event,
-            "proposal_id": _string(record.get("proposal_id")),
-            "type": _string(record.get("type")),
+            "proposal_id": proposal_id,
+            "type": proposal_type,
             "severity": _string(record.get("severity")),
             "reason": reason,
             "tokens": number("tokens"),
@@ -1642,7 +1680,100 @@ def _event_route(
             "open": number("open"),
             "cap": number("cap"),
         }
-        return "design_control_event", fields, None, numeric_invalid
+        lineage_invalid = event == "design.proposal.opened" and (
+            ("proposal_id" in record and proposal_id is None)
+            or (
+                "type" in record
+                and proposal_type is None
+            )
+        )
+        return (
+            "design_control_event",
+            fields,
+            None,
+            numeric_invalid or lineage_invalid,
+        )
+
+    if event in {"build.work.outcome", "build.ticket.outcome"}:
+        work_id = lineage_id("work_id")
+        upstream_work_id = lineage_id("upstream_work_id")
+        ticket_id = lineage_id("ticket_id")
+        sha = commit_sha("commit_sha")
+        outcome_raw = record.get("outcome")
+        outcome = (
+            outcome_raw
+            if outcome_raw
+            in {
+                "ok",
+                "fail",
+                "pr_opened",
+                "tests_failed",
+                "scope_blew",
+                "dry-run",
+                "skipped",
+                "security",
+            }
+            else None
+        )
+        classification_raw = record.get("classification")
+        classification = (
+            classification_raw
+            if classification_raw in {"ATTEMPT", "SKIP", "SECURITY"}
+            else None
+        )
+        fields = {
+            "event": event,
+            "work_id": work_id,
+            "upstream_work_id": upstream_work_id,
+            "ticket_id": ticket_id,
+            "outcome": outcome,
+            "classification": classification,
+            "commit_sha": sha,
+        }
+        invalid = (
+            work_id is None
+            or ("upstream_work_id" in record and upstream_work_id is None)
+            or ("ticket_id" in record and ticket_id is None)
+            or ("commit_sha" in record and sha is None)
+            or ("outcome" in record and outcome is None)
+            or ("classification" in record and classification is None)
+        )
+        return "work_event", fields, None, invalid
+
+    if event == "dispatch.usage.assessed":
+        assessment_id = lineage_id("assessment_id")
+        source_id = lineage_id("usage_source_id")
+        assessed_project = lineage_id("project")
+        window_start = _parse_rfc3339(record.get("window_start_at"))
+        window_end = _parse_rfc3339(record.get("window_end_at"))
+        observations = number("records")
+        valid_window = (
+            window_start is not None
+            and window_end is not None
+            and window_start < window_end
+        )
+        fields = {
+            "assessment_id": assessment_id,
+            "usage_source_id": source_id,
+            "project": assessed_project,
+            "window_start_at": (
+                _format_utc(window_start) if window_start is not None else None
+            ),
+            "window_end_at": (
+                _format_utc(window_end) if window_end is not None else None
+            ),
+            "records": observations,
+        }
+        return (
+            "usage_assessment",
+            fields,
+            None,
+            numeric_invalid
+            or assessment_id is None
+            or source_id is None
+            or assessed_project is None
+            or not valid_window,
+        )
 
     budget_routes = {
         ("design.proposal.skipped", "budget", None): "design_runner",
@@ -2081,6 +2212,7 @@ def _bounded_jsonl_adapter(
     paths: list[Path],
     window_start: datetime,
     started_at: datetime,
+    content_minimized: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if not paths:
         return (
@@ -2126,11 +2258,15 @@ def _bounded_jsonl_adapter(
                         }
                         kind = "fyi_request"
                     else:
-                        fields = {
-                            "ts": observed_at,
-                            "action": _string(record.get("action")),
-                            "path": _path_without_query(record.get("path")),
-                        }
+                        fields = (
+                            {"ts": observed_at, "observation": "valid"}
+                            if content_minimized
+                            else {
+                                "ts": observed_at,
+                                "action": _string(record.get("action")),
+                                "path": _path_without_query(record.get("path")),
+                            }
+                        )
                         kind = "usage_beacon"
                     source_ref = f"file:{canonical}:line:{line_number}"
                     evidence.append(
@@ -2174,25 +2310,8 @@ def _usage_source_paths(
     project_path: Path, config: dict[str, Any] | None
 ) -> tuple[str, str, list[Path]]:
     """Resolve [design].usage_path without permitting a project escape."""
-    relative: Any = "data/usage"
-    if isinstance(config, dict):
-        design = config.get("design")
-        if isinstance(design, dict) and "usage_path" in design:
-            relative = design["usage_path"]
-
-    invalid = (
-        not isinstance(relative, str)
-        or not relative
-        or len(relative) > 512
-        or any(ord(char) < 32 for char in relative)
-    )
-    if not invalid:
-        invalid = (
-            Path(relative).is_absolute()
-            or PureWindowsPath(relative).is_absolute()
-            or ".." in relative.replace("\\", "/").split("/")
-        )
-    if invalid:
+    relative = _configured_usage_relative(config)
+    if relative is None:
         return "error", "invalid_config", []
 
     try:
@@ -2223,6 +2342,33 @@ def _usage_source_paths(
     return "available", "ok", paths
 
 
+def _configured_usage_relative(config: dict[str, Any] | None) -> str | None:
+    relative: Any = "data/usage"
+    if isinstance(config, dict):
+        design = config.get("design")
+        if isinstance(design, dict) and "usage_path" in design:
+            relative = design["usage_path"]
+    if (
+        not isinstance(relative, str)
+        or not relative
+        or len(relative) > 512
+        or any(ord(char) < 32 for char in relative)
+        or Path(relative).is_absolute()
+        or PureWindowsPath(relative).is_absolute()
+        or ".." in relative.replace("\\", "/").split("/")
+    ):
+        return None
+    return relative
+
+
+def _usage_source_id(config: dict[str, Any] | None) -> str | None:
+    relative = _configured_usage_relative(config)
+    if relative is None:
+        return None
+    digest = hashlib.sha256(relative.encode("utf-8")).hexdigest()
+    return f"usage:{digest}"
+
+
 def _fyi_usage_adapters(
     project: dict[str, Any],
     config: dict[str, Any] | None,
@@ -2234,6 +2380,11 @@ def _fyi_usage_adapters(
     fyi_paths = [fyi_path] if fyi_path.is_file() else []
     usage_state, usage_reason, usage_paths = _usage_source_paths(
         project_path, config
+    )
+    telemetry = config.get("telemetry") if isinstance(config, dict) else None
+    content_minimized = (
+        isinstance(telemetry, dict)
+        and telemetry.get("outcome_lineage") is True
     )
     fyi_coverage, fyi_evidence = _bounded_jsonl_adapter(
         project=project,
@@ -2249,6 +2400,7 @@ def _fyi_usage_adapters(
             paths=usage_paths,
             window_start=window_start,
             started_at=started_at,
+            content_minimized=content_minimized,
         )
         if (
             usage_coverage["state"] == "available"
@@ -2856,10 +3008,23 @@ def _decision_adapter(
         proposal_id = _nonempty_string(record.get("proposal_id"))
         decision = _string(record.get("decision"))
         timestamp = _parse_rfc3339(record.get("ts"))
+        decision_class = record.get("decision_class")
+        decided_by = record.get("decided_by")
+        default_withheld = record.get("default_withheld")
+        metadata_valid = (
+            ("decision_class" not in record or decision_class == "consequential")
+            and ("decided_by" not in record or decided_by == "human")
+            and (
+                "default_withheld" not in record
+                or isinstance(default_withheld, bool)
+            )
+        )
         if (
             proposal_id is None
+            or not OUTCOME_LINEAGE_ID.fullmatch(proposal_id)
             or decision not in {"approve", "deny"}
             or timestamp is None
+            or not metadata_valid
         ):
             invalid += 1
             continue
@@ -2870,6 +3035,13 @@ def _decision_adapter(
             "proposal_id": proposal_id,
             "decision": decision,
             "ts": observed_at,
+            "decision_class": (
+                decision_class if decision_class == "consequential" else None
+            ),
+            "decided_by": decided_by if decided_by == "human" else None,
+            "default_withheld": (
+                default_withheld if isinstance(default_withheld, bool) else None
+            ),
         }
         item = _file_evidence(
             source_kind="decision",
@@ -3303,8 +3475,94 @@ def _benchmark_record(
     }
 
 
+def _measured_benchmark_record(
+    *,
+    key: str,
+    label: str,
+    window_days: int,
+    target_value: int | float,
+    unit: str,
+    value: int | float,
+    components: dict[str, Any],
+    evidence_ids: list[str],
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "benchmark_label": label,
+        "benchmark_window_days": window_days,
+        "target_operator": "gte",
+        "target_value": target_value,
+        "unit": unit,
+        "state": "measured",
+        "value": value,
+        "components": components,
+        "evidence_ids": sorted(set(evidence_ids)),
+        "reason": "measured_outcome_lineage",
+        "limitations": [],
+    }
+
+
+def _partial_benchmark_record(
+    *,
+    key: str,
+    label: str,
+    window_days: int,
+    target_value: int | float,
+    unit: str,
+    components: dict[str, Any],
+    evidence_ids: list[str],
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "benchmark_label": label,
+        "benchmark_window_days": window_days,
+        "target_operator": "gte",
+        "target_value": target_value,
+        "unit": unit,
+        "state": "partial",
+        "value": None,
+        "components": components,
+        "evidence_ids": sorted(set(evidence_ids)),
+        "reason": reason,
+        "limitations": ["prospective_outcome_lineage_partial_v1", reason],
+    }
+
+
+def _git_is_ancestor(
+    project: dict[str, Any], ancestor: str, descendant: str
+) -> bool:
+    descendant_valid = COMMIT_SHA.fullmatch(descendant) or re.fullmatch(
+        r"refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]{0,254}", descendant
+    )
+    if not COMMIT_SHA.fullmatch(ancestor) or descendant_valid is None:
+        return False
+    path = project.get("project_path")
+    if not isinstance(path, str):
+        return False
+    try:
+        completed = subprocess.run(
+            ["git", "-C", path, "merge-base", "--is-ancestor", ancestor, descendant],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
+def _observed_time(item: dict[str, Any]) -> datetime | None:
+    return _parse_rfc3339(item.get("observed_at"))
+
+
 def _benchmark_effectiveness(
     evidence: list[dict[str, Any]],
+    projects_by_id: dict[str, dict[str, Any]],
+    window_start_at: datetime,
+    started_at: datetime,
 ) -> list[dict[str, Any]]:
     bug_proposals = [
         item
@@ -3343,6 +3601,37 @@ def _benchmark_effectiveness(
         and item["fields"].get("role") == "release"
         and item["fields"].get("status") == "ok"
     ]
+    proposal_events = [
+        item
+        for item in evidence
+        if item["kind"] == "design_control_event"
+        and item["fields"].get("event") == "design.proposal.opened"
+    ]
+    incident_links = [
+        item
+        for item in evidence
+        if item["kind"] == "incident_event"
+        and item["fields"].get("proposal_id") is not None
+    ]
+    work_events = [item for item in evidence if item["kind"] == "work_event"]
+    usage_assessments_by_id: dict[str, dict[str, Any]] = {}
+    for item in evidence:
+        if item["kind"] != "usage_assessment":
+            continue
+        assessment_id = item["fields"].get("assessment_id")
+        if isinstance(assessment_id, str):
+            usage_assessments_by_id.setdefault(assessment_id, item)
+    usage_assessments = list(usage_assessments_by_id.values())
+    config_by_project = {
+        item["project_id"]: item
+        for item in evidence
+        if item["kind"] == "config_posture"
+    }
+    enabled_projects = {
+        project_id
+        for project_id, item in config_by_project.items()
+        if item["fields"].get("outcome_lineage") is True
+    }
     critique_events = [
         item for item in evidence if item["kind"] == "critique_event"
     ]
@@ -3357,68 +3646,507 @@ def _benchmark_effectiveness(
         )
         critique_findings += finding_count
 
-    bug_evidence = bug_proposals + incidents + build_success
+    bug_event_proposals = [
+        item
+        for item in proposal_events
+        if item["fields"].get("type") in {"bug", "incident-repair"}
+    ]
+    feature_event_proposals = [
+        item
+        for item in proposal_events
+        if item["fields"].get("type") == "feature"
+    ]
+    bug_evidence = bug_proposals + bug_event_proposals + incidents + build_success
     usage_evidence = usage
     feature_evidence = (
-        feature_proposals + approvals + build_success + release_success
+        feature_proposals
+        + feature_event_proposals
+        + approvals
+        + build_success
+        + release_success
     )
     decision_evidence = decisions
     critique_evidence = critique_events
     five_day = "Historical 5-day trial benchmark"
+
+    bug_components = {
+        "bug_proposals": len(
+            {
+                item["fields"].get("id") or item["fields"].get("proposal_id")
+                for item in bug_proposals + bug_event_proposals
+            }
+            - {None}
+        ),
+        "incident_signals": len(incidents),
+        "successful_build_jobs": len(build_success),
+        "linked_work_outcomes": len(work_events),
+        "successful_release_jobs": len(release_success),
+    }
+    usage_components = {
+        "usage_projects_observed": len(
+            {item["project_id"] for item in usage if item["project_id"]}
+        ),
+        "usage_records": len(usage),
+        "usage_assessments": len(usage_assessments),
+    }
+    feature_components = {
+        "feature_proposals": len(
+            {
+                item["fields"].get("id") or item["fields"].get("proposal_id")
+                for item in feature_proposals + feature_event_proposals
+            }
+            - {None}
+        ),
+        "approve_decisions": len(approvals),
+        "successful_build_jobs": len(build_success),
+        "linked_work_outcomes": len(work_events),
+        "successful_release_jobs": len(release_success),
+    }
+    decision_components = {"valid_decisions": len(decisions)}
+
+    def chronological(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        ceiling = datetime.max.replace(tzinfo=timezone.utc)
+        return sorted(items, key=lambda item: _observed_time(item) or ceiling)
+
+    ancestry_cache: dict[tuple[str, str, str], bool] = {}
+
+    def contains(project_id: str, ancestor: str, descendant: str) -> bool:
+        key = (project_id, ancestor, descendant)
+        if key not in ancestry_cache:
+            project = projects_by_id.get(project_id)
+            ancestry_cache[key] = (
+                project is not None
+                and _git_is_ancestor(project, ancestor, descendant)
+            )
+        return ancestry_cache[key]
+
+    def release_in_trunk(project_id: str, commit_sha: str) -> bool:
+        project = projects_by_id.get(project_id)
+        trunk = project.get("safety", {}).get("trunk") if project else None
+        if (
+            not isinstance(trunk, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,254}", trunk)
+            or ".." in trunk
+        ):
+            return False
+        return contains(project_id, commit_sha, f"refs/heads/{trunk}")
+
+    bug_complete: dict[str, list[str]] = {}
+    bug_missing: tuple[str, list[str]] | None = None
+    for incident in incident_links:
+        project_id = incident["project_id"]
+        if project_id not in enabled_projects:
+            continue
+        proposal_id = incident["fields"].get("proposal_id")
+        chain_ids = [incident["id"]]
+        proposal = next(
+            (
+                item
+                for item in bug_event_proposals
+                if item["project_id"] == project_id
+                and item["fields"].get("proposal_id") == proposal_id
+            ),
+            None,
+        )
+        if proposal is None:
+            bug_missing = bug_missing or ("missing_bug_proposal", chain_ids)
+            continue
+        chain_ids.append(proposal["id"])
+        proposal_at = _observed_time(proposal)
+        incident_id = incident["fields"].get("incident_id")
+        incident_origin = next(
+            (
+                item
+                for item in chronological(incidents)
+                if item["project_id"] == project_id
+                and item["fields"].get("incident_id") == incident_id
+                and item["id"] != incident["id"]
+                and proposal_at is not None
+                and _observed_time(item) is not None
+                and _observed_time(item) < proposal_at
+            ),
+            None,
+        )
+        if incident_origin is None:
+            bug_missing = bug_missing or ("missing_bug_incident_origin", chain_ids)
+            continue
+        chain_ids.append(incident_origin["id"])
+        human_approvals = chronological(
+            [
+                item
+                for item in decisions
+                if item["project_id"] == project_id
+                and item["fields"].get("proposal_id") == proposal_id
+                and item["fields"].get("decision") == "approve"
+                and item["fields"].get("decided_by") == "human"
+            ]
+        )
+        if not human_approvals:
+            bug_missing = bug_missing or ("missing_bug_human_approval", chain_ids)
+            continue
+        approval = next(
+            (
+                item
+                for item in human_approvals
+                if proposal_at is not None
+                and _observed_time(item) is not None
+                and proposal_at < _observed_time(item)
+            ),
+            None,
+        )
+        if approval is None:
+            bug_missing = bug_missing or ("bug_approval_before_proposal", chain_ids)
+            continue
+        chain_ids.append(approval["id"])
+        candidate_work = chronological(
+            [
+                item
+                for item in work_events
+                if item["project_id"] == project_id
+                and item["fields"].get("upstream_work_id") == proposal_id
+                and item["fields"].get("outcome") in {"ok", "pr_opened"}
+                and item["fields"].get("commit_sha") is not None
+            ]
+        )
+        if not candidate_work:
+            bug_missing = bug_missing or ("missing_bug_work", chain_ids)
+            continue
+        approval_at = _observed_time(approval)
+        work = next(
+            (
+                item
+                for item in candidate_work
+                if approval_at is not None
+                and _observed_time(item) is not None
+                and approval_at < _observed_time(item)
+            ),
+            None,
+        )
+        if work is None:
+            bug_missing = bug_missing or ("bug_build_before_approval", chain_ids)
+            continue
+        chain_ids.append(work["id"])
+        work_at = _observed_time(work)
+        candidate_releases = chronological(
+            [
+                item
+                for item in release_success
+                if item["project_id"] == project_id
+                and item["fields"].get("merge_sha") is not None
+                and work_at is not None
+                and _observed_time(item) is not None
+                and _observed_time(item) > work_at
+            ]
+        )
+        if not candidate_releases:
+            bug_missing = bug_missing or ("missing_bug_release_commit", chain_ids)
+            continue
+        release = next(
+            (
+                item
+                for item in candidate_releases
+                if contains(
+                    project_id,
+                    work["fields"]["commit_sha"],
+                    item["fields"]["merge_sha"],
+                )
+                and release_in_trunk(project_id, item["fields"]["merge_sha"])
+            ),
+            None,
+        )
+        if release is None:
+            chain_ids.append(candidate_releases[0]["id"])
+            bug_missing = bug_missing or ("missing_bug_trunk_containment", chain_ids)
+            continue
+        chain_ids.append(release["id"])
+        bug_complete[f"{project_id}:{proposal_id}"] = chain_ids
+
+    usage_complete: dict[str, list[str]] = {}
+    usage_missing: tuple[str, list[str]] | None = None
+    for project_id in sorted(enabled_projects):
+        config_item = config_by_project.get(project_id)
+        source_id = config_item["fields"].get("usage_source_id")
+        if source_id is None:
+            continue
+        chain_ids = [config_item["id"]]
+        project_usage = [item for item in usage if item["project_id"] == project_id]
+        if not project_usage:
+            usage_missing = usage_missing or ("missing_usage_observation", chain_ids)
+            continue
+        chain_ids.extend(item["id"] for item in project_usage)
+        assessment = next(
+            (
+                item
+                for item in usage_assessments
+                if item["project_id"] == project_id
+                and item["fields"].get("usage_source_id") == source_id
+                and item["fields"].get("project")
+                == projects_by_id.get(project_id, {}).get("project_name")
+                and isinstance(item["fields"].get("records"), (int, float))
+                and not isinstance(item["fields"].get("records"), bool)
+                and item["fields"]["records"] > 0
+                and (_parse_rfc3339(item["fields"]["window_start_at"])
+                     or datetime.min.replace(tzinfo=timezone.utc))
+                >= window_start_at
+                and (_parse_rfc3339(item["fields"]["window_end_at"])
+                     or datetime.max.replace(tzinfo=timezone.utc))
+                <= started_at
+                and any(
+                    (
+                        _parse_rfc3339(item["fields"]["window_start_at"])
+                        or datetime.max.replace(tzinfo=timezone.utc)
+                    )
+                    <= (
+                        _observed_time(observation)
+                        or datetime.min.replace(tzinfo=timezone.utc)
+                    )
+                    < (
+                        _parse_rfc3339(item["fields"]["window_end_at"])
+                        or datetime.min.replace(tzinfo=timezone.utc)
+                    )
+                    for observation in project_usage
+                )
+                and (_observed_time(item) or datetime.min.replace(tzinfo=timezone.utc))
+                >= (
+                    _parse_rfc3339(item["fields"]["window_end_at"])
+                    or datetime.max.replace(tzinfo=timezone.utc)
+                )
+            ),
+            None,
+        )
+        if assessment is None:
+            usage_missing = usage_missing or ("missing_usage_assessment", chain_ids)
+            continue
+        chain_ids.append(assessment["id"])
+        usage_complete[project_id] = chain_ids
+
+    feature_complete: dict[str, list[str]] = {}
+    feature_missing: tuple[str, list[str]] | None = None
+    for proposal in feature_event_proposals:
+        project_id = proposal["project_id"]
+        if project_id not in enabled_projects:
+            continue
+        proposal_id = proposal["fields"].get("proposal_id")
+        chain_ids = [proposal["id"]]
+        approval = next(
+            (
+                item
+                for item in decisions
+                if item["project_id"] == project_id
+                and item["fields"].get("proposal_id") == proposal_id
+                and item["fields"].get("decision") == "approve"
+                and item["fields"].get("decided_by") == "human"
+            ),
+            None,
+        )
+        if approval is None:
+            feature_missing = feature_missing or (
+                "missing_feature_human_approval",
+                chain_ids,
+            )
+            continue
+        chain_ids.append(approval["id"])
+        work = next(
+            (
+                item
+                for item in work_events
+                if item["project_id"] == project_id
+                and item["fields"].get("upstream_work_id") == proposal_id
+                and item["fields"].get("outcome") in {"ok", "pr_opened"}
+                and item["fields"].get("commit_sha") is not None
+            ),
+            None,
+        )
+        if work is None:
+            feature_missing = feature_missing or ("missing_feature_work", chain_ids)
+            continue
+        chain_ids.append(work["id"])
+        proposal_at = _observed_time(proposal)
+        approval_at = _observed_time(approval)
+        work_at = _observed_time(work)
+        if not (
+            proposal_at is not None
+            and approval_at is not None
+            and work_at is not None
+            and proposal_at < approval_at < work_at
+        ):
+            feature_missing = feature_missing or (
+                "feature_build_before_approval",
+                chain_ids,
+            )
+            continue
+        candidate_releases = chronological(
+            [
+                item
+                for item in release_success
+                if item["project_id"] == project_id
+                and item["fields"].get("merge_sha") is not None
+                and (_observed_time(item) or datetime.min.replace(tzinfo=timezone.utc))
+                > work_at
+            ]
+        )
+        if not candidate_releases:
+            feature_missing = feature_missing or (
+                "missing_feature_release_commit",
+                chain_ids,
+            )
+            continue
+        release = next(
+            (
+                item
+                for item in candidate_releases
+                if contains(
+                    project_id,
+                    work["fields"]["commit_sha"],
+                    item["fields"]["merge_sha"],
+                )
+                and release_in_trunk(project_id, item["fields"]["merge_sha"])
+            ),
+            None,
+        )
+        if release is None:
+            chain_ids.append(candidate_releases[0]["id"])
+            feature_missing = feature_missing or (
+                "missing_feature_trunk_containment",
+                chain_ids,
+            )
+            continue
+        chain_ids.append(release["id"])
+        feature_complete[f"{project_id}:{proposal_id}"] = chain_ids
+
+    consequential_by_proposal: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in chronological(decisions):
+        project_id = item["project_id"]
+        proposal_id = item["fields"].get("proposal_id")
+        if (
+            isinstance(project_id, str)
+            and isinstance(proposal_id, str)
+            and project_id in enabled_projects
+            and item["fields"].get("decision_class") == "consequential"
+            and item["fields"].get("decided_by") == "human"
+            and item["fields"].get("default_withheld") is True
+        ):
+            consequential_by_proposal.setdefault((project_id, proposal_id), item)
+    consequential = list(consequential_by_proposal.values())
+
+    def exact_or_legacy(
+        *,
+        key: str,
+        target: int,
+        unit: str,
+        complete: dict[str, list[str]],
+        missing: tuple[str, list[str]] | None,
+        components: dict[str, Any],
+        component_evidence: list[dict[str, Any]],
+        legacy_reason: str,
+    ) -> dict[str, Any]:
+        if complete:
+            return _measured_benchmark_record(
+                key=key,
+                label=five_day,
+                window_days=5,
+                target_value=target,
+                unit=unit,
+                value=len(complete),
+                components=components,
+                evidence_ids=[
+                    evidence_id
+                    for chain in complete.values()
+                    for evidence_id in chain
+                ],
+            )
+        if missing is not None:
+            return _partial_benchmark_record(
+                key=key,
+                label=five_day,
+                window_days=5,
+                target_value=target,
+                unit=unit,
+                components=components,
+                evidence_ids=missing[1],
+                reason=missing[0],
+            )
+        return _benchmark_record(
+            key=key,
+            label=five_day,
+            window_days=5,
+            target_value=target,
+            unit=unit,
+            components=components,
+            evidence_ids=[item["id"] for item in component_evidence],
+            missing_link=legacy_reason,
+        )
+
     return [
-        _benchmark_record(
+        exact_or_legacy(
             key="bugs_caught_and_fixed",
-            label=five_day,
-            window_days=5,
-            target_value=1,
+            target=1,
             unit="bugs",
-            components={
-                "bug_proposals": len(bug_proposals),
-                "incident_signals": len(incidents),
-                "successful_build_jobs": len(build_success),
-            },
-            evidence_ids=[item["id"] for item in bug_evidence],
-            missing_link="missing_bug_fix_lineage",
+            complete=bug_complete,
+            missing=bug_missing,
+            components=bug_components,
+            component_evidence=bug_evidence,
+            legacy_reason="missing_bug_fix_lineage",
         ),
-        _benchmark_record(
+        exact_or_legacy(
             key="usage_assessed_projects",
-            label=five_day,
-            window_days=5,
-            target_value=3,
+            target=3,
             unit="projects",
-            components={
-                "usage_projects_observed": len(
-                    {item["project_id"] for item in usage if item["project_id"]}
-                ),
-                "usage_records": len(usage),
-            },
-            evidence_ids=[item["id"] for item in usage_evidence],
-            missing_link="missing_usage_assessment_lineage",
+            complete=usage_complete,
+            missing=usage_missing,
+            components=usage_components,
+            component_evidence=usage_evidence,
+            legacy_reason="missing_usage_assessment_lineage",
         ),
-        _benchmark_record(
+        exact_or_legacy(
             key="features_shipped_end_to_end",
-            label=five_day,
-            window_days=5,
-            target_value=1,
+            target=1,
             unit="features",
-            components={
-                "feature_proposals": len(feature_proposals),
-                "approve_decisions": len(approvals),
-                "successful_build_jobs": len(build_success),
-                "successful_release_jobs": len(release_success),
-            },
-            evidence_ids=[item["id"] for item in feature_evidence],
-            missing_link="missing_feature_delivery_lineage",
+            complete=feature_complete,
+            missing=feature_missing,
+            components=feature_components,
+            component_evidence=feature_evidence,
+            legacy_reason="missing_feature_delivery_lineage",
         ),
-        _benchmark_record(
-            key="consequential_decisions_surfaced",
-            label=five_day,
-            window_days=5,
-            target_value=1,
-            unit="decisions",
-            components={"valid_decisions": len(decisions)},
-            evidence_ids=[item["id"] for item in decision_evidence],
-            missing_link="missing_decision_consequence_judgment",
+        (
+            _measured_benchmark_record(
+                key="consequential_decisions_surfaced",
+                label=five_day,
+                window_days=5,
+                target_value=1,
+                unit="decisions",
+                value=len(consequential),
+                components=decision_components,
+                evidence_ids=[item["id"] for item in consequential],
+            )
+            if consequential
+            else (
+                _partial_benchmark_record(
+                    key="consequential_decisions_surfaced",
+                    label=five_day,
+                    window_days=5,
+                    target_value=1,
+                    unit="decisions",
+                    components=decision_components,
+                    evidence_ids=[
+                        item["id"]
+                        for item in decisions
+                        if item["project_id"] in enabled_projects
+                    ],
+                    reason="missing_consequential_decision_metadata",
+                )
+                if any(item["project_id"] in enabled_projects for item in decisions)
+                else _benchmark_record(
+                    key="consequential_decisions_surfaced",
+                    label=five_day,
+                    window_days=5,
+                    target_value=1,
+                    unit="decisions",
+                    components=decision_components,
+                    evidence_ids=[item["id"] for item in decision_evidence],
+                    missing_link="missing_decision_consequence_judgment",
+                )
+            )
         ),
         _benchmark_record(
             key="critique_actionability",
@@ -4996,7 +5724,12 @@ def build_document(
         )
 
     evidence = sorted(evidence_by_id.values(), key=lambda item: item["id"])
-    effectiveness = _benchmark_effectiveness(evidence) + delegation_records
+    effectiveness = _benchmark_effectiveness(
+        evidence,
+        {project["project_id"]: project for project in fleet},
+        window_start_at,
+        started_at,
+    ) + delegation_records
     effectiveness_state_counts = {
         state: sum(1 for item in effectiveness if item["state"] == state)
         for state in ("measured", "partial", "unmeasured")

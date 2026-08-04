@@ -1912,6 +1912,11 @@ class OperatorFixtureContractTest(unittest.TestCase):
             {row["state"] for row in self.document["promises"]}
             <= {"verified", "violated", "unverified", "not_applicable"}
         )
+        states = {row["id"]: row["state"] for row in self.document["promises"]}
+        self.assertEqual(states["promise:bugs_caught_and_fixed"], "unverified")
+        self.assertEqual(states["promise:usage_assessed_projects"], "violated")
+        self.assertEqual(states["promise:features_shipped_end_to_end"], "verified")
+        self.assertEqual(states["promise:consequential_decisions_surfaced"], "verified")
         for row in self.document["promises"]:
             self.assertTrue(all(row[key] for key in ("reason_code", "reason", "impact", "action")))
         self.assertIn(
