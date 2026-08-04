@@ -451,6 +451,26 @@ complete.
 - **Starting state:** Shipyard `10b5671` on canonical `main`, clean and one
   commit ahead of `origin/main`; Ice clean on `master`, six inherited commits
   ahead of `origin/master`. Ice push is explicitly excluded.
+- **builder result:** the read-only reviewer found no evidence contradiction and
+  recommended the exact 2/4 aggregate, three-column result table, completed
+  Phase 12 editorial state, and desktop/mobile source and browser guards. Its
+  baseline commands were render exit 0, Bats 10/10, and source audit exit 0.
+- **Commits:** Ice `dd31f96` updates only the owner ticket; Shipyard `f694f7b`
+  publishes the README/deck result and its regression guards. Ice remains local
+  and was not pushed with its seven inherited commits.
+- **Verification:** generator exit 0; deck-fresh exit 0 after staging the
+  regenerated artifact; deck-complete reports 8 skills; browser render exit 0;
+  Bats 11/11; leak-check, ticket lifecycle, and both repositories' diff checks
+  exit 0. Ice's venv newspaper suite is 44/44 and `newspaper.py --help` exits 0.
+- **Rendered proof:** read and presentation modes at `1440×900` and `390×844`
+  show headers `Criterion · Floor · Result` and results
+  `PASS · MISS · MISS · PASS`; document/table horizontal overflow is 0px and
+  console/page errors are empty. Personally inspected table captures are
+  836×279 desktop and 350×584 mobile; all copy is readable without clipping.
+- **Outcome:** Phase 1 DoD met. The historical closeout is intentionally 2/4;
+  post-window WorkMac/PR #17 activity was not credited. Public deployment waits
+  for the normal Shipyard push boundary; the follow-up remains pending while
+  Phases 2–4 are built.
 
 ---
 
