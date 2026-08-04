@@ -322,3 +322,16 @@ from the final run rather than inventing a baseline count.
   final matrix passed 36 with three local-install skips; the primary orchestrator reran the same 39
   tests with `36 passed, 3 skipped`. Leak check was clean, deck freshness was in sync, and `git diff
   --check` exited 0. No model, network, PR, cloud, product-code, or project-install action occurred.
+- 2026-08-04 Phase 2 verification — `builder: subagent (1 agent)`. The generic critic remains first;
+  validated manifests now select a second reviewer only from real matching hunks, including ticket
+  hunks with configured external-repository triggers. Prompts are bounded and include the shared
+  role, project rubric, decision log, gates, exact hunks, and live-source registry. Source attempts
+  are recorded explicitly, findings are normalized/deduped at the higher severity, and malformed
+  manifests preserve the queue and withhold delivery. The archived pre-change trigger test failed
+  because only the generic critic ran. The subagent and primary orchestrator each ran the new suite
+  at `4 passed`; shell syntax, Python byte-compile, and diff checks exited 0. Eight filtered legacy
+  remainder tests and four harness remainder tests passed. The bounded 85-case matrix reached test
+  57 with only the three pre-existing Darwin lineage/config failures: those fixtures force Apple's
+  Python 3.9.6, which has neither `tomllib` nor `tomli`; the isolated test passes under the required
+  Python 3.11+. This unrelated baseline was not weakened or changed. No real model or network call,
+  delivery, project install, or external mutation occurred.

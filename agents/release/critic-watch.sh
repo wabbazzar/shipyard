@@ -733,14 +733,162 @@ $diff"
   result_text="$SPAWN_TEXT"
   tokens="$SPAWN_TOKENS"
 
+  # ---- matching specialist reviews -----------------------------------------
+  # The generic cold critic above always runs first. Only then do validated
+  # specialist manifests select a second review from actual diff hunks. The
+  # helper parses data only: it executes no manifest values and performs no
+  # network access.
+  local specialist_helper="$QUARTET_DIR/agents/release/specialist-review.py"
+  local generic_findings specialist_findings selection_file diff_file
+  local response_file evidence_file reviewed_at specialist_count=0
+  generic_findings="$(mktemp "$QUEUE_DIR/.critic-generic.XXXXXX")" || return 0
+  specialist_findings="$(mktemp "$QUEUE_DIR/.critic-specialist.XXXXXX")" || {
+    rm -f "$generic_findings"; return 0;
+  }
+  selection_file="$(mktemp "$QUEUE_DIR/.critic-selection.XXXXXX")" || {
+    rm -f "$generic_findings" "$specialist_findings"; return 0;
+  }
+  diff_file="$(mktemp "$QUEUE_DIR/.critic-diff.XXXXXX")" || {
+    rm -f "$generic_findings" "$specialist_findings" "$selection_file"; return 0;
+  }
+  response_file="$(mktemp "$QUEUE_DIR/.critic-response.XXXXXX")" || {
+    rm -f "$generic_findings" "$specialist_findings" "$selection_file" "$diff_file"; return 0;
+  }
+  printf '%s\n' "$result_text" | grep -E '^(block|warn|note)\|' \
+    >"$generic_findings" || true
+  : >"$specialist_findings"
+  printf '%s' "$full_diff" >"$diff_file"
+  evidence_file="$QUEUE_DIR/critic-specialist-sources-$session"
+  rm -f "$evidence_file"
+  if ! python3 "$specialist_helper" select --project "$PROJECT_DIR" \
+      --shipyard "$QUARTET_DIR" --diff-file "$diff_file" >"$selection_file"; then
+    log "specialist selection failed; generic findings withheld and queue kept"
+    emit_event release.critique.specialist_failed source=shoulder \
+      reason=manifest_or_selection files="$n_files"
+    rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+      "$diff_file" "$response_file"
+    return 0
+  fi
+  specialist_count="$(jq -r 'length' "$selection_file" 2>/dev/null || echo invalid)"
+  if ! [[ "$specialist_count" =~ ^[0-9]+$ ]]; then
+    log "specialist selection returned malformed output; queue kept"
+    rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+      "$diff_file" "$response_file"
+    return 0
+  fi
+
+  local specialist_entry slug prompt_rel log_rel specialist_project specialist_log
+  local specialist_gates specialist_hunks live_docs registry specialist_prompt
+  local specialist_rc specialist_tokens=0
+  while IFS= read -r specialist_entry; do
+    [ -n "$specialist_entry" ] || continue
+    slug="$(jq -r '.slug' <<<"$specialist_entry")"
+    prompt_rel="$(jq -r '.prompt_definition' <<<"$specialist_entry")"
+    log_rel="$(jq -r '.decision_log' <<<"$specialist_entry")"
+    specialist_project="$(_bounded_prompt_section \
+      "$(cat "$PROJECT_DIR/$prompt_rel")" 16000 "SPECIALIST PROJECT PROMPT")"
+    specialist_log="$(_bounded_prompt_section \
+      "$(cat "$PROJECT_DIR/$log_rel")" 24000 "SPECIALIST DECISION LOG")"
+    specialist_gates=""
+    [ ! -f "$PROJECT_DIR/.agents/gates.md" ] || \
+      specialist_gates="$(cat "$PROJECT_DIR/.agents/gates.md")"
+    specialist_gates="$(_bounded_prompt_section "$specialist_gates" 16000 \
+      "PROJECT GATES")"
+    specialist_hunks="$(jq -r '.hunks' <<<"$specialist_entry")"
+    specialist_hunks="$(_bounded_prompt_section "$specialist_hunks" 60000 \
+      "MATCHING HUNKS")"
+    live_docs="$(jq -c '.live_docs' <<<"$specialist_entry")"
+    registry="$(jq -c 'del(.hunks)' <<<"$specialist_entry")"
+    registry="$(_bounded_prompt_section "$registry" 12000 \
+      "SPECIALIST MANIFEST REGISTRY")"
+    specialist_prompt="$(cat "$QUARTET_DIR/agents/specialist/role.md")
+
+---
+
+SHOULDER REVIEW CONTRACT:
+
+This is a review-only, cold-context invocation for specialist '$slug'. Do not
+write files, change code, mutate cloud state, or create a pull request. Review
+only the exact matching hunks below. Use only read-only documentation retrieval.
+For every LIVE SOURCE REGISTRY entry, attempt current retrieval when access
+permits and return one evidence line:
+source|URL|UTC_RETRIEVAL_TIME|success|EXACT_CLAIM_SUPPORTED
+Use status failure or unverified with the precise evidence gap when retrieval
+does not succeed. Never replace failed retrieval with model memory.
+
+SPECIALIST MANIFEST REGISTRY:
+
+$registry
+
+---
+
+PROJECT SPECIALIST PROMPT:
+
+$specialist_project
+
+---
+
+DECISION LOG:
+
+$specialist_log
+
+---
+
+PROJECT GATES:
+
+$specialist_gates
+
+---
+
+LIVE SOURCE REGISTRY (canonical pointers only; read-only retrieval):
+
+$live_docs
+
+---
+
+EXACT MATCHING HUNKS:
+
+$specialist_hunks"
+
+    spawn_model --harness "${CRITIC_HARNESS:-claude}" \
+      --model "${CRITIC_MODEL:-}" --provider "${CRITIC_PROVIDER:-}" \
+      --prompt "$specialist_prompt" --log /dev/null --json
+    specialist_rc="$SPAWN_RC"
+    if [ "$specialist_rc" -ne 0 ] || [ -z "$SPAWN_RAW" ]; then
+      log "specialist '$slug' review failed (exit=$specialist_rc); queue kept"
+      emit_event release.critique.specialist_failed source=shoulder \
+        reason=spawn specialist="$slug" rc="$specialist_rc" files="$n_files"
+      rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+        "$diff_file" "$response_file" "$evidence_file"
+      return 0
+    fi
+    specialist_tokens=$((specialist_tokens + SPAWN_TOKENS))
+    printf '%s\n' "$SPAWN_TEXT" >"$response_file"
+    grep -E '^(block|warn|note)\|' "$response_file" \
+      >>"$specialist_findings" || true
+    reviewed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    python3 "$specialist_helper" source-evidence \
+      --live-docs-json "$live_docs" --response-file "$response_file" \
+      --reviewed-at "$reviewed_at" >>"$evidence_file" || {
+        log "specialist '$slug' source evidence was malformed; queue kept"
+        rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+          "$diff_file" "$response_file" "$evidence_file"
+        return 0
+      }
+  done < <(jq -c '.[]' "$selection_file")
+
   local findings n_block n_warn n_note
-  findings="$(grep -E '^(block|warn|note)\|' <<<"$result_text" || true)"
+  findings="$(python3 "$specialist_helper" merge-findings \
+    "$generic_findings" "$specialist_findings")"
+  tokens=$((tokens + specialist_tokens))
   n_block="$(grep -c '^block|' <<<"$findings" || true)"
   n_warn="$(grep -c '^warn|' <<<"$findings" || true)"
   n_note="$(grep -c '^note|' <<<"$findings" || true)"
 
   printf '%s\n' "$findings" >"$findings_file"
   printf '%s\n' "$n_files" >"$findings_files_count"
+  rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+    "$diff_file" "$response_file"
 
   local critique_id="" critique_lineage=() summary
   if outcome_lineage_enabled; then
@@ -755,6 +903,7 @@ $diff"
   fi
   emit_event release.critique source=shoulder files="$n_files" \
     block="$n_block" warn="$n_warn" note="$n_note" tokens="$tokens" \
+    specialists="$specialist_count" \
     ${critique_lineage[@]+"${critique_lineage[@]}"}
   log "critique: $n_block block, $n_warn warn, $n_note note across $n_files files (tokens=$tokens)"
 
