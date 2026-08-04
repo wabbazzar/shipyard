@@ -331,6 +331,8 @@ emit_delivery_disposition() {
 deliver_findings() {
   local queue="$1" session="$2" findings_file="$3" n_files="$4"
   local supplied_id="${5:-}"
+  local delivery_session="${6:-$session}"
+  local author_harness="${7:-${CRITIC_NOTE_HARNESS:-claude}}"
   local findings n_block n_warn n_note
   DELIVERY_STATUS=delivery
   findings="$(cat "$findings_file" 2>/dev/null || true)"
@@ -391,8 +393,15 @@ deliver_findings() {
     return 0
   fi
   # shellcheck disable=SC2086 — word-splitting CLAUDE_NOTE_CMD is intentional
-  CRITIC_NOTE_ID="$note_id" CRITIC_PROJECT_DIR="$PROJECT_DIR" \
-    $CLAUDE_NOTE_CMD "$session" "$summary"
+  if [ "${CRITIC_MULTI_AUTHOR:-false}" = "true" ]; then
+    CRITIC_NOTE_ID="$note_id" CRITIC_PROJECT_DIR="$PROJECT_DIR" \
+      CRITIC_NOTE_HARNESS="$author_harness" \
+      "$QUARTET_DIR/agents/release/critic-note.sh" --harness "$author_harness" \
+      "$delivery_session" "$summary"
+  else
+    CRITIC_NOTE_ID="$note_id" CRITIC_PROJECT_DIR="$PROJECT_DIR" \
+      $CLAUDE_NOTE_CMD "$session" "$summary"
+  fi
   note_rc=$?
   case "$note_rc" in
     0)
@@ -503,6 +512,8 @@ sys.stdout.buffer.write(data.decode("utf-8", "ignore").encode("utf-8"))' \
 # ---------- one critique over a queue file ----------------------------------
 critique_queue() {
   local queue="$1" session="$2"
+  local delivery_session="${3:-$session}"
+  local author_harness="${4:-${CRITIC_NOTE_HARNESS:-claude}}"
   local findings_file="$QUEUE_DIR/critic-findings-$session"
   local findings_files_count="$QUEUE_DIR/critic-findings-files-$session"
   local retry_snapshot="$QUEUE_DIR/critic-snapshot-$session"
@@ -519,7 +530,8 @@ critique_queue() {
         sort -u | grep -c . || true)"
     fi
     log "reusing cached critique for session $session (delivery retry)"
-    deliver_findings "$queue" "$session" "$findings_file" "$cached_n"
+    deliver_findings "$queue" "$session" "$findings_file" "$cached_n" "" \
+      "$delivery_session" "$author_harness"
     return 0
   fi
 
@@ -908,7 +920,8 @@ $specialist_hunks"
   log "critique: $n_block block, $n_warn warn, $n_note note across $n_files files (tokens=$tokens)"
 
   # ---- deliver to the dev session -------------------------------------------
-  deliver_findings "$queue" "$session" "$findings_file" "$n_files" "$critique_id"
+  deliver_findings "$queue" "$session" "$findings_file" "$n_files" "$critique_id" \
+    "$delivery_session" "$author_harness"
   return 0
 }
 
@@ -923,12 +936,20 @@ eval_pass() {
       [ -e "$q" ] && queues+=("$q")
     done
   fi
-  local queue session now mtime idle distinct urgent
+  local queue session delivery_session author_harness now mtime idle distinct urgent
   # Bash 3.2 (the native macOS /bin/bash) considers an empty local array
   # unbound under `set -u`; the + expansion keeps an idle watcher a no-op.
   for queue in ${queues[@]+"${queues[@]}"}; do
     [ -s "$queue" ] || continue
     session="${queue##*/critic-queue-}"
+    delivery_session="$session"
+    author_harness="${CRITIC_PRIMARY_HARNESS:-${CRITIC_NOTE_HARNESS:-claude}}"
+    case "$session" in
+      claude--*|codex--*)
+        author_harness="${session%%--*}"
+        delivery_session="${session#*--}"
+        ;;
+    esac
     now="$(date +%s)"
     mtime="$(stat -c %Y "$queue" 2>/dev/null || stat -f %m "$queue" 2>/dev/null || echo "$now")"
     idle=$(( now - mtime ))
@@ -940,7 +961,7 @@ eval_pass() {
     fi
     if [ "$urgent" -eq 1 ] || [ "$idle" -ge "$IDLE_SEC" ] ||
        [ "$distinct" -ge "$BATCH_FILES" ]; then
-      critique_queue "$queue" "$session"
+      critique_queue "$queue" "$session" "$delivery_session" "$author_harness"
     fi
   done
 }

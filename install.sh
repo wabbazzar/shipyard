@@ -213,12 +213,35 @@ PROJECT_NAME="$(jq_from_json "$CFG_JSON" -r '.project_name // empty')"
 IDENTITY_POLICY_FILE="$PROJECT_DIR/.shipyard-git-identity.toml"
 
 SHOULDER_AUTO="$(jq_from_json "$CFG_JSON" -r '.shoulder.auto_wire // false')"
-SHOULDER_HARNESS="$(
-  jq_from_json "$CFG_JSON" -r '.shoulder.harness // .harness.default // "claude"'
-)"
+SHOULDER_MULTI="$(jq_from_json "$CFG_JSON" -r '
+  if (.shoulder | type) == "object" and (.shoulder | has("harnesses"))
+  then "true" else "false" end')"
+if [ "$SHOULDER_MULTI" = "true" ]; then
+  jq_from_json "$CFG_JSON" -e '
+    (.shoulder.harnesses | type) == "array" and
+    (.shoulder.harnesses | length) >= 2 and
+    (all(.shoulder.harnesses[]; . == "claude" or . == "codex")) and
+    ((.shoulder.harnesses | unique | length) == (.shoulder.harnesses | length)) and
+    (.shoulder | has("harness") | not)
+  ' >/dev/null || {
+    echo "invalid [shoulder] harnesses (want ordered unique [\"claude\",\"codex\"] and no scalar harness)" >&2
+    exit 2
+  }
+  SHOULDER_HARNESSES="$(jq_from_json "$CFG_JSON" -r '.shoulder.harnesses | join(",")')"
+  SHOULDER_HARNESS="$(jq_from_json "$CFG_JSON" -r '.shoulder.harnesses[0]')"
+else
+  SHOULDER_HARNESS="$(
+    jq_from_json "$CFG_JSON" -r '.shoulder.harness // .harness.default // "claude"'
+  )"
+  SHOULDER_HARNESSES="$SHOULDER_HARNESS"
+fi
+SHOULDER_HAS_CODEX=false
+case ",$SHOULDER_HARNESSES," in
+  *,codex,*) SHOULDER_HAS_CODEX=true ;;
+esac
 SHOULDER_CRITIC_HARNESS="$(
   jq_from_json "$CFG_JSON" -r \
-    '.shoulder.critic_harness // .shoulder.harness // .harness.default // "claude"' \
+    '.shoulder.critic_harness // .shoulder.harnesses[0] // .shoulder.harness // .harness.default // "claude"' \
 )"
 for shoulder_key in harness critic_harness; do
   case "$shoulder_key" in
@@ -714,19 +737,34 @@ run_doctor() {
      [ -f "$sh_watch_path" ]; then
     # shellcheck source=agents/lib/shoulder-wire.sh
     . "$QUARTET_DIR/agents/lib/shoulder-wire.sh"
-    local sh_h sh_critic sh_cfg sh_q sh_feedback sh_stop
-    local sh_definition expected sh_loaded
-    sh_h="$SHOULDER_HARNESS"
+    local sh_h sh_critic sh_cfg sh_q sh_feedback sh_stop sh_namespace sh_command
+    local sh_definition expected sh_loaded sh_old_ifs
     sh_critic="$SHOULDER_CRITIC_HARNESS"
-    sh_cfg="$(sw_config_path "$sh_h" "$PROJECT_DIR")"
-    sh_q="$QUARTET_DIR/agents/release/critic-queue-${sh_h}.sh"
-    [ "$sh_h" = "claude" ] && sh_q="$QUARTET_DIR/agents/release/critic-queue.sh"
-    if [ "$sh_h" = "codex" ]; then
-      sh_feedback="$QUARTET_DIR/agents/release/critic-codex-feedback.sh"
-      sh_stop="$QUARTET_DIR/agents/release/critic-stop-gate-codex.sh"
-      if [ ! -f "$sh_cfg" ] ||
-         ! sw_codex_bundle_wired \
-           "$sh_cfg" "$PROJECT_DIR" "$sh_q" "$sh_feedback" "$sh_stop"; then
+    sh_old_ifs="$IFS"; IFS=,
+    for sh_h in $SHOULDER_HARNESSES; do
+      IFS="$sh_old_ifs"
+      sh_namespace=""
+      [ "$SHOULDER_MULTI" != "true" ] || [ "$sh_h" = "$SHOULDER_HARNESS" ] || sh_namespace="$sh_h"
+      sh_cfg="$(sw_config_path "$sh_h" "$PROJECT_DIR")"
+      sh_q="$QUARTET_DIR/agents/release/critic-queue-${sh_h}.sh"
+      [ "$sh_h" = "claude" ] && sh_q="$QUARTET_DIR/agents/release/critic-queue.sh"
+      if [ "$sh_h" = "codex" ]; then
+        sh_feedback="$QUARTET_DIR/agents/release/critic-codex-feedback.sh"
+        sh_stop="$QUARTET_DIR/agents/release/critic-stop-gate-codex.sh"
+      if [ "$SHOULDER_MULTI" = "true" ] && [ -n "$sh_namespace" ]; then
+        if [ ! -f "$sh_cfg" ] || ! sw_codex_bundle_scoped_wired \
+             "$sh_cfg" "$PROJECT_DIR" "$sh_q" "$sh_feedback" "$sh_stop" "$sh_namespace"; then
+          emit "shoulder: codex three-hook definition missing in $sh_cfg (run install.sh --wire-shoulder)"
+        else
+          sh_definition="$(sw_codex_scoped_definition_hash \
+            "$PROJECT_DIR" "$sh_q" "$sh_feedback" "$sh_stop" "$sh_namespace")"
+          if ! sw_codex_runtime_verified "$PROJECT_DIR" "$sh_definition"; then
+            emit "shoulder: codex configured but trust/runtime unverified since install"
+          fi
+        fi
+      elif [ ! -f "$sh_cfg" ] ||
+           ! sw_codex_bundle_wired \
+             "$sh_cfg" "$PROJECT_DIR" "$sh_q" "$sh_feedback" "$sh_stop"; then
         emit "shoulder: codex three-hook definition missing in $sh_cfg (run install.sh --wire-shoulder)"
       else
         sh_definition="$(sw_codex_definition_hash \
@@ -735,9 +773,16 @@ run_doctor() {
           emit "shoulder: codex configured but trust/runtime unverified since install"
         fi
       fi
-    elif [ ! -f "$sh_cfg" ] || ! sw_wired "$sh_h" "$sh_cfg" "$sh_q"; then
-      emit "shoulder: $sh_h capture hook not wired in $sh_cfg (run install.sh --wire-shoulder)"
-    fi
+      else
+        sh_command="$sh_q"
+        [ -z "$sh_namespace" ] || sh_command="CRITIC_QUEUE_NAMESPACE=$sh_namespace CRITIC_AUTHOR_HARNESS=$sh_h /bin/bash $sh_q"
+        if [ ! -f "$sh_cfg" ] || ! sw_wired "$sh_h" "$sh_cfg" "$sh_command"; then
+          emit "shoulder: $sh_h capture hook not wired in $sh_cfg (run install.sh --wire-shoulder)"
+        fi
+      fi
+      IFS=,
+    done
+    IFS="$sh_old_ifs"
 
     if [ ! -f "$sh_env" ]; then
       emit "shoulder: delivery env $sh_env missing (run install.sh --wire-shoulder)"
@@ -748,9 +793,15 @@ run_doctor() {
       expected="$(printf 'CRITIC_HARNESS=%q' "$sh_critic")"
       grep -Fxq "$expected" "$sh_env" ||
         emit "shoulder: delivery env missing configured CRITIC_HARNESS"
-      expected="$(printf 'CRITIC_NOTE_HARNESS=%q' "$sh_h")"
+      expected="$(printf 'CRITIC_NOTE_HARNESS=%q' "$SHOULDER_HARNESS")"
       grep -Fxq "$expected" "$sh_env" ||
         emit "shoulder: delivery env missing authoring CRITIC_NOTE_HARNESS"
+      if [ "$SHOULDER_MULTI" = "true" ]; then
+        grep -Fxq "CRITIC_MULTI_AUTHOR=true" "$sh_env" ||
+          emit "shoulder: delivery env missing multi-author mode"
+        grep -Fxq "CRITIC_AUTHOR_HARNESSES=$SHOULDER_HARNESSES" "$sh_env" ||
+          emit "shoulder: delivery env missing configured author list"
+      fi
     fi
 
     if [ "$SCHEDULER" = "systemd" ]; then
@@ -1187,6 +1238,17 @@ shoulder_restore_file() {
   else
     rm -f -- "$path"
   fi
+}
+
+shoulder_multi_restore_configs() {
+  [ "${sh_multi_tx_active:-0}" = "1" ] || return 0
+  shoulder_restore_file "$sh_multi_claude_cfg" "$sh_multi_claude_backup" || true
+  shoulder_restore_file "$sh_multi_codex_cfg" "$sh_multi_codex_backup" || true
+}
+
+shoulder_multi_discard_backups() {
+  rm -f -- "${sh_multi_claude_backup:-}" "${sh_multi_codex_backup:-}"
+  sh_multi_tx_active=0
 }
 
 shoulder_rollback_watcher() {
@@ -1630,15 +1692,20 @@ if [ "$WIRE_SHOULDER" = "1" ] || [ "$sh_auto" = "true" ]; then
   . "$QUARTET_DIR/agents/lib/shoulder-wire.sh"
   sh_harness="$SHOULDER_HARNESS"
   sh_critic_harness="$SHOULDER_CRITIC_HARNESS"
-  sh_queue="$QUARTET_DIR/agents/release/critic-queue-${sh_harness}.sh"
-  [ "$sh_harness" = "claude" ] && sh_queue="$QUARTET_DIR/agents/release/critic-queue.sh"
-  sh_cfg="$(sw_config_path "$sh_harness" "$PROJECT_DIR")"
   echo ""
-  echo "==> shoulder-mode wiring (author=$sh_harness critic=$sh_critic_harness)"
+  if [ "$SHOULDER_MULTI" = "true" ]; then
+    echo "==> shoulder-mode wiring (authors=$SHOULDER_HARNESSES critic=$sh_critic_harness)"
+  else
+    echo "==> shoulder-mode wiring (author=$sh_harness critic=$sh_critic_harness)"
+  fi
   sh_feedback="$QUARTET_DIR/agents/release/critic-codex-feedback.sh"
   sh_stop="$QUARTET_DIR/agents/release/critic-stop-gate-codex.sh"
-  if [ "$DRY_RUN" = "1" ]; then
-    if [ "$sh_harness" = "codex" ] &&
+  if [ "$SHOULDER_MULTI" != "true" ]; then
+    sh_queue="$QUARTET_DIR/agents/release/critic-queue-${sh_harness}.sh"
+    [ "$sh_harness" = "claude" ] && sh_queue="$QUARTET_DIR/agents/release/critic-queue.sh"
+    sh_cfg="$(sw_config_path "$sh_harness" "$PROJECT_DIR")"
+    if [ "$DRY_RUN" = "1" ]; then
+      if [ "$sh_harness" = "codex" ] &&
        sw_codex_bundle_wired \
          "$sh_cfg" "$PROJECT_DIR" "$sh_queue" "$sh_feedback" "$sh_stop"; then
       echo "  would keep: $sh_cfg already has codex capture, feedback, and Stop"
@@ -1651,8 +1718,8 @@ if [ "$WIRE_SHOULDER" = "1" ] || [ "$sh_auto" = "true" ]; then
     else
       echo "  would wire: capture hook into $sh_cfg -> $sh_queue"
     fi
-  else
-    if [ "$sh_harness" = "codex" ]; then
+    else
+      if [ "$sh_harness" = "codex" ]; then
       CRITIC_FEEDBACK_ADMIN=1 \
         "$sh_feedback" --admin-allow-project "$PROJECT_DIR" || {
           echo "shoulder: failed to authorize $PROJECT_DIR for Codex feedback" >&2
@@ -1661,9 +1728,61 @@ if [ "$WIRE_SHOULDER" = "1" ] || [ "$sh_auto" = "true" ]; then
       sw_wire_codex_bundle \
         "$sh_cfg" "$PROJECT_DIR" "$sh_queue" "$sh_feedback" "$sh_stop" |
         sed 's/^/  /' || exit 2
-    else
-      sw_wire "$sh_harness" "$sh_cfg" "$sh_queue" | sed 's/^/  /' || exit 2
+      else
+        sw_wire "$sh_harness" "$sh_cfg" "$sh_queue" | sed 's/^/  /' || exit 2
+      fi
     fi
+  else
+    sh_multi_claude_cfg="$(sw_config_path claude "$PROJECT_DIR")"
+    sh_multi_codex_cfg="$(sw_config_path codex "$PROJECT_DIR")"
+    # Fail before touching either author if a native config is malformed.
+    if [ -f "$sh_multi_claude_cfg" ] &&
+       ! jq -e 'type == "object"' "$sh_multi_claude_cfg" >/dev/null 2>&1; then
+      echo "shoulder: refusing to modify malformed Claude config $sh_multi_claude_cfg" >&2
+      exit 2
+    fi
+    if ! _sw_codex_config_valid "$sh_multi_codex_cfg"; then
+      echo "shoulder: refusing to modify malformed Codex config $sh_multi_codex_cfg" >&2
+      exit 2
+    fi
+    if [ "$DRY_RUN" != "1" ]; then
+      sh_multi_claude_backup="$(shoulder_backup_file "$sh_multi_claude_cfg")" || exit 2
+      sh_multi_codex_backup="$(shoulder_backup_file "$sh_multi_codex_cfg")" || {
+        rm -f -- "$sh_multi_claude_backup"
+        exit 2
+      }
+      sh_multi_tx_active=1
+      trap shoulder_multi_restore_configs EXIT
+    fi
+    sh_old_ifs="$IFS"; IFS=,
+    for sh_author in $SHOULDER_HARNESSES; do
+      IFS="$sh_old_ifs"
+      sh_namespace=""
+      [ "$sh_author" = "$SHOULDER_HARNESS" ] || sh_namespace="$sh_author"
+      sh_queue="$QUARTET_DIR/agents/release/critic-queue-${sh_author}.sh"
+      [ "$sh_author" = "claude" ] && sh_queue="$QUARTET_DIR/agents/release/critic-queue.sh"
+      sh_cfg="$(sw_config_path "$sh_author" "$PROJECT_DIR")"
+      if [ "$DRY_RUN" = "1" ]; then
+        echo "  would wire: $sh_author capture into $sh_cfg"
+      elif [ "$sh_author" = "codex" ] && [ -n "$sh_namespace" ]; then
+        CRITIC_FEEDBACK_ADMIN=1 "$sh_feedback" --admin-allow-project "$PROJECT_DIR" || exit 2
+        sw_wire_codex_bundle_scoped \
+          "$sh_cfg" "$PROJECT_DIR" "$sh_queue" "$sh_feedback" "$sh_stop" "$sh_namespace" |
+          sed 's/^/  /' || exit 2
+      elif [ "$sh_author" = "codex" ]; then
+        CRITIC_FEEDBACK_ADMIN=1 "$sh_feedback" --admin-allow-project "$PROJECT_DIR" || exit 2
+        sw_wire_codex_bundle \
+          "$sh_cfg" "$PROJECT_DIR" "$sh_queue" "$sh_feedback" "$sh_stop" |
+          sed 's/^/  /' || exit 2
+      else
+        sh_command="$sh_queue"
+        [ -z "$sh_namespace" ] ||
+          sh_command="CRITIC_QUEUE_NAMESPACE=$sh_namespace CRITIC_AUTHOR_HARNESS=$sh_author /bin/bash $sh_queue"
+        sw_wire "$sh_author" "$sh_cfg" "$sh_command" | sed 's/^/  /' || exit 2
+      fi
+      IFS=,
+    done
+    IFS="$sh_old_ifs"
   fi
 
   # Delivery/reviewer env sourced by the persistent watcher. Write the complete
@@ -1687,6 +1806,11 @@ if [ "$WIRE_SHOULDER" = "1" ] || [ "$sh_auto" = "true" ]; then
     printf 'CRITIC_NOTE_HARNESS=%q\n' "$sh_harness"
     printf 'CLAUDE_NOTE_CMD=%q\n' \
       "$QUARTET_DIR/agents/release/critic-note.sh --harness $sh_harness"
+    if [ "$SHOULDER_MULTI" = "true" ]; then
+      printf 'CRITIC_MULTI_AUTHOR=true\n'
+      printf 'CRITIC_PRIMARY_HARNESS=%q\n' "$sh_harness"
+      printf 'CRITIC_AUTHOR_HARNESSES=%s\n' "$SHOULDER_HARNESSES"
+    fi
     [ -n "$sh_target" ] &&
       printf 'CRITIC_NOTE_TARGET=%q\n' "$sh_target"
     [ -n "$sh_deliver" ] &&
@@ -1704,7 +1828,7 @@ if [ "$WIRE_SHOULDER" = "1" ] || [ "$sh_auto" = "true" ]; then
       echo "shoulder: failed to atomically write $sh_env" >&2
       exit 2
     }
-    if [ "$sh_harness" = "codex" ]; then
+    if [ "$SHOULDER_HAS_CODEX" = "true" ]; then
       sw_prepare_codex_runtime_marker "$PROJECT_DIR" || {
         shoulder_restore_file "$sh_env" "$sh_env_backup" || true
         echo "shoulder: private Codex runtime marker state is unsafe" >&2
@@ -1765,7 +1889,7 @@ WantedBy=default.target
       # definitions executes in a fresh normal Codex process. The marker sits
       # beside the installer-owned private authorization state, never in the
       # project workspace.
-      if [ "$sh_harness" = "codex" ]; then
+      if [ "$SHOULDER_HAS_CODEX" = "true" ]; then
         sw_prepare_codex_runtime_marker "$PROJECT_DIR" || {
           shoulder_rollback_watcher \
             "$sh_watch_unit" "$sh_watch_path" "$sh_watch_backup" \
@@ -1872,6 +1996,10 @@ ${sh_watch_launchd_env}  </dict>
       rm -f -- "$sh_watch_backup" "$sh_env_backup"
       echo "  watcher active: $sh_watch_unit"
     fi
+  fi
+  if [ "$SHOULDER_MULTI" = "true" ] && [ "$DRY_RUN" != "1" ]; then
+    shoulder_multi_discard_backups
+    trap - EXIT
   fi
 fi
 

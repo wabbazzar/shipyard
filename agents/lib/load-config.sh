@@ -21,8 +21,11 @@ load_config_json() {
     echo "load_config_json: file not found: $cfg_file" >&2
     return 2
   fi
-  local raw
-  raw="$(python3 - "$cfg_file" <<'PY' 2>/dev/null
+  local raw toml_python
+  # shellcheck source=agents/lib/toml-python.sh
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/toml-python.sh"
+  toml_python="$(toml_python_bin)" || return 1
+  raw="$("$toml_python" - "$cfg_file" <<'PY' 2>/dev/null
 import json, sys
 try:
     import tomllib

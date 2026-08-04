@@ -64,6 +64,8 @@ memory.
 | Decision | Rationale |
 |---|---|
 | Run a second specialist review; do not overload the generic critic | Cold general release review and knowledge-bearing domain review have different contamination and evidence contracts |
+| `release` remains the shoulder agent; a specialist is an invoked review persona | This matches the proven adjudication-specialist model: no specialist timer, daemon, lifecycle runner, or build authority is created |
+| Reuse the same specialist persona from polish and release | Polish invokes it during ticket preflight; release invokes it over matching hunks. The caller changes, but the prompt, decision log, evidence discipline, and review-only boundary do not |
 | Route polish from ticket/file semantics and shoulder from real hunks | The shoulder critic intentionally cannot see author reasoning; claiming otherwise would create a false gate |
 | Treat a configured Infrastructure/Platform PR as blocked until specialist evidence is recorded | External escalation is higher blast radius than exhausting the local permission/resource matrix |
 | Store canonical live-source pointers and retrieval evidence, never vendor prose | AWS/provider behavior changes; copied documentation silently becomes stale |
@@ -88,6 +90,10 @@ ask-first boundary after the branch and PR are verified; it does not block build
 
 ### Specialist manifest and source contract
 
+- Treat the specialist as a personality/invocation of an existing workflow, not a sixth lifecycle
+  agent. `release` owns shoulder scheduling, queue consumption, generic-first ordering, and finding
+  delivery; `polish-ticket` owns its own pre-execution invocation. Neither path installs a
+  specialist service, timer, daemon, or independent runner.
 - Add a machine-readable project manifest per specialist under a neutral `.agents/` path. It names:
   specialist slug, common prompt/agent definition, decision log, hunk path patterns, ticket semantic
   triggers, external-repository escalation triggers, and live documentation sources.
@@ -229,6 +235,9 @@ from the final run rather than inventing a baseline count.
 
 ## Definition of Done
 
+- [ ] `release` remains the only shoulder lifecycle agent; installed specialists are bounded
+      review personas with no independent scheduler, runner, or build authority, and polish reuses
+      the same persona contract.
 - [ ] A matching real hunk causes the installed specialist—not only the generic critic—to review
       and return a finding through the normal shoulder delivery path.
 - [ ] An unmatched or reverted hunk does not invoke the specialist.

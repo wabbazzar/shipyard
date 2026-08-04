@@ -16,6 +16,9 @@
 #
 # Every path comes from the caller; nothing machine-specific is baked here.
 
+# shellcheck source=agents/lib/toml-python.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/toml-python.sh"
+
 # ---- claude: .claude/settings.json (JSON, merged with jq) ------------------
 _sw_is_claude() {
   jq -e --arg c "$2" 'any(.hooks.PostToolUse[]?.hooks[]?; .command==$c)' \
@@ -55,9 +58,10 @@ EOF
 }
 
 _sw_codex_hook_wired() {
-  local f="$1" event="$2" matcher="$3" cmd="$4"
+  local f="$1" event="$2" matcher="$3" cmd="$4" toml_python
   [ -f "$f" ] || return 1
-  python3 - "$f" "$event" "$matcher" "$cmd" <<'PY' >/dev/null 2>&1
+  toml_python="$(toml_python_bin)" || return 1
+  "$toml_python" - "$f" "$event" "$matcher" "$cmd" <<'PY' >/dev/null 2>&1
 import sys
 try:
     import tomllib
@@ -81,7 +85,9 @@ PY
 
 _sw_codex_config_valid() {
   [ -f "$1" ] || return 0
-  python3 - "$1" <<'PY' >/dev/null 2>&1
+  local toml_python
+  toml_python="$(toml_python_bin)" || return 1
+  "$toml_python" - "$1" <<'PY' >/dev/null 2>&1
 import sys
 try:
     import tomllib
@@ -129,6 +135,70 @@ sw_codex_runtime_command() {
   printf '%q %q %q %q %q %q %q\n' \
     /bin/bash "$wire" --codex-runtime-hook \
     "$project" "$target" "$definition" "$marker"
+}
+
+sw_codex_scoped_definition_hash() {
+  local project="$1" capture="$2" feedback="$3" stop="$4" namespace="$5"
+  project="$(cd "$project" 2>/dev/null && pwd -P)" || return 2
+  python3 - "$project" "$capture" "$feedback" "$stop" "$namespace" <<'PY'
+from hashlib import sha256
+import sys
+payload = "\x1f".join(("codex-three-hook-scoped-v1", *sys.argv[1:]))
+print(sha256(payload.encode()).hexdigest())
+PY
+}
+
+sw_codex_scoped_runtime_command() {
+  local project="$1" target="$2" definition="$3" namespace="$4" wire marker
+  project="$(cd "$project" 2>/dev/null && pwd -P)" || return 2
+  wire="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+  marker="$(sw_codex_runtime_marker "$project")" || return 2
+  printf '%q %q %q %q %q %q %q %q\n' \
+    /bin/bash "$wire" --codex-runtime-hook-scoped \
+    "$project" "$target" "$definition" "$marker" "$namespace"
+}
+
+sw_wire_codex_bundle_scoped() {
+  local f="$1" project="$2" capture="$3" feedback="$4" stop="$5" namespace="$6"
+  local definition capture_cmd feedback_cmd stop_cmd tmp
+  if sw_codex_bundle_scoped_wired \
+       "$f" "$project" "$capture" "$feedback" "$stop" "$namespace" 2>/dev/null; then
+    echo "shoulder: codex scoped capture, feedback, and Stop already wired"
+    return 0
+  fi
+  _sw_codex_config_valid "$f" || {
+    echo "shoulder: refusing to modify malformed Codex config $f" >&2
+    return 2
+  }
+  definition="$(sw_codex_scoped_definition_hash \
+    "$project" "$capture" "$feedback" "$stop" "$namespace")" || return 2
+  capture_cmd="$(sw_codex_scoped_runtime_command "$project" "$capture" "$definition" "$namespace")" || return 2
+  feedback_cmd="$(sw_codex_scoped_runtime_command "$project" "$feedback" "$definition" "$namespace")" || return 2
+  stop_cmd="$(sw_codex_scoped_runtime_command "$project" "$stop" "$definition" "$namespace")" || return 2
+  mkdir -p "$(dirname "$f")" 2>/dev/null || return 2
+  tmp="$(mktemp "$(dirname "$f")/.shoulder-config.XXXXXX")" || return 2
+  [ ! -f "$f" ] || cp -p "$f" "$tmp" || { rm -f "$tmp"; return 2; }
+  _sw_append_codex_hook "$tmp" PostToolUse apply_patch "$capture_cmd" &&
+    _sw_append_codex_hook "$tmp" PostToolUse "*" "$feedback_cmd" &&
+    _sw_append_codex_hook "$tmp" Stop "*" "$stop_cmd" &&
+    _sw_codex_config_valid "$tmp" && mv "$tmp" "$f" || {
+      rm -f "$tmp"
+      return 2
+    }
+  echo "shoulder: wired project-scoped codex capture, feedback, and Stop definitions"
+}
+
+sw_codex_bundle_scoped_wired() {
+  local f="$1" project="$2" capture="$3" feedback="$4" stop="$5" namespace="$6"
+  local definition capture_cmd feedback_cmd stop_cmd
+  definition="$(sw_codex_scoped_definition_hash \
+    "$project" "$capture" "$feedback" "$stop" "$namespace")" || return 2
+  capture_cmd="$(sw_codex_scoped_runtime_command "$project" "$capture" "$definition" "$namespace")" || return 2
+  feedback_cmd="$(sw_codex_scoped_runtime_command "$project" "$feedback" "$definition" "$namespace")" || return 2
+  stop_cmd="$(sw_codex_scoped_runtime_command "$project" "$stop" "$definition" "$namespace")" || return 2
+  _sw_codex_hook_wired "$f" PostToolUse apply_patch "$capture_cmd" &&
+    _sw_codex_hook_wired "$f" PostToolUse "*" "$feedback_cmd" &&
+    _sw_codex_hook_wired "$f" Stop "*" "$stop_cmd"
 }
 
 sw_wire_codex_bundle() {
@@ -260,7 +330,7 @@ sw_codex_runtime_verified() {
 }
 
 _sw_codex_runtime_hook() {
-  local project="$1" target="$2" definition="$3" marker="$4"
+  local project="$1" target="$2" definition="$3" marker="$4" namespace="${5:-}"
   local input cwd canonical tmp rc epoch
   input="$(umask 077; mktemp "${TMPDIR:-/tmp}/shipyard-codex-hook.XXXXXX")" ||
     return 0
@@ -285,7 +355,8 @@ with open(path, "wb") as handle:
     return 0
   fi
 
-  /bin/bash "$target" <"$input"
+  CRITIC_QUEUE_NAMESPACE="$namespace" CRITIC_AUTHOR_HARNESS=codex \
+    /bin/bash "$target" <"$input"
   rc=$?
   rm -f "$input"
 
@@ -369,6 +440,11 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     --codex-runtime-hook)
       [ "$#" -eq 5 ] || exit 0
       _sw_codex_runtime_hook "$2" "$3" "$4" "$5"
+      exit $?
+      ;;
+    --codex-runtime-hook-scoped)
+      [ "$#" -eq 6 ] || exit 0
+      _sw_codex_runtime_hook "$2" "$3" "$4" "$5" "$6"
       exit $?
       ;;
     *)
