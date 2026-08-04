@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-04
 - **Owner:** wabbazzar
-- **Status:** Draft — ready for polish
+- **Status:** Core implemented — Judgify adoption and live doctor proof pending
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 18 (5 phases, cap 5/phase)
@@ -344,3 +344,24 @@ from the final run rather than inventing a baseline count.
   Python 3.9.6, which has neither `tomllib` nor `tomli`; the isolated test passes under the required
   Python 3.11+. This unrelated baseline was not weakened or changed. No real model or network call,
   delivery, project install, or external mutation occurred.
+- 2026-08-04 Phase 4 verification — `builder: subagent (1 agent), independently reviewed and
+  corrected by the orchestrator`. Explicit `shoulder.harnesses` configuration now wires Claude and
+  Codex together while preserving the first author's legacy queue and hook bytes. Additional-author
+  queues and every internal artifact are namespaced; delivery receives the original raw session ID
+  and its author harness. Invalid, duplicate, unsupported, or scalar/list-ambiguous configuration
+  fails before mutation, doctor checks each author separately, and the Darwin config loader selects
+  an available TOML-capable Python without installing a dependency. The focused dual-author matrix
+  passed 8/8, five selected legacy wiring/rollback/doctor cases passed, the three previously failing
+  Darwin lineage/config cases passed under the forced `/usr/bin`-first PATH, shell syntax and diff
+  checks exited 0, leak check was clean, and deck freshness was in sync. Commit `5edd1c3`. No
+  specialist service or sixth lifecycle agent was introduced: `release` remains the shoulder agent,
+  and specialists are bounded personas reused by release and polish.
+- 2026-08-04 Phase 5 core fixture — `builder: subagent (1 agent), corrected and verified by the
+  orchestrator`. The hermetic #6726 replay runs the generic release critic first, then the matching
+  security/infra persona over exact real hunks. It produces separate blocks for premature external
+  escalation, omitted destination `KmsKeyId`, and missing source `kms:ReEncryptFrom`; records the
+  canonical AWS source claim; records inaccessible authenticated Wiz evidence as `unverified`; and
+  proves a reverted/no-hunk matching path does not invoke the persona. Both focused cases passed.
+  Model, network, AWS, and GitHub surfaces are stubs and asserted unused beyond the two deterministic
+  reviewer fixtures. Judgify's actual persona manifest, decision log, dual-author install, and live
+  doctor proof remain the final adoption slice.
