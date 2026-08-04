@@ -463,16 +463,19 @@ deliver_findings() {
 # queued files, whose header carries the absolute path ending in the relative
 # one). Used only when [release].hunk_safe_gates=true.
 _annotate_no_hunk() {
-  local list="$1" d="$2" f headers
-  headers="$(printf '%s\n' "$d" | grep -E '^(diff --git |\+\+\+ |--- )' || true)"
+  local list="$1" d="$2" f headers_file
+  headers_file="$(mktemp "${TMPDIR:-/tmp}/shipyard-hunk-headers.XXXXXX")" || return 1
+  printf '%s\n' "$d" |
+    grep -E '^(diff --git |\+\+\+ |--- )' >"$headers_file" || true
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    if printf '%s\n' "$headers" | grep -qF -- "$f"; then
+    if grep -qF -- "$f" "$headers_file"; then
       printf '%s\n' "$f"
     else
       printf '%s (no hunks)\n' "$f"
     fi
   done <<<"$list"
+  rm -f "$headers_file"
 }
 
 # Keep the release prompt portable across every selectable critic harness.
