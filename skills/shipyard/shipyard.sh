@@ -28,11 +28,13 @@ OPT_TO=""       # learn: explicit route (project|generic|install)
 OPT_ROLE=""     # learn --to project: which .agents/<role>.md
 OPT_JSON=0      # inspect: emit the schema-v1 source document
 OPT_DAYS="7"    # inspect: rolling UTC window in days
+OPT_INSPECT_PYTHON="" # inspect: embedding process's exact Python interpreter
 OPT_OPEN=0      # dashboard: open the loopback URL after reporting health
 OPT_PROJECT_SET=0
 OPT_TO_SET=0
 OPT_ROLE_SET=0
 OPT_DAYS_SET=0
+OPT_INSPECT_PYTHON_SET=0
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -48,6 +50,9 @@ while [ $# -gt 0 ]; do
     --days)
       [ $# -ge 2 ] || { echo "shipyard: --days requires a value" >&2; exit 2; }
       OPT_DAYS="$2"; OPT_DAYS_SET=1; shift 2 ;;
+    --python-executable)
+      [ $# -ge 2 ] || { echo "shipyard: --python-executable requires a value" >&2; exit 2; }
+      OPT_INSPECT_PYTHON="$2"; OPT_INSPECT_PYTHON_SET=1; shift 2 ;;
     --json)    OPT_JSON=1; shift ;;
     --open)    OPT_OPEN=1; shift ;;
     -h|--help) SUBCMD="help"; shift ;;
@@ -66,6 +71,10 @@ if [ "$SUBCMD" != "inspect" ] \
 fi
 if [ "$SUBCMD" != "dashboard" ] && [ "$OPT_OPEN" -eq 1 ]; then
   echo "shipyard $SUBCMD: --open applies only to dashboard" >&2
+  exit 2
+fi
+if [ "$SUBCMD" != "inspect" ] && [ "$OPT_INSPECT_PYTHON_SET" -eq 1 ]; then
+  echo "shipyard $SUBCMD: --python-executable applies only to inspect" >&2
   exit 2
 fi
 
@@ -314,7 +323,7 @@ cmd_inspect() {
     echo "shipyard inspect: unexpected positional argument '${ARGS[0]}'" >&2
     return 2
   }
-  local scheduler unit_dir
+  local scheduler unit_dir python_executable="python3"
   scheduler="$(_scheduler)" || {
     echo "shipyard inspect: unsupported scheduler" >&2
     return 2
@@ -323,8 +332,22 @@ cmd_inspect() {
     systemd) unit_dir="${SHIPYARD_SYSTEMD_DIR:-$HOME/.config/systemd/user}" ;;
     launchd) unit_dir="${SHIPYARD_LAUNCHD_DIR:-$HOME/Library/LaunchAgents}" ;;
   esac
+  if [ "$OPT_INSPECT_PYTHON_SET" -eq 1 ]; then
+    case "$OPT_INSPECT_PYTHON" in
+      /*) : ;;
+      *)
+        echo "shipyard inspect: --python-executable must be an absolute path" >&2
+        return 2
+        ;;
+    esac
+    if [ ! -f "$OPT_INSPECT_PYTHON" ] || [ ! -x "$OPT_INSPECT_PYTHON" ]; then
+      echo "shipyard inspect: --python-executable must be an executable file" >&2
+      return 2
+    fi
+    python_executable="$OPT_INSPECT_PYTHON"
+  fi
   local cmd=(
-    python3 "$QUARTET_DIR/skills/shipyard/inspect.py"
+    "$python_executable" "$QUARTET_DIR/skills/shipyard/inspect.py"
     --core-root "$QUARTET_DIR"
     --unit-dir "$unit_dir"
     --scheduler "$scheduler"

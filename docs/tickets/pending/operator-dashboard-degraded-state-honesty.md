@@ -390,8 +390,26 @@ semantics, and this ticket does not authorize a schema bump or external action.
 
 ## Ledger
 
-Builder appends the phase plan, `builder:` line, commit hash, exact gate output,
-rendered screenshot paths, and honest blockers here before each phase commit.
+### Phase 1 — Preserve inspection interpreter provenance
+
+- builder: subagent (`rival_backend`), independently verified by root
+- Plan: preserve `sys.executable` as one validated argv element at the embedded
+  `shipyard inspect` boundary while leaving direct CLI resolution unchanged.
+- RED: minimal LaunchAgent environment resolved `/usr/bin/python3`; exit `1`
+  with `ModuleNotFoundError: No module named 'tomllib'`.
+- GREEN: the same minimal environment with the explicit Python 3.11 executable
+  returned `{"rule":"shipyard-inspect-v1","projects":1}`; exit `0`.
+- Root gates: `InspectionCacheTest` ran 3 tests in 0.037s (`OK`); shell syntax,
+  Python compile, override validation, default ambient failure, and
+  `git diff --check` passed. The focused Bats runner stalled in its pre-existing
+  host-contended preprocessing step and was interrupted without reaching the
+  test body; its exact new real-server case remains required in the full gate.
+- Commit: this phase commit (recorded by Git immediately after this ledger).
+- Installed service was not restarted; no push or external action occurred.
+
+Builder appends each remaining phase plan, `builder:` line, commit hash, exact
+gate output, rendered screenshot paths, and honest blockers here before its
+phase commit.
 
 ---
 

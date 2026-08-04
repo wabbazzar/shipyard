@@ -2913,7 +2913,16 @@ def make_expensive_loader(repo_root: Path) -> Callable[[str], dict[str, Any]]:
     def load(window: str) -> dict[str, Any]:
         days = WINDOW_DAYS[window]
         inspect_result = subprocess.run(
-            ["bash", str(repo_root / "skills" / "shipyard" / "shipyard.sh"), "inspect", "--json", "--days", str(days)],
+            [
+                "bash",
+                str(repo_root / "skills" / "shipyard" / "shipyard.sh"),
+                "inspect",
+                "--python-executable",
+                sys.executable,
+                "--json",
+                "--days",
+                str(days),
+            ],
             cwd=repo_root,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
