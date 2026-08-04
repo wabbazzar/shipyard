@@ -1646,6 +1646,14 @@ if [ "$WIRE_SHOULDER" = "1" ] || [ "$sh_auto" = "true" ]; then
       echo "shoulder: failed to atomically write $sh_env" >&2
       exit 2
     }
+    # launchd has no separate watcher transaction below, but Codex runtime
+    # verification still needs the same private marker directory as systemd.
+    if [ "$sh_harness" = "codex" ]; then
+      sw_prepare_codex_runtime_marker "$PROJECT_DIR" || {
+        echo "shoulder: private Codex runtime marker state is unsafe" >&2
+        exit 2
+      }
+    fi
   fi
 
   if [ "$SCHEDULER" = "systemd" ]; then
