@@ -512,6 +512,55 @@ complete.
   Bopthere ticket `044_chore_usage_beacon_silence_instrumentation.md` and no
   instrumentation-only credit was taken.
 
+### Phase 3 — Measure prospective outcome chains
+
+- **Plan:** add prospective, content-free lineage under the existing opt-in;
+  prove exact T1–T4 joins, ordering, trunk containment, controlled decision
+  enums, and one-link-missing diagnostics; keep all historical component-only
+  fixtures partial; map only measured inspector rows to verified/violated
+  operator promises; prove false/unset producer bytes are unchanged.
+- **builder: subagent (1 agent)** — owns Phase 3 producer fields/routes,
+  inspector fixtures and joins, operator adapter/tests, and focused gates. The
+  orchestrator retains privacy/schema review, live opt-out inspection, final
+  gate execution, and canonical commits.
+- **Starting state:** Shipyard `f1068b8`, clean and five commits ahead of
+  `origin/main`; Ice `cb0d2c3`, clean and eight inherited commits ahead of
+  `origin/master`. Ice changes remain a separate local commit and are never
+  pushed through Shipyard's publication boundary.
+- **RED:** five complete/missing-link inspector fixtures failed 5/5 before the
+  joins existed; the ticket producer lineage case failed 1/1 before the build
+  runner carried opaque work and upstream IDs.
+- **Commits:** Shipyard `d6afc14` implements the inspector joins, bounded
+  read-only Git-containment proof, build lineage, stable operator mapping, and
+  regression fixtures. Ice `1b13da7` adds the opt-in Dispatch usage-assessment
+  and controlled human-decision producers. Ice is nine inherited/local commits
+  ahead of `origin/master` and was not pushed.
+- **GREEN:** inspector Bats 89/89, operator unit tests 49/49, and incident/build
+  Bats 10/10; shell syntax, Python byte-compile, leak-check, and diff checks all
+  exit 0. Ice's newspaper suite is 56/56, focused action suite 25/25, full
+  dashboard suite 205/205, Svelte check has 0 errors (one pre-existing layout
+  warning), production build succeeds, and its diff check is clean.
+- **Lineage proof:** T1 and T3 require temporal order plus a successful release
+  commit that actually contains the built commit on trunk; the Git query is
+  cached, read-only, bounded to two seconds, and fails closed. T2 requires one
+  stable assessment ID for the same project, declared source ID, and window,
+  rejects backfills, and deduplicates repeats. T4 requires the controlled
+  consequential/human/default-withheld triple; a bare approval and dry-run do
+  not receive credit. False/unset producers preserve legacy bytes, and opt-in
+  records contain IDs, enums, counts, timestamps, and Git objects only.
+- **Live proof:** the read-only five-day inspector exits 0 and leaves all four
+  current historical promises `partial`, with exact reasons
+  `missing_bug_fix_lineage`, `missing_usage_assessment_lineage`,
+  `missing_feature_delivery_lineage`, and
+  `missing_decision_consequence_judgment`; no historical evidence was
+  upgraded. The locally deployed Ice dashboard is `active`; `/operations` and
+  `/news` return 200. A `390x844` `/news` render has no console/page errors or
+  horizontal overflow and the browser process exited cleanly.
+- **Outcome:** Phase 3 DoD met prospectively. Complete fixtures measure honest
+  pass/fail values, incomplete chains remain partial, and operator promises use
+  unchanged IDs. The original trial remains **2/4**, and the real third-project
+  usage dependency remains open for Phase 4.
+
 ---
 
 Run with `execute-ticket docs/tickets/pending/close-five-day-trial-findings.md`.
