@@ -505,6 +505,38 @@ semantics, and this ticket does not authorize a schema bump or external action.
 - Commit: this phase commit (recorded by Git immediately after this ledger).
 - Installed service was not restarted; no push or external action occurred.
 
+### Phase 3 follow-up — Qualify outcomes and close rendered-state gaps
+
+- reviewers: independent backend/API and browser/UI audits, implemented by the
+  original Phase 2 and Phase 3 builders and independently verified by root
+- RED: event evidence stripped terminal `reason`/`reason_code`; the reliability
+  alarm treated known controlled aborts as actionable; coverage limitations were
+  present in the API but absent from the GUI; exhausted polling still claimed it
+  was retrying; unavailable attention rendered as `— groups`; and
+  `reason_code` leaked machine copy in Crew/Evidence details.
+- GREEN: safe code-shaped terminal reasons now participate in evidence identity;
+  reliability exposes bounded `controlled_aborts` and `actionable_outcomes`
+  claims and only actionable outcomes drive the alarm; the UI renders coverage
+  limitations, terminal retry exhaustion, a unitless unknown attention value,
+  and humanized reason codes. Copy stays factual: `1 completed run needs review`
+  and `Review the linked terminal evidence`.
+- Root gates: operator+reader+server ran 101 tests in 10.758s (`OK`). Chrome 145
+  passed 108 assertions at both `1440×900` and `390×844`; each used the initial
+  unavailable response plus exactly three retries, issued no request during the
+  exhaustion hold, then recovered explicitly. Both runs had zero console/page/
+  request/non-200/off-origin/mutation errors and zero horizontal overflow.
+- Root visually inspected transient and exhausted captures at both viewports:
+  `/tmp/shipyard-phase3-final/dashboard-degraded-1440x900.png`,
+  `/tmp/shipyard-phase3-final/dashboard-exhausted-1440x900.png`,
+  `/tmp/shipyard-phase3-final/dashboard-degraded-390x844.png`, and
+  `/tmp/shipyard-phase3-final/dashboard-exhausted-390x844.png`. Hierarchy,
+  wrapping, alarm qualification, unknown attention, and retry-state distinction
+  remained legible and unclipped.
+- Syntax: both JavaScript files passed `node --check`; Python compilation and
+  `git diff --check` passed.
+- Commit: this follow-up commit (recorded by Git immediately after this ledger).
+- Installed proof remains required after the final commit; no push occurred.
+
 Builder appends each remaining phase plan, `builder:` line, commit hash, exact
 gate output, rendered screenshot paths, and honest blockers here before its
 phase commit.

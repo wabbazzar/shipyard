@@ -78,6 +78,7 @@ _RUNTIME_TERMINAL_REASONS = {
     "budget",
     "budget_deferred",
 }
+_CONTROLLED_ABORT_REASON_CODES = {"recorded_early_stop"}
 _TOKEN_FIELDS = (
     "input_tokens",
     "cache_read_tokens",
@@ -424,6 +425,11 @@ def _event_evidence_id(event: dict[str, Any]) -> str:
         )
         if isinstance(event.get(key), (str, int, float))
     }
+    if _safe_code(event.get("event")) == "job.end":
+        for key in ("reason", "reason_code"):
+            value = _safe_code(event.get(key))
+            if value is not None:
+                safe[key] = value
     digest = hashlib.sha256(
         json.dumps(safe, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:20]
@@ -449,6 +455,11 @@ def _safe_event_evidence(event: dict[str, Any]) -> dict[str, Any]:
         safe = _safe_id(value)
         if safe is not None:
             fields[key] = safe
+    if fields.get("event") == "job.end":
+        for key in ("reason", "reason_code"):
+            value = _safe_code(event.get(key))
+            if value is not None:
+                fields[key] = value
     for key in _TOKEN_FIELDS + ("duration_s",):
         value = _safe_number(event.get(key))
         if value is not None and value >= 0:
@@ -461,6 +472,17 @@ def _safe_event_evidence(event: dict[str, Any]) -> dict[str, Any]:
         "fields": fields,
         "limitations": [],
     }
+
+
+def _is_controlled_terminal_abort(event: dict[str, Any]) -> bool:
+    if _safe_code(event.get("status")) != "abort":
+        return False
+    reason = _safe_code(event.get("reason"))
+    reason_code = _safe_code(event.get("reason_code"))
+    return (
+        reason in _RUNTIME_TERMINAL_REASONS
+        or reason_code in _CONTROLLED_ABORT_REASON_CODES
+    )
 
 
 def load_presentation_topology(path: Path) -> dict[str, Any]:
@@ -2145,9 +2167,32 @@ def _outcome_document(
 
     terminal = [event for event in events if event.get("event") == "job.end"]
     successful = sum(1 for event in terminal if event.get("status") == "ok")
+    controlled_aborts = [
+        event for event in terminal if _is_controlled_terminal_abort(event)
+    ]
+    actionable_outcomes = [
+        event
+        for event in terminal
+        if event.get("status") != "ok" and not _is_controlled_terminal_abort(event)
+    ]
     terminal_evidence_ids = list(
         dict.fromkeys(evidence_id_by_object[id(event)] for event in terminal)
     )
+
+    def qualified_terminal_claim(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        evidence_ids = list(
+            dict.fromkeys(evidence_id_by_object[id(event)] for event in rows)
+        )
+        return {
+            "count": len(rows),
+            "evidence_ids": evidence_ids[:MAX_GRAPH_EVIDENCE_IDS],
+            "limitations": (
+                ["evidence_truncated"]
+                if len(evidence_ids) > MAX_GRAPH_EVIDENCE_IDS
+                else []
+            ),
+        }
+
     reliability_limitations = (
         ["event_window_truncated"]
         if terminal and event_stream_truncated
@@ -2161,6 +2206,8 @@ def _outcome_document(
         "successful": successful if terminal else None,
         "rate": successful / len(terminal) if terminal else None,
         "evidence_ids": terminal_evidence_ids[:MAX_GRAPH_EVIDENCE_IDS],
+        "controlled_aborts": qualified_terminal_claim(controlled_aborts),
+        "actionable_outcomes": qualified_terminal_claim(actionable_outcomes),
         "limitations": reliability_limitations,
     }
     roles = sorted({_safe_code(event.get("role")) for event in events if _safe_code(event.get("role"))})
@@ -2618,11 +2665,16 @@ def _brief_document(
     reliability_state = reliability.get("state")
     if not isinstance(reliability_state, str):
         reliability_state = "unknown"
+    controlled_abort_count = _safe_number(
+        _object(reliability.get("controlled_aborts")).get("count")
+    )
+    actionable_outcome_count = _safe_number(
+        _object(reliability.get("actionable_outcomes")).get("count")
+    )
     reliability_alarm = (
         reliability_state == "measured"
-        and completed is not None
-        and successful is not None
-        and completed > successful
+        and isinstance(actionable_outcome_count, int)
+        and actionable_outcome_count > 0
     )
     attention_available = inspection_state != "unavailable"
     attention_limitations = []
@@ -2649,6 +2701,8 @@ def _brief_document(
             "state": "alarm" if reliability_alarm else reliability_state,
             "observed": successful if successful is not None and successful >= 0 else None,
             "total": completed if completed is not None and completed >= 0 else None,
+            "controlled": controlled_abort_count,
+            "actionable": actionable_outcome_count,
             "limitations": _safe_limitations(reliability.get("limitations")),
         },
         {
@@ -2668,11 +2722,11 @@ def _brief_document(
         takeaway = lead["label"]
         action = lead["action"]
     elif reliability_alarm:
-        non_successful = completed - successful
-        noun = "run" if completed == 1 else "runs"
+        noun = "run" if actionable_outcome_count == 1 else "runs"
+        verb = "needs" if actionable_outcome_count == 1 else "need"
         state = "alarm"
-        takeaway = f"{non_successful} of {completed} completed {noun} did not succeed"
-        action = "Review terminal evidence and resolve unexpected outcomes"
+        takeaway = f"{actionable_outcome_count} completed {noun} {verb} review"
+        action = "Review the linked terminal evidence"
     elif inspection_state == "unavailable":
         state = "unknown"
         takeaway = "Fleet assessment is unavailable"
@@ -2719,13 +2773,35 @@ def _narrative_document(
     ]
     reliability = outcomes["reliability"]
     if reliability["state"] == "measured":
+        controlled_aborts = _safe_number(
+            _object(reliability.get("controlled_aborts")).get("count")
+        ) or 0
+        actionable_outcomes = _safe_number(
+            _object(reliability.get("actionable_outcomes")).get("count")
+        ) or 0
+        reliability_parts = [
+            f"{reliability['successful']} of {reliability['completed']} completed successfully"
+        ]
+        if controlled_aborts:
+            noun = "abort" if controlled_aborts == 1 else "aborts"
+            reliability_parts.append(f"{controlled_aborts} controlled {noun}")
+        if actionable_outcomes:
+            noun = "outcome" if actionable_outcomes == 1 else "outcomes"
+            verb = "needs" if actionable_outcomes == 1 else "need"
+            reliability_parts.append(
+                f"{actionable_outcomes} {noun} {verb} review"
+            )
         beats.append(
             {
                 "id": "story:reliability",
                 "heading": "Runs",
-                "body": f"{reliability['successful']} of {reliability['completed']} completed successfully",
-                "state": "clear" if reliability["successful"] == reliability["completed"] else "alarm",
-                "evidence_ids": [evidence_id for chain in outcomes["chains"] for evidence_id in chain["evidence_ids"]][:20],
+                "body": " · ".join(reliability_parts),
+                "state": (
+                    "alarm"
+                    if actionable_outcomes
+                    else ("waiting" if controlled_aborts else "clear")
+                ),
+                "evidence_ids": reliability["evidence_ids"],
             }
         )
     observed_calls = sum(edge["count"] for edge in topology["observed_edges"] if edge["kind"] == "call")

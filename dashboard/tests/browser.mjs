@@ -238,7 +238,7 @@ function browserGraphs() {
       id: "graph:architecture", kind: "architecture", label: "Fleet architecture",
       scope: {kind: "current_user_fleet", project_id: null, project_label: null}, state: "declared",
       nodes: [
-        graphNode("role:human", "human", "Human", "declared"),
+        {...graphNode("role:human", "human", "Human", "declared"), reason_code: "inspection_snapshot_missing"},
         graphNode("skill:polish-ticket", "skill", "<img src=x onerror=window.__hostileGraph=1>", "unknown"),
         graphNode("role:build", "role", "Helldiver", "unknown"),
         graphNode("skill:execute-ticket", "skill", "Execute Ticket", "observed"),
@@ -323,11 +323,11 @@ async function main() {
   };
   sentinel.unavailable.brief = {
     state: "alarm",
-    takeaway: "4 of 7 completed runs did not succeed",
-    action: "Review terminal evidence and resolve unexpected outcomes",
+    takeaway: "1 completed run needs review",
+    action: "Review the linked terminal evidence",
     signals: [
       {id: "promises_verified", label: "Promises verified", value: 0, unit: "promises", state: "waiting", observed: 0, total: 2, limitations: ["promise_evidence_incomplete"]},
-      {id: "successful_runs", label: "Successful runs", value: 3, unit: "completed runs", state: "alarm", observed: 3, total: 7, limitations: []},
+      {id: "successful_runs", label: "Successful runs", value: 3, unit: "completed runs", state: "alarm", observed: 3, total: 7, controlled: 3, actionable: 1, limitations: []},
       {id: "attention", label: "Attention", value: null, unit: "groups", state: "unknown", observed: null, total: null, limitations: ["inspection_unavailable"]},
     ],
     attention_groups: [],
@@ -353,6 +353,9 @@ async function main() {
     {source: "operator_events", state: "available", reason: "ok", records_total: 19, limitations: []},
   ];
   sentinel.unavailable.attention = [];
+  sentinel.operator.evidence = sentinel.operator.evidence.map(row => row.id === "ev:first"
+    ? {...row, reason_code: "inspection_snapshot_missing"}
+    : row);
   sentinel.unavailable.evidence = sentinel.operator.evidence;
   sentinel.unavailable.narrative = {
     heading: sentinel.unavailable.brief.takeaway,
@@ -420,6 +423,7 @@ async function main() {
   const paused = [];
   let screenshotPath = "";
   let degradedScreenshotPath = "";
+  let exhaustedScreenshotPath = "";
   let overflow = null;
   let focusOutline = "";
   let scrollBefore = 0;
@@ -490,7 +494,11 @@ async function main() {
     verify.equal(await evaluate(browser, "document.getElementById('operator-state').textContent"), "Fleet inspection unavailable · retrying locally", "failed inspection was presented as loading");
     const degraded = await evaluate(browser, `({
       hero: [document.getElementById('brief-takeaway').textContent, document.getElementById('brief-action').textContent, document.querySelector('.brief-hero').dataset.sourceState],
-      attention: [document.querySelector('[data-signal-id="attention"] .signal-value').childNodes[0].textContent, document.querySelector('[data-signal-id="attention"] .signal-coverage').textContent],
+      attention: [
+        document.querySelector('[data-signal-id="attention"] .signal-value').textContent,
+        document.querySelectorAll('[data-signal-id="attention"] .signal-unit').length,
+        document.querySelector('[data-signal-id="attention"] .signal-coverage').textContent,
+      ],
       attentionEmpty: document.getElementById('attention-empty').textContent,
       coverage: [...document.querySelectorAll('#coverage-list li')].map(item => item.textContent),
       promiseLimits: [...document.querySelectorAll('.promise-card .quiet')].map(item => item.textContent),
@@ -501,10 +509,14 @@ async function main() {
       mutationControls: [...document.querySelectorAll('button')].map(item => item.textContent.trim()).filter(text => /restart|trigger|merge|deploy/i.test(text)),
       mutationForms: document.querySelectorAll('form[method="post"], form[method="put"], form[method="delete"]').length,
     })`);
-    verify.deepEqual(degraded.hero, ["4 of 7 completed runs did not succeed", "Review terminal evidence and resolve unexpected outcomes", "alarm"], "measured alarm did not lead degraded inspection");
-    verify.deepEqual(degraded.attention, ["—", "Coverage unknown"], "unavailable attention became numeric");
+    verify.deepEqual(degraded.hero, ["1 completed run needs review", "Review the linked terminal evidence", "alarm"], "qualified measured alarm did not lead degraded inspection");
+    verify.deepEqual(degraded.attention, ["—", 0, "Coverage unknown"], "unavailable attention retained an inapplicable unit");
     verify.equal(degraded.attentionEmpty, "Inspection-based attention is unavailable.", "unavailable attention retained no-action copy");
-    verify.deepEqual(degraded.coverage, ["Fleet inspection · Unavailable · Snapshot missing", "Operator relationships · Unavailable · Snapshot missing", "Operator events · Available · Ok"], "degraded coverage was not human-readable");
+    verify.deepEqual(degraded.coverage, [
+      "Fleet inspection · Unavailable · Snapshot missing · Limits: Inspection snapshot missing, Inspection unavailable",
+      "Operator relationships · Unavailable · Snapshot missing · Limits: Relationship snapshot missing",
+      "Operator events · Available · Ok",
+    ], "degraded coverage limitations were not human-readable");
     verify.deepEqual(degraded.promiseLimits, ["Limits · Inspection unavailable", "Limits · Inspection unavailable"], "promise limitations leaked machine codes");
     verify.equal(degraded.stableCodesVisible, false, "stable degraded-state codes leaked into operator copy");
     verify.deepEqual(degraded.reviewControls, Array.from({length: 5}, () => ["Review 1 record", false]), "nonzero evidence navigation drifted");
@@ -515,7 +527,14 @@ async function main() {
     degradedScreenshotPath = join(resolve(options.screenshotDir), `dashboard-degraded-${options.width}x${options.height}.png`);
     await screenshot(browser, degradedScreenshotPath);
     verify.ok(unavailableResponses >= 1, "unavailable fixture was not held for inspection");
-    await evaluate(browser, "clearTimeout(state.pollTimer); state.pollTimer = null; state.unavailablePolls = 3");
+    await waitFor(browser, "document.getElementById('operator-state').textContent === 'Fleet inspection unavailable · automatic retries stopped'", "exhausted unavailable polling", 10000);
+    verify.equal(await evaluate(browser, "state.unavailablePolls"), 3, "unavailable polling did not stop at its bound");
+    verify.equal(unavailableResponses, 4, "bounded polling did not use the initial response plus three retries");
+    const exhaustedRequests = operatorRequests;
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 1200));
+    verify.equal(operatorRequests, exhaustedRequests, "operator polling continued after exhaustion");
+    exhaustedScreenshotPath = join(resolve(options.screenshotDir), `dashboard-exhausted-${options.width}x${options.height}.png`);
+    await screenshot(browser, exhaustedScreenshotPath);
     allowRecovery = true;
     await evaluate(browser, "refreshOperator({preserve: true})");
     await waitFor(browser, "document.getElementById('brief-takeaway').textContent === 'Repair observed Shipyard core job failure'", "bounded operator poll");
@@ -601,6 +620,10 @@ async function main() {
     verify.ok(topology.firstWidth >= 44 && topology.firstHeight >= 44, "graph node target is below 44px");
     verify.notEqual(topology.activityDisplay, "none", "reduced motion removed the static activity mark");
     verify.equal(topology.activityAnimation, "none", "reduced motion retained an activity pulse");
+    verify.equal(await evaluate(browser, `(() => {
+      const term = [...document.querySelectorAll('#crew-selection dt')].find(item => item.textContent === 'reason code');
+      return term?.nextElementSibling?.textContent;
+    })()`), "Inspection snapshot missing", "Crew reason_code leaked a machine code");
     verify.deepEqual(await evaluate(browser, `(() => {
       const vertical = innerWidth <= 700;
       return [...document.querySelectorAll('#graph-edges > path')].map(path => {
@@ -674,6 +697,10 @@ async function main() {
     verify.equal(await evaluate(browser, "document.getElementById('mode-evidence').innerText.includes('abcdef0123456789abcdef0123456789')"), true, "opaque ID was not reachable in Evidence");
     await evaluate(browser, "document.querySelector('[data-evidence-id=\"ev:first\"]').click()");
     verify.equal(await evaluate(browser, "document.querySelector('[data-evidence-id=\"ev:first\"]').getAttribute('aria-current')"), "true", "claim evidence selection was lost");
+    verify.equal(await evaluate(browser, `(() => {
+      const term = [...document.querySelectorAll('#evidence-detail dt')].find(item => item.textContent === 'reason code');
+      return term?.nextElementSibling?.textContent;
+    })()`), "Inspection snapshot missing", "evidence detail reason_code leaked a machine code");
     const hostileEvidence = await evaluate(browser, `({
       executed: window.__hostile === 1,
       elements: Boolean(document.querySelector('#evidence-detail img, #evidence-detail script')),
@@ -787,6 +814,7 @@ async function main() {
     console.log(`sse=20_raw_events operator_selection_preserved=true raw_selection_preserved=true window_scroll=${scrollBefore}:${scrollAfter} raw_scroll=${rawScrollBefore}:${rawScrollAfter}`);
     console.log(`fixture_read_checksum=${fixtureBefore} unchanged_before_authorized_append=true`);
     console.log(`degraded_screenshot=${degradedScreenshotPath}`);
+    console.log(`exhausted_screenshot=${exhaustedScreenshotPath}`);
     console.log(`screenshot=${screenshotPath}`);
     console.log(`server_port=${port} server_log_lines=${serverLog.trim().split("\n").filter(Boolean).length}`);
   } finally {

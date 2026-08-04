@@ -53,6 +53,10 @@ function humanizeCode(value) {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+function isReasonCodeField(key) {
+  return /(?:^|_)reason(?:_code)?$/.test(String(key));
+}
+
 function sourceState(value) {
   return typeof value === "string" && value ? value : "unknown";
 }
@@ -117,9 +121,13 @@ function renderOperatorState() {
   const notice = document.getElementById("operator-state");
   markState(notice, supplied);
   if (supplied === "unavailable") {
-    notice.textContent = limitations.includes("inspection_refresh_failed")
-      ? "Fleet inspection unavailable · retrying locally"
-      : "Fleet inspection not yet available · retrying locally";
+    if (state.unavailablePolls >= 3) {
+      notice.textContent = "Fleet inspection unavailable · automatic retries stopped";
+    } else {
+      notice.textContent = limitations.includes("inspection_refresh_failed")
+        ? "Fleet inspection unavailable · retrying locally"
+        : "Fleet inspection not yet available · retrying locally";
+    }
   } else if (limitations.includes("event_index_refresh_failed")) {
     notice.textContent = `Fleet evidence update failed · showing the last good snapshot from ${formatTimestamp(metadata.generated_at)}`;
   } else if (limitations.includes("event_index_refreshing") || supplied === "stale") {
@@ -143,7 +151,10 @@ function renderBrief() {
     card.dataset.order = String(index);
     markState(card, signal.state);
     const value = element("p", "signal-value", present(signal.value));
-    value.append(element("span", "signal-unit", present(signal.unit)));
+    if (signal.value !== null && signal.value !== undefined && signal.value !== ""
+      && signal.unit !== null && signal.unit !== undefined && signal.unit !== "") {
+      value.append(element("span", "signal-unit", present(signal.unit)));
+    }
     const coverage = signal.observed === null || signal.observed === undefined || signal.total === null || signal.total === undefined
       ? "Coverage unknown"
       : `${present(signal.observed)} of ${present(signal.total)} observed`;
@@ -194,7 +205,7 @@ function metricCard(group, item, index) {
   const fields = element("dl", "metric-list");
   for (const [key, value] of Object.entries(item || {})) {
     if (key === "state" || key === "limitations" || key === "evidence_ids") continue;
-    const display = key.endsWith("reason") ? humanizeCode(value) : present(value);
+    const display = isReasonCodeField(key) ? humanizeCode(value) : present(value);
     fields.append(element("dt", "", labelKey(key)), element("dd", "", display));
   }
   fields.append(element("dt", "", "limitations"), element("dd", "", limitationsText(item?.limitations)));
@@ -350,7 +361,7 @@ function renderCrewSelection() {
     if (key === "evidence_ids") continue;
     const display = key === "last_activity"
       ? formatTimestamp(value)
-      : (key === "limitations" ? limitationsText(value) : (key.endsWith("reason") ? humanizeCode(value) : present(value)));
+      : (key === "limitations" ? limitationsText(value) : (isReasonCodeField(key) ? humanizeCode(value) : present(value)));
     fields.append(element("dt", "", labelKey(key)), element("dd", "", display));
   }
   root.replaceChildren(heading, element("p", "card-title", present(node.label)), stateMark(node.state), fields);
@@ -482,7 +493,10 @@ function evidenceById(id) {
 function detailFields(record) {
   const fields = element("dl", "evidence-fields");
   for (const [key, value] of Object.entries(record || {})) {
-    fields.append(element("dt", "", labelKey(key)), element("dd", "", key === "observed_at" || key === "ts" ? formatTimestamp(value) : present(value)));
+    const display = key === "observed_at" || key === "ts"
+      ? formatTimestamp(value)
+      : (isReasonCodeField(key) ? humanizeCode(value) : present(value));
+    fields.append(element("dt", "", labelKey(key)), element("dd", "", display));
   }
   return fields;
 }
@@ -514,7 +528,11 @@ function renderEvidence() {
   document.getElementById("evidence-list").replaceChildren(...items);
   const coverage = Array.isArray(state.document?.coverage) ? state.document.coverage : [];
   document.getElementById("coverage-list").replaceChildren(...coverage.map((row, index) => {
-    const li = element("li", "", `${humanizeCode(row.source)} · ${humanizeCode(sourceState(row.state))} · ${humanizeCode(row.reason)}`);
+    const summary = [humanizeCode(row.source), humanizeCode(sourceState(row.state)), humanizeCode(row.reason)];
+    if (Array.isArray(row.limitations) && row.limitations.length) {
+      summary.push(`Limits: ${limitationsText(row.limitations)}`);
+    }
+    const li = element("li", "", summary.join(" · "));
     li.dataset.coverageSource = present(row.source);
     li.dataset.order = String(index);
     markState(li, row.state);
@@ -596,6 +614,7 @@ async function fetchJson(path) {
 
 function scheduleUnavailablePoll() {
   clearTimeout(state.pollTimer);
+  state.pollTimer = null;
   if (state.document?.metadata?.inspection_state !== "unavailable" || state.unavailablePolls >= 3) return;
   state.unavailablePolls += 1;
   state.pollTimer = setTimeout(() => refreshOperator({preserve: true}), 1000);

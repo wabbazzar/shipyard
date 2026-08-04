@@ -1524,10 +1524,10 @@ outcome_lineage_emit_build_items "$2" demo-build "$3"
 
         self.assertEqual(document["outcomes"]["reliability"]["state"], "measured")
         self.assertEqual(document["brief"]["state"], "alarm")
-        self.assertEqual(document["brief"]["takeaway"], "1 of 2 completed runs did not succeed")
+        self.assertEqual(document["brief"]["takeaway"], "1 completed run needs review")
         self.assertEqual(
             document["brief"]["action"],
-            "Review terminal evidence and resolve unexpected outcomes",
+            "Review the linked terminal evidence",
         )
         successful = next(
             item
@@ -1537,6 +1537,182 @@ outcome_lineage_emit_build_items "$2" demo-build "$3"
         self.assertEqual(
             (successful["value"], successful["observed"], successful["total"], successful["state"]),
             (1, 1, 2, "alarm"),
+        )
+
+    def test_controlled_abort_qualifies_rate_without_actionable_alarm(self) -> None:
+        events = events_fixture()
+        events.extend(
+            [
+                {
+                    "project_id": "project-safe",
+                    "project": "demo",
+                    "role": "build",
+                    "run_id": "c" * 32,
+                    "ts": "2026-08-01T10:05:00Z",
+                    "event": "job.start",
+                },
+                {
+                    "project_id": "project-safe",
+                    "project": "demo",
+                    "role": "build",
+                    "run_id": "c" * 32,
+                    "ts": "2026-08-01T10:06:00Z",
+                    "event": "job.end",
+                    "status": "abort",
+                    "reason": "not_trunk",
+                    "reason_code": "recorded_early_stop",
+                },
+            ]
+        )
+        document = self.compose(
+            events=events,
+            inspection=None,
+            relationships=None,
+            inspection_state="unavailable",
+            refresh_age_seconds=None,
+        )
+
+        reliability = document["outcomes"]["reliability"]
+        self.assertEqual((reliability["successful"], reliability["completed"]), (1, 2))
+        self.assertEqual(reliability["controlled_aborts"]["count"], 1)
+        self.assertEqual(reliability["actionable_outcomes"]["count"], 0)
+        controlled_id = reliability["controlled_aborts"]["evidence_ids"][0]
+        controlled = next(row for row in document["evidence"] if row["id"] == controlled_id)
+        self.assertEqual(
+            controlled["fields"],
+            {
+                "event": "job.end",
+                "role": "build",
+                "status": "abort",
+                "reason": "not_trunk",
+                "reason_code": "recorded_early_stop",
+                "run_id": "c" * 32,
+            },
+        )
+        successful = next(
+            item for item in document["brief"]["signals"] if item["id"] == "successful_runs"
+        )
+        self.assertNotEqual(successful["state"], "alarm")
+        self.assertEqual((successful["controlled"], successful["actionable"]), (1, 0))
+        story = next(
+            item for item in document["narrative"]["beats"] if item["id"] == "story:reliability"
+        )
+        self.assertEqual(story["state"], "waiting")
+        self.assertIn("1 controlled abort", story["body"])
+        self.assertEqual(document["brief"]["state"], "unknown")
+        self.assertEqual(document["brief"]["takeaway"], "Fleet assessment is unavailable")
+
+    def test_unexpected_terminal_is_actionable_without_invented_remediation(self) -> None:
+        events = events_fixture()
+        events.extend(
+            [
+                {
+                    "project_id": "project-safe",
+                    "project": "demo",
+                    "role": "build",
+                    "run_id": "c" * 32,
+                    "ts": "2026-08-01T10:05:00Z",
+                    "event": "job.end",
+                    "status": "abort",
+                    "reason": "not_trunk",
+                },
+                {
+                    "project_id": "project-safe",
+                    "project": "demo",
+                    "role": "build",
+                    "run_id": "d" * 32,
+                    "ts": "2026-08-01T10:06:00Z",
+                    "event": "job.end",
+                    "status": "fail",
+                    "reason": "push_failed",
+                },
+            ]
+        )
+        document = self.compose(
+            events=events,
+            inspection=None,
+            relationships=None,
+            inspection_state="unavailable",
+            refresh_age_seconds=None,
+        )
+
+        reliability = document["outcomes"]["reliability"]
+        self.assertEqual(reliability["controlled_aborts"]["count"], 1)
+        self.assertEqual(reliability["actionable_outcomes"]["count"], 1)
+        actionable_id = reliability["actionable_outcomes"]["evidence_ids"][0]
+        actionable = next(row for row in document["evidence"] if row["id"] == actionable_id)
+        self.assertEqual(actionable["fields"]["reason"], "push_failed")
+        story = next(
+            item for item in document["narrative"]["beats"] if item["id"] == "story:reliability"
+        )
+        self.assertEqual(story["state"], "alarm")
+        self.assertIn("1 outcome needs review", story["body"])
+        self.assertEqual(document["brief"]["state"], "alarm")
+        self.assertEqual(document["brief"]["takeaway"], "1 completed run needs review")
+        self.assertEqual(document["brief"]["action"], "Review the linked terminal evidence")
+
+    def test_job_end_evidence_omits_unsafe_free_form_terminal_reasons(self) -> None:
+        events = [
+            {
+                "ts": "2026-08-01T10:00:00Z",
+                "event": "job.end",
+                "role": "build",
+                "status": "fail",
+                "reason": "PRIVATE prose with spaces",
+                "reason_code": "unsafe code",
+                "run_id": "unsafe-reason",
+            }
+        ]
+        document = self.compose(events=events)
+        evidence = next(
+            row
+            for row in document["evidence"]
+            if row.get("fields", {}).get("event") == "job.end"
+        )
+
+        self.assertNotIn("reason", evidence["fields"])
+        self.assertNotIn("reason_code", evidence["fields"])
+
+    def test_job_end_evidence_ids_include_safe_terminal_reason_codes(self) -> None:
+        common = {
+            "ts": "2026-08-01T10:00:00Z",
+            "event": "job.end",
+            "role": "build",
+            "status": "abort",
+            "run_id": "same-terminal",
+        }
+        document = self.compose(
+            events=[
+                {
+                    **common,
+                    "reason": "not_trunk",
+                    "reason_code": "recorded_early_stop",
+                },
+                {
+                    **common,
+                    "reason": "push_failed",
+                    "reason_code": "unexpected_terminal",
+                },
+            ]
+        )
+        reliability = document["outcomes"]["reliability"]
+        evidence = {
+            evidence_id: next(
+                row for row in document["evidence"] if row["id"] == evidence_id
+            )
+            for evidence_id in reliability["evidence_ids"]
+        }
+
+        self.assertEqual(len(evidence), 2)
+        self.assertEqual(
+            {
+                (row["fields"]["reason"], row["fields"]["reason_code"])
+                for row in evidence.values()
+            },
+            {
+                ("not_trunk", "recorded_early_stop"),
+                ("push_failed", "unexpected_terminal"),
+            },
         )
 
     def test_missing_inspection_and_relationship_snapshots_are_explicit_coverage(self) -> None:
