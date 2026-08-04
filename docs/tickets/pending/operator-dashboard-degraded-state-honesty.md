@@ -2,7 +2,8 @@
 
 - **Created:** 2026-08-04
 - **Owner:** wabbazzar
-- **Status:** pending
+- **Status:** Implementation complete — receiver handoff pending the parallel
+  `specialist-shoulder-polish-routing` ticket
 - **Priority:** high
 - **Type:** bugfix
 - **Estimated Points:** 13 (four phases: 3 · 2 · 5 · 3)
@@ -343,25 +344,25 @@ semantics, and this ticket does not authorize a schema bump or external action.
 
 ## Acceptance Criteria / Definition of Done
 
-- [ ] The captured live-shaped reproduction cannot produce no-action or numeric
+- [x] The captured live-shaped reproduction cannot produce no-action or numeric
       zero attention when inspection is unavailable.
-- [ ] A launchd-like minimal PATH cannot select an incompatible Python after the
+- [x] A launchd-like minimal PATH cannot select an incompatible Python after the
       dashboard has already selected a compatible interpreter.
-- [ ] The 50,025-identity operator request completes within the unchanged
+- [x] The 50,025-identity operator request completes within the unchanged
       two-second HTTP timeout, with bounded reads and explicit truncation.
-- [ ] Known reliability alarms remain visible and qualified when inspection is
+- [x] Known reliability alarms remain visible and qualified when inspection is
       unavailable; unknown data never overrides or falsifies known facts.
-- [ ] Missing inspection and relationship sources appear explicitly in coverage.
-- [ ] Every event-derived reliability/role claim links to bounded evidence, and
+- [x] Missing inspection and relationship sources appear explicitly in coverage.
+- [x] Every event-derived reliability/role claim links to bounded evidence, and
       every emitted ID resolves to exactly one response evidence object.
-- [ ] Zero-evidence claims explain the limitation without a disabled
+- [x] Zero-evidence claims explain the limitation without a disabled
       `Review 0 records` control.
-- [ ] Limitation/reason copy is human-readable; stable API codes remain in the
+- [x] Limitation/reason copy is human-readable; stable API codes remain in the
       document for machines.
-- [ ] Desktop and narrow browser proofs pass with zero overflow, console/page/
+- [x] Desktop and narrow browser proofs pass with zero overflow, console/page/
       request errors, external origins, mutation controls, or surviving browser
       processes; screenshots are visually inspected.
-- [ ] Focused and full repository gates pass, the installed dashboard is ready,
+- [x] Focused and full repository gates pass, the installed dashboard is ready,
       and the worktree is clean at the phase boundary.
 - [ ] No GitHub push originates from the Mac. After this ticket and
       `specialist-shoulder-polish-routing` are complete, exact commits and merge
@@ -537,6 +538,46 @@ semantics, and this ticket does not authorize a schema bump or external action.
   `git diff --check` passed.
 - Commit: this follow-up commit (recorded by Git immediately after this ledger).
 - Installed proof remains required after the final commit; no push occurred.
+
+### Final implementation and installed proof
+
+- builder: root integrated the independently reviewed slices, repaired the two
+  macOS gate-fixture assumptions exposed by the crossed-tree run, and performed
+  every final gate on the settled tree.
+- Commits: `9f42955` interpreter provenance, `b67649e` bounded fanout,
+  `8911e07` truthful backend evidence, `1775772` degraded-state UI, `f52f02b`
+  qualified outcomes, `03c3e6b` macOS integration portability, and `cd703e2`
+  structured-claim presentation. Documentation commits are recorded earlier in
+  this ledger.
+- Full repository gate: with the selected Python 3.11 directory ahead of pyenv
+  shims and `BASH_COMPAT=5.0`, Bats ran 775 tests and passed all 775. The exact
+  formerly red reaper, ticket-lineage, launchd private-state, launchd inspect,
+  and token-lineage cases all passed inside that full run.
+- Other final gates: `leak-check: clean`; operator+reader+server 101/101;
+  browser 109/109 at both viewports; JavaScript and shell syntax, Python compile,
+  deck freshness, and `git diff --check` passed. Ticket lifecycle remains the
+  documented exit-3 flat-layout no-op for this self-install.
+- Installed proof on implementation revision `cd703e2`: dashboard doctor clean;
+  health `ready=true`, `row_count=65`, `error_count=0`; operator inspection
+  `fresh`, source state `clean`, one fleet project, 249 bounded evidence rows,
+  12/24 successful terminals qualified as 7 controlled aborts and 5 actionable
+  outcomes, and the only metadata limitation was
+  `explicit_git_range_unavailable`.
+- Live browser proof: desktop and 390px Outcomes/Crew/Evidence/Story inspection
+  showed no raw structured JSON, no split connection rows, no disabled zero-
+  evidence actions, no horizontal overflow, and no console/page/request/
+  off-origin failures. The live coverage list rendered every source limitation
+  in human-readable copy. Root visually inspected
+  `/tmp/shipyard-microscope-outcomes.png`,
+  `/tmp/shipyard-microscope-evidence.png`,
+  `/tmp/shipyard-live-narrow-outcomes.png`, and
+  `/tmp/shipyard-live-narrow-crew.png`.
+- Handoff is deliberately not claimed: the parallel specialist ticket still
+  says its Judgify adoption and live doctor proof are pending. No GitHub push
+  originated from this Mac, and `receive-workmac` has not been contacted yet.
+- `delegation-plan-pipeline` remains pending: its retirement thresholds were not
+  met (Codex zero-subagent sessions were 2/12, 16.67%; ledger subagent builders
+  were 8/21, 38.1%; remaining metrics were unavailable or incomparable).
 
 Builder appends each remaining phase plan, `builder:` line, commit hash, exact
 gate output, rendered screenshot paths, and honest blockers here before its
