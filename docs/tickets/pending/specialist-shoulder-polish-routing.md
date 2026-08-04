@@ -57,6 +57,33 @@ ticket polish and matching hunk review, delivers its findings to the active Clau
 and records enough source/fetch evidence to distinguish current vendor documentation from project
 memory.
 
+## Decisions
+
+### Locked
+
+| Decision | Rationale |
+|---|---|
+| Run a second specialist review; do not overload the generic critic | Cold general release review and knowledge-bearing domain review have different contamination and evidence contracts |
+| Route polish from ticket/file semantics and shoulder from real hunks | The shoulder critic intentionally cannot see author reasoning; claiming otherwise would create a false gate |
+| Treat a configured Infrastructure/Platform PR as blocked until specialist evidence is recorded | External escalation is higher blast radius than exhausting the local permission/resource matrix |
+| Store canonical live-source pointers and retrieval evidence, never vendor prose | AWS/provider behavior changes; copied documentation silently becomes stale |
+| Support simultaneous Claude and Codex authors additively | The local operator uses both harnesses and should not need to remember a rewire between sessions |
+| Keep legacy scalar harness configuration unchanged | Existing fleet installs must not acquire hooks or behavior implicitly |
+
+### Open with defaults
+
+| Question | Default |
+|---|---|
+| Exact manifest serialization | TOML under `.agents/specialists/`; reuse Shipyard's existing TOML tooling and avoid a new parser dependency |
+| Live-source fetch transport | Existing harness/web capability when available, otherwise a bounded read-only HTTPS fetch helper with an allowlisted `https` URL and explicit failure evidence |
+| Finding dedupe key | Severity + path + normalized message; retain the higher severity on collision |
+
+### User-decision class
+
+None. The operator explicitly approved actual specialist invocation, concurrent Claude/Codex
+coverage, and the blocking external-repository escalation rule. Merge to Shipyard `main` remains an
+ask-first boundary after the branch and PR are verified; it does not block building the branch.
+
 ## Technical requirements
 
 ### Specialist manifest and source contract
@@ -184,6 +211,22 @@ Every delegated phase carries this clause:
   `./install.sh --doctor --project <fixture>` where the phase applies.
 - Prove legacy single-harness and no-specialist fixtures are unchanged.
 
+### Per-phase verification surface
+
+| Phase | Exact commands |
+|---|---|
+| 1 | `bash -n skills/shipyard/shipyard.sh`; `bats tests/shipyard-add-specialist.bats tests/specialist-archetype.bats` |
+| 2 | `bash -n agents/release/critic-watch.sh agents/release/critic-*.sh`; focused specialist-watch tests plus `bats tests/shoulder-mode.bats tests/shoulder-mode-harness.bats` |
+| 3 | Focused polish/specialist contract tests plus `bats tests/delegation-contract.bats` |
+| 4 | `bash -n install.sh agents/lib/shoulder-wire.sh agents/release/critic-*.sh`; focused dual-author tests plus `bats tests/shoulder-wire.bats tests/harness-install.bats` |
+| 5/final | `bats tests/`; `bash scripts/leak-check.sh`; `bash scripts/check-deck-fresh.sh`; `bash -n install.sh skills/shipyard/shipyard.sh agents/lib/*.sh agents/*/runner.sh agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit` |
+
+Polish-time toolchain proof on 2026-08-04: `bats` resolved to `/opt/homebrew/bin/bats`; focused
+specialist/delegation and shoulder/install suites exited 0; shell syntax for the current scaffold,
+installer, watcher, and Claude/Codex queue hooks exited 0; leak and deck checks exited 0. Tests are
+quiet under this checkout's harness, so the builder records exit codes plus the full-suite test count
+from the final run rather than inventing a baseline count.
+
 ## Definition of Done
 
 - [ ] A matching real hunk causes the installed specialist—not only the generic critic—to review
@@ -250,4 +293,3 @@ Every delegated phase carries this clause:
 ## Ledger
 
 Empty — populated by `execute-ticket` phase by phase after polish.
-
