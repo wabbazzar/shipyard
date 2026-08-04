@@ -57,6 +57,16 @@ function isReasonCodeField(key) {
   return /(?:^|_)reason(?:_code)?$/.test(String(key));
 }
 
+function metricValue(key, value) {
+  if (isReasonCodeField(key)) return humanizeCode(value);
+  if (Array.isArray(value)) return value.map(humanizeCode).join(", ") || "—";
+  if (value && typeof value === "object") {
+    if (Number.isFinite(value.count)) return String(value.count);
+    return Array.isArray(value.evidence_ids) && value.evidence_ids.length ? "See linked evidence" : "Available";
+  }
+  return present(value);
+}
+
 function sourceState(value) {
   return typeof value === "string" && value ? value : "unknown";
 }
@@ -205,7 +215,7 @@ function metricCard(group, item, index) {
   const fields = element("dl", "metric-list");
   for (const [key, value] of Object.entries(item || {})) {
     if (key === "state" || key === "limitations" || key === "evidence_ids") continue;
-    const display = isReasonCodeField(key) ? humanizeCode(value) : present(value);
+    const display = metricValue(key, value);
     fields.append(element("dt", "", labelKey(key)), element("dd", "", display));
   }
   fields.append(element("dt", "", "limitations"), element("dd", "", limitationsText(item?.limitations)));

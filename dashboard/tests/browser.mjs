@@ -313,6 +313,8 @@ async function main() {
   await mkdir(eventsDir);
   await mkdir(options.screenshotDir, {recursive: true});
   const sentinel = JSON.parse(await readFile(join(here, "fixtures", "operator-sentinel.json"), "utf8"));
+  sentinel.operator.outcomes.reliability.controlled_aborts = {count: 3, evidence_ids: ["ev:first"], limitations: []};
+  sentinel.operator.outcomes.reliability.actionable_outcomes = {count: 1, evidence_ids: ["ev:first"], limitations: []};
   sentinel.unavailable = structuredClone(sentinel.operator);
   sentinel.unavailable.metadata = {
     ...sentinel.unavailable.metadata,
@@ -588,6 +590,11 @@ async function main() {
       fresh: "fresh", stale: "stale", unavailable: "unavailable", future_state: "unknown",
     }, "core enum to semantic-token mapping is incomplete");
     verify.equal(await evaluate(browser, "document.querySelector('[data-metric-group=operator_load]').textContent.includes('73')"), true, "supplied operator load lost");
+    verify.deepEqual(await evaluate(browser, `(() => {
+      const card = document.querySelector('[data-metric-group=reliability]');
+      const fields = Object.fromEntries([...card.querySelectorAll('dt')].map(term => [term.textContent, term.nextElementSibling.textContent]));
+      return {controlled: fields['controlled aborts'], actionable: fields['actionable outcomes'], raw: card.textContent.includes('{') || card.textContent.includes('evidence_ids')};
+    })()`), {controlled: "3", actionable: "1", raw: false}, "qualified reliability claims rendered as raw structured data");
     verify.equal(await evaluate(browser, "document.body.textContent.includes('RAW SAYS CLEAR SENTINEL')"), false, "raw event content escaped Evidence mode");
 
     await evaluate(browser, "document.getElementById('tab-outcomes').focus()");

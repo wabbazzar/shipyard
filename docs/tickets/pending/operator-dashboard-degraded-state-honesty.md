@@ -518,10 +518,11 @@ semantics, and this ticket does not authorize a schema bump or external action.
   reliability exposes bounded `controlled_aborts` and `actionable_outcomes`
   claims and only actionable outcomes drive the alarm; the UI renders coverage
   limitations, terminal retry exhaustion, a unitless unknown attention value,
-  and humanized reason codes. Copy stays factual: `1 completed run needs review`
-  and `Review the linked terminal evidence`.
+  and humanized reason codes. Qualified reliability claims render as compact
+  counts rather than raw nested JSON. Copy stays factual: `1 completed run needs
+  review` and `Review the linked terminal evidence`.
 - Root gates: operator+reader+server ran 101 tests in 10.758s (`OK`). Chrome 145
-  passed 108 assertions at both `1440×900` and `390×844`; each used the initial
+  passed 109 assertions at both `1440×900` and `390×844`; each used the initial
   unavailable response plus exactly three retries, issued no request during the
   exhaustion hold, then recovered explicitly. Both runs had zero console/page/
   request/non-200/off-origin/mutation errors and zero horizontal overflow.
