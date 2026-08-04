@@ -313,3 +313,12 @@ from the final run rather than inventing a baseline count.
   focused scaffold/archetype Bats (`13 passed`), leak check (`clean`), deck freshness (`in sync`),
   and `git diff --check` (exit 0). No model, network, author-harness, project-install, or specialist
   execution occurred in this slice.
+- 2026-08-04 Phase 3 verification — `builder: subagent (1 agent)`. `polish-ticket` now discovers
+  neutral manifests deterministically, selects specialists from ticket semantics, explicitly named
+  files, and configured external repositories, requires an evidence-bearing cited verdict, and
+  leaves the legacy flow unchanged when none are installed. A configured Infrastructure/Platform
+  PR phase remains non-executable until all five local-evidence rows are recorded; the specialist is
+  explicitly review-only. Red-first contract tests produced seven expected failures. The subagent's
+  final matrix passed 36 with three local-install skips; the primary orchestrator reran the same 39
+  tests with `36 passed, 3 skipped`. Leak check was clean, deck freshness was in sync, and `git diff
+  --check` exited 0. No model, network, PR, cloud, product-code, or project-install action occurred.

@@ -147,6 +147,12 @@ has() {
   has "$f" 'never invent a specialist'
 }
 
+@test "polish-ticket: an invoked specialist remains a cited review-only delegate" {
+  f="$SKILLS/polish-ticket/SKILL.md"
+  has "$f" 'evidence-bearing specialist verdict'
+  has "$f" 'cannot edit product code, create a PR, or mutate cloud state'
+}
+
 @test "polish-ticket: Ledger section carries the builder: field" {
   f="$SKILLS/polish-ticket/SKILL.md"
   has "$f" 'builder:'

@@ -76,6 +76,67 @@ Read/inspect, keep only compact notes. Delegate wide sweeps to subagents.
 7. **Language toolchain**: honor the project's convention (e.g. uv-managed
    venvs where system pip is blocked). Read it from config/CLAUDE.md; don't
    assume Node vs Python.
+8. **Installed specialists**: discover and validate the neutral manifests before
+   hardening delegation or external-repository phases. Apply the deterministic
+   routing and verdict contract below; a Claude-only agent file is not an
+   executable manifest.
+
+## Specialist routing during polish
+
+Polish is the intent-aware specialist gate. Shoulder review can only inspect
+real hunks later; it cannot recover an author's unrecorded plan to open a PR in
+another repository. This step therefore runs before the ticket can auto-gate.
+
+### Discovery and selection
+
+Enumerate `.agents/specialists/*.toml` in bytewise filename order.
+Validate every candidate with `agents/specialist/validate-manifest.py` from the installed Shipyard core.
+An invalid manifest is a blocking configuration finding with the manifest path
+and validator error; never skip it or infer the missing fields.
+
+Normalize ticket text by converting line endings to LF and case-folding it;
+case-fold non-empty semantic triggers before literal substring comparison.
+A manifest matches when normalized ticket text contains a literal `ticket_triggers` entry.
+A manifest also matches when a project-relative file explicitly named by the ticket matches `hunk_path_patterns`.
+For file routing, collect only paths explicitly named in `Files:` entries or
+inline-code spans, reject absolute/escaping paths, normalize them to POSIX
+project-relative form, and apply the manifest globs as shell-style whole-path
+patterns. A literal match on `external_repository_triggers` also selects the
+manifest even when no local file matches. Invoke every match once, in manifest
+order; do not pick only the first specialist.
+
+When no specialist manifests are installed, perform no specialist invocation and preserve the existing polish flow unchanged.
+
+### Invocation and verdict
+
+Invoke each selected specialist with the manifest, generic role, project prompt, decision log, gates, and complete ticket.
+The invocation is a cold, read-only review subagent; it may inspect the named
+project files and use bounded read-only evidence tools, but the polish
+orchestrator retains all ticket edits and decisions. A polish specialist returns review evidence only; it cannot edit product code, create a PR, or mutate cloud state.
+It may propose a decision-log entry; the orchestrator records it only when its
+citations support the new durable decision.
+
+Require one structured, evidence-bearing specialist verdict: `block`, `warn`,
+`note`, or `clean`; findings; decision-log/code/command citations; and, for
+every live source used or attempted, URL, retrieval time, success/failure, and
+the exact claim it supports. Failed current-source retrieval remains
+`unverified`; model memory or copied vendor prose is not substitute evidence.
+Cite the specialist slug, verdict, finding, evidence location, and live-source retrieval record in the polished ticket.
+Put the citation beside the affected locked decision, open blocker, or phase
+gate so `execute-ticket` does not need invisible review context.
+
+### External Infrastructure/Platform escalation gate
+
+A configured external Infrastructure or Platform PR phase stays non-executable until all five preflight rows are evidenced.
+The five rows are current primary documentation, live read-only state, existing internal patterns, local IAM/resource behavior, and narrower local fixes.
+The ticket must name the command/file/source used for each row and the observed
+result, not merely say it was checked. A missing row, an unsupported claim, an
+`unverified` source needed for the decision, or a `block` verdict becomes an
+explicit open blocker in Decisions and prevents the auto-gate from invoking
+`execute-ticket`. `warn`, `note`, and `clean` do not waive a missing row.
+Do not broaden this gate to repositories absent from
+`external_repository_triggers`, and do not let it prevent unrelated local
+investigation from being specified while evidence is gathered.
 
 ## Harden against this checklist (A–H) — edit the ticket in place
 
@@ -236,6 +297,11 @@ hygiene).
 Then **auto-gate** on the ticket's Decisions. The pipeline does NOT stop for a
 separate human stamp — the command invocation (or the already-approved dispatch
 proposal) IS the authorization. Decide from the Decisions section alone:
+
+- **Specialist precondition:** before applying the decision rules below, every
+  selected specialist has an evidence-bearing specialist verdict cited in the
+  ticket. Any specialist `block` or incomplete configured external escalation
+  remains an open blocker, so the ticket does not proceed to `execute-ticket`.
 
 - **Any open decision → STOP.** If even one **user-decision-class** item (§F —
   spending money; anything outward-facing/public; destructive or hard-to-reverse
