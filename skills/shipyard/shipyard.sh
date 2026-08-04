@@ -407,7 +407,28 @@ cmd_add_specialist() {
   [ -f "$log_abs" ] || \
     sed "s/<subsystem>/$sub/g" "$QUARTET_DIR/agents/specialist/decision-log.template.md" > "$log_abs"
 
-  # 2. the specialist subagent definition (archetype role + subsystem pointers)
+  # 2. neutral manifest + project prompt. The manifest is the executable
+  # routing contract shared by every harness; scaffolding validates local
+  # paths and URL shapes without evaluating values or fetching live docs.
+  local specialists_dir="$dir/.agents/specialists"
+  mkdir -p "$specialists_dir"
+  local prompt_rel=".agents/specialists/${sub}.md"
+  local prompt_abs="$dir/$prompt_rel"
+  [ -f "$prompt_abs" ] || \
+    sed -e "s/<slug>/$sub/g" -e "s#<decision_log>#$log_rel#g" \
+      "$QUARTET_DIR/agents/specialist/project-prompt.template.md" > "$prompt_abs"
+  local manifest_rel=".agents/specialists/${sub}.toml"
+  local manifest_abs="$dir/$manifest_rel"
+  [ -f "$manifest_abs" ] || \
+    sed -e "s/<slug>/$sub/g" -e "s#<decision_log>#$log_rel#g" \
+      "$QUARTET_DIR/agents/specialist/manifest.template.toml" > "$manifest_abs"
+  if ! python3 "$QUARTET_DIR/agents/specialist/validate-manifest.py" \
+      --project "$dir" "$manifest_abs"; then
+    echo "add-specialist: invalid manifest: $manifest_rel" >&2
+    return 2
+  fi
+
+  # 3. the Claude discovery surface (archetype role + subsystem pointers)
   mkdir -p "$dir/.claude/agents"
   local agent_file="$dir/.claude/agents/${sub}-specialist.md"
   if [ ! -f "$agent_file" ]; then
@@ -426,7 +447,7 @@ cmd_add_specialist() {
 
   local marker="<!-- shipyard:specialist:$sub -->"
 
-  # 3a. gates.md — a "consult the specialist" note (creates the file if absent)
+  # 4a. gates.md — a "consult the specialist" note (creates the file if absent)
   local gates="$dir/.agents/gates.md"
   if ! grep -qsF "$marker" "$gates"; then
     {
@@ -436,7 +457,7 @@ cmd_add_specialist() {
     } >> "$gates"
   fi
 
-  # 3b. release.md — a HUNK-KEYED file-conditional block (never membership-keyed)
+  # 4b. release.md — a HUNK-KEYED file-conditional block (never membership-keyed)
   local rel="$dir/.agents/release.md"
   if ! grep -qsF "$marker" "$rel"; then
     {
@@ -446,7 +467,7 @@ cmd_add_specialist() {
     } >> "$rel"
   fi
 
-  # 3c. [write_ticket].context_files += the decision log (idempotent line-edit)
+  # 4c. [write_ticket].context_files += the decision log (idempotent line-edit)
   local cfg="$dir/.agents/config.toml"
   if [ -f "$cfg" ]; then
     if ! QUARTET_LOG_REL="$log_rel" python3 - "$cfg" <<'PY'
@@ -495,6 +516,8 @@ PY
   fi
 
   echo "add-specialist: wired '$sub' specialist"
+  echo "  manifest: $manifest_rel"
+  echo "  prompt:   $prompt_rel"
   echo "  agent:   .claude/agents/${sub}-specialist.md"
   echo "  log:     $log_rel"
   echo "  gates:   .agents/gates.md (consult note)"

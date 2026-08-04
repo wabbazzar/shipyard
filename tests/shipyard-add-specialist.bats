@@ -39,6 +39,36 @@ run_shipyard() { QUARTET_DIR="$QUARTET_ROOT" bash "$QUARTET_ROOT/$SH" "$@"; }
   grep -qF "you REVIEW; you do not redesign" "$P/.claude/agents/payments-specialist.md"
 }
 
+@test "scaffold lands a validated neutral specialist manifest and shared prompt" {
+  P="$(make_fixture_project p3_manifest)"
+  run run_shipyard add-specialist payments --project "$P"
+  [ "$status" -eq 0 ]
+  scaffold_output="$output"
+  [ -f "$P/.agents/specialists/payments.toml" ]
+  [ -f "$P/.agents/specialists/payments.md" ]
+
+  run python3 - "$P/.agents/specialists/payments.toml" <<'PY'
+import sys, tomllib
+
+manifest = tomllib.load(open(sys.argv[1], "rb"))
+expected = {
+    "schema_version": 1,
+    "slug": "payments",
+    "prompt_definition": ".agents/specialists/payments.md",
+    "decision_log": "docs/payments-decisions.md",
+    "hunk_path_patterns": [],
+    "ticket_triggers": ["payments"],
+    "external_repository_triggers": [],
+    "live_docs": [],
+}
+assert manifest == expected, manifest
+PY
+  [ "$status" -eq 0 ]
+  grep -qF "Subsystem: **payments**" "$P/.agents/specialists/payments.md"
+  grep -qF "docs/payments-decisions.md" "$P/.agents/specialists/payments.md"
+  [[ "$scaffold_output" == *"manifest: .agents/specialists/payments.toml"* ]]
+}
+
 @test "wires write_ticket.context_files (config still parses, path present)" {
   P="$(make_fixture_project p4)"
   run run_shipyard add-specialist payments --project "$P"
@@ -66,6 +96,27 @@ run_shipyard() { QUARTET_DIR="$QUARTET_ROOT" bash "$QUARTET_ROOT/$SH" "$@"; }
   [ "$status" -eq 0 ]
   run python3 -c "import tomllib;c=tomllib.load(open('$P/.agents/config.toml','rb'))['write_ticket']['context_files'];print(c.count('docs/payments-decisions.md'))"
   [ "$output" = "1" ]
+  run find "$P/.agents/specialists" -maxdepth 1 -type f
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = "2" ]
+}
+
+@test "manifest validation rejects path escape and non-https live docs without fetching" {
+  P="$(make_fixture_project p7)"
+  run_shipyard add-specialist payments --project "$P"
+  M="$P/.agents/specialists/payments.toml"
+
+  sed -i.bak 's#prompt_definition = ".*"#prompt_definition = "../outside.md"#' "$M"
+  run run_shipyard add-specialist payments --project "$P"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"prompt_definition must stay inside the project"* ]]
+  mv "$M.bak" "$M"
+
+  printf '\n[[live_docs]]\nlabel = "AWS"\nurl = "http://docs.example.test/live"\nauthority = "AWS"\naccess_mode = "public"\n' >> "$M"
+  sed -i.bak 's/live_docs = \[\]//' "$M"
+  run run_shipyard add-specialist payments --project "$P"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"url must be an https URL without credentials"* ]]
 }
 
 @test "add-specialist makes NO uncapped model call (no bare claude/codex/hermes)" {

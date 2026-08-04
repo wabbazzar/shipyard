@@ -292,4 +292,24 @@ from the final run rather than inventing a baseline count.
 
 ## Ledger
 
-Empty — populated by `execute-ticket` phase by phase after polish.
+- 2026-08-04 execution preflight — `builder: orchestration pending`. Repository instructions require
+  direct small commits on fleet-live `main`; an initially-created feature worktree was removed
+  before executable changes, and a link audit showed zero installed skill symlinks targeting it.
+  The required Bats invocation needs `/bin/bash` ahead of Homebrew Bash 5.3 on this host; otherwise
+  Bats 1.14 hangs while preprocessing the first `@test`. With the corrected PATH, the full baseline
+  enumerated 744 tests but hit the reproducible pre-existing
+  `codex-feedback-delivery.bats` three-second oversized-stream timing failure before this ticket
+  touched executable code. That independent red baseline is recorded, not weakened or claimed
+  green; each phase will run its focused gates and the final suite will report the same known failure
+  separately from any new failure.
+- Phase 1 plan — `builder: subagent (1 agent)`. Add a neutral, deterministic specialist manifest to
+  the existing scaffold, validate its paths/shape without evaluation or network access, preserve
+  every legacy artifact/idempotence contract, then have the orchestrator rerun syntax, focused Bats,
+  leak, and deck gates before the commit.
+- 2026-08-04 Phase 1 verification — the scaffold now writes a harness-neutral manifest and project
+  prompt, validates exact schema/path/HTTPS contracts without fetching, and preserves the legacy
+  Claude discovery file, decision log, gates, release, config, and idempotence behavior. The primary
+  orchestrator reviewed the complete diff and reran: shell syntax and Python byte-compile (exit 0),
+  focused scaffold/archetype Bats (`13 passed`), leak check (`clean`), deck freshness (`in sync`),
+  and `git diff --check` (exit 0). No model, network, author-harness, project-install, or specialist
+  execution occurred in this slice.

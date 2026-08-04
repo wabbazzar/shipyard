@@ -17,9 +17,9 @@ role's job, behind the same human stamp as everything else.
 This file is the generic protocol. The runner concatenates, after this
 file, a RUN CONTEXT block containing:
 
-- the project block for THIS specialist (`.agents/<subsystem>-specialist.md`
-  or the project's equivalent) — the subsystem's name, its files, and any
-  project-specific rubric;
+- the neutral specialist manifest (`.agents/specialists/<subsystem>.toml`) and
+  its `prompt_definition` project block — the subsystem's name, matching hunk
+  paths and ticket triggers, live-source pointers, and project-specific rubric;
 - the subsystem's **decision log** (the living-knowledge doc this role
   maintains — see the template it was scaffolded from);
 - the project's `.agents/gates.md` (what "verified" means here), if present;
