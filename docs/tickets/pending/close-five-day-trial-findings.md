@@ -472,6 +472,46 @@ complete.
   for the normal Shipyard push boundary; the follow-up remains pending while
   Phases 2–4 are built.
 
+### Phase 2 — Declare real-usage sources and close the routing gap
+
+- **Plan:** establish one optional project-relative `[design].usage_path`
+  contract with `data/usage` as the byte-compatible unset default; prove bad,
+  missing, empty, and non-zero sources independently; apply it to the collector,
+  inspector, installer interview/docs, and Ice's `kind=usage` Dispatch consumer;
+  keep the real third-project beacon as an honest external dependency.
+- **builder: subagent (1 agent)** — owns the Shipyard collector/inspector,
+  focused Bats fixtures, installer interview, and install/public documentation.
+  The orchestrator owns the separate Ice consumer/tests and personally runs all
+  cross-repository gates before commits.
+- **Starting state:** Shipyard `63b19b8`, clean and three commits ahead of
+  `origin/main`; Ice `dd31f96`, clean and seven inherited commits ahead of
+  `origin/master`. Neither repository is pushed mid-phase.
+- **RED:** pre-change `tests/design.bats` failed 4/15 and the four focused
+  inspector usage cases failed 4/4. Ice's focused consumer run failed 6 of 7
+  original cases against the fixed `data/usage` implementation; the one unset
+  default case passed and pinned compatibility.
+- **Commits:** Shipyard `409c13c` implements and documents the shared source
+  contract; Ice `cb0d2c3` applies it to the Dispatch consumer. Ice remains
+  local and its eight inherited commits were not pushed.
+- **GREEN:** design Bats 15/15; inspector Bats 80/80; collector shell syntax,
+  inspector byte-compile, leak-check, and diff check all exit 0; installer
+  dry-run ends `install: OK`. Ice's newspaper suite is 53/53, byte-compile and
+  `--help` exit 0, and its diff check is clean.
+- **Coverage proof:** the unset source resolves only `data/usage`; a valid
+  configured source reports `available/ok` with non-zero evidence. Missing,
+  empty, and unreadable report `unavailable/missing`, `available/empty`, and
+  `unavailable/unreadable`; invalid absolute, escaping, and non-string values
+  report `error/invalid_config`. The collector preserves zero counters for every
+  non-measured state; the inspector emits no usage evidence for those states.
+- **Consumer proof:** the Dispatch retains `kind=usage` for an explicitly
+  unavailable configured source without exposing its path. Unavailable rows
+  are never counted by the historical trial-watch tally; a valid alternate
+  directory produces the same top-action summary as the unset default.
+- **Outcome:** Phase 2 DoD met, but T2 remains honestly **2/3**. Configuration
+  and coverage semantics are repaired; a real third beacon is still blocked on
+  Bopthere ticket `044_chore_usage_beacon_silence_instrumentation.md` and no
+  instrumentation-only credit was taken.
+
 ---
 
 Run with `execute-ticket docs/tickets/pending/close-five-day-trial-findings.md`.
