@@ -457,6 +457,26 @@ semantics, and this ticket does not authorize a schema bump or external action.
 - Commit: this phase commit (recorded by Git immediately after this ledger).
 - Installed service was not restarted; no push or external action occurred.
 
+### Phase 2 — Restore truthful operator semantics and evidence closure
+
+- builder: subagent (`ticket_surface`), independently verified by root
+- Plan: repair the pure document contract before presentation: nullable
+  unavailable attention, measured reliability-alarm precedence, explicit
+  missing-source coverage, and bounded evidence for event-derived aggregates.
+- RED: four focused cases failed on the old document: the no-action fallback,
+  unknown instead of alarm, absent `fleet_inspection` coverage, and missing
+  reliability evidence IDs.
+- GREEN: unavailable attention is `null/null/null` with
+  `inspection_unavailable`; absent snapshots render explicit unavailable rows;
+  a measured 1/2 reliability result leads as an alarm; reliability links only
+  `job.end`, role contracts link only their `job.start`/`job.end`, and each ID
+  resolves exactly once. Aggregate links cap at 20 with
+  `evidence_truncated` rather than starving later consumers.
+- Root gates: four focused regressions passed, then operator+reader+server ran
+  97 tests in 9.996s (`OK`); Python compilation and `git diff --check` passed.
+- Commit: this phase commit (recorded by Git immediately after this ledger).
+- Installed service was not restarted; no push or external action occurred.
+
 Builder appends each remaining phase plan, `builder:` line, commit hash, exact
 gate output, rendered screenshot paths, and honest blockers here before its
 phase commit.

@@ -17,6 +17,7 @@ from dashboard import operator as operator_module
 from dashboard.operator import (
     MAX_ATTENTION,
     MAX_EVIDENCE,
+    MAX_GRAPH_EVIDENCE_IDS,
     MAX_RUNTIME_EVENTS_PER_NODE,
     MAX_STORY_BEATS,
     OPERATOR_VIEW_SCHEMA_VERSION,
@@ -1465,6 +1466,159 @@ outcome_lineage_emit_build_items "$2" demo-build "$3"
         self.assertTrue(document["topology"]["nodes"])
         self.assertTrue(all(item["state"] in {"unknown", "healthy"} for item in document["topology"]["nodes"] if item["kind"] == "role"))
         self.assertIn("inspection_unavailable", document["metadata"]["limitations"])
+
+    def test_unavailable_inspection_never_becomes_no_action_or_zero_attention(self) -> None:
+        document = self.compose(
+            inspection=None,
+            relationships=None,
+            inspection_state="unavailable",
+            refresh_age_seconds=None,
+        )
+
+        self.assertEqual(document["brief"]["state"], "unknown")
+        self.assertEqual(document["brief"]["takeaway"], "Fleet assessment is unavailable")
+        self.assertEqual(
+            document["brief"]["action"],
+            "Restore inspection coverage and reassess the fleet",
+        )
+        attention = next(
+            item for item in document["brief"]["signals"] if item["id"] == "attention"
+        )
+        self.assertEqual(
+            (attention["value"], attention["observed"], attention["total"]),
+            (None, None, None),
+        )
+        self.assertEqual(attention["state"], "unknown")
+        self.assertIn("inspection_unavailable", attention["limitations"])
+
+    def test_measured_reliability_alarm_precedes_unavailable_inspection(self) -> None:
+        events = events_fixture()
+        events.extend(
+            [
+                {
+                    "project_id": "project-safe",
+                    "project": "demo",
+                    "role": "release",
+                    "run_id": "c" * 32,
+                    "ts": "2026-08-01T10:05:00Z",
+                    "event": "job.start",
+                },
+                {
+                    "project_id": "project-safe",
+                    "project": "demo",
+                    "role": "release",
+                    "run_id": "c" * 32,
+                    "ts": "2026-08-01T10:06:00Z",
+                    "event": "job.end",
+                    "status": "fail",
+                },
+            ]
+        )
+        document = self.compose(
+            events=events,
+            inspection=None,
+            relationships=None,
+            inspection_state="unavailable",
+            refresh_age_seconds=None,
+        )
+
+        self.assertEqual(document["outcomes"]["reliability"]["state"], "measured")
+        self.assertEqual(document["brief"]["state"], "alarm")
+        self.assertEqual(document["brief"]["takeaway"], "1 of 2 completed runs did not succeed")
+        self.assertEqual(
+            document["brief"]["action"],
+            "Review terminal evidence and resolve unexpected outcomes",
+        )
+        successful = next(
+            item
+            for item in document["brief"]["signals"]
+            if item["id"] == "successful_runs"
+        )
+        self.assertEqual(
+            (successful["value"], successful["observed"], successful["total"], successful["state"]),
+            (1, 1, 2, "alarm"),
+        )
+
+    def test_missing_inspection_and_relationship_snapshots_are_explicit_coverage(self) -> None:
+        document = self.compose(
+            inspection=None,
+            relationships=None,
+            inspection_state="unavailable",
+            refresh_age_seconds=None,
+        )
+        coverage = {item["source"]: item for item in document["coverage"]}
+
+        self.assertEqual(
+            coverage["fleet_inspection"],
+            {
+                "source": "fleet_inspection",
+                "state": "unavailable",
+                "reason": "snapshot_missing",
+                "limitations": ["inspection_snapshot_missing", "inspection_unavailable"],
+            },
+        )
+        self.assertEqual(
+            coverage["operator_relationships"],
+            {
+                "source": "operator_relationships",
+                "state": "unavailable",
+                "reason": "snapshot_missing",
+                "limitations": ["relationship_snapshot_missing"],
+            },
+        )
+
+    def test_reliability_and_role_contract_evidence_is_bounded_and_closed(self) -> None:
+        document = self.compose()
+        evidence = {item["id"]: item for item in document["evidence"]}
+        reliability = document["outcomes"]["reliability"]
+        build = next(
+            item for item in document["outcomes"]["role_contracts"] if item["role"] == "build"
+        )
+
+        self.assertEqual(len(reliability["evidence_ids"]), 1)
+        self.assertLessEqual(len(reliability["evidence_ids"]), MAX_GRAPH_EVIDENCE_IDS)
+        self.assertEqual(
+            [evidence[item]["fields"]["event"] for item in reliability["evidence_ids"]],
+            ["job.end"],
+        )
+        self.assertEqual(
+            [evidence[item]["fields"]["event"] for item in build["evidence_ids"]],
+            ["job.start", "job.end"],
+        )
+        emitted = [
+            evidence_id
+            for aggregate in [reliability, *document["outcomes"]["role_contracts"]]
+            for evidence_id in aggregate["evidence_ids"]
+        ]
+        self.assertTrue(emitted)
+        self.assertTrue(all(evidence_id in evidence for evidence_id in emitted))
+        self.assertTrue(
+            all(
+                sum(row["id"] == evidence_id for row in document["evidence"]) == 1
+                for evidence_id in emitted
+            )
+        )
+
+        terminal_events = [
+            {
+                "ts": f"2026-08-01T10:{index:02d}:00Z",
+                "event": "job.end",
+                "role": "build",
+                "status": "ok",
+                "run_id": f"bounded-{index}",
+            }
+            for index in range(MAX_GRAPH_EVIDENCE_IDS + 5)
+        ]
+        bounded = self.compose(events=terminal_events)
+        bounded_reliability = bounded["outcomes"]["reliability"]
+        bounded_role = bounded["outcomes"]["role_contracts"][0]
+        known_evidence = {item["id"] for item in bounded["evidence"]}
+        self.assertEqual(len(bounded_reliability["evidence_ids"]), MAX_GRAPH_EVIDENCE_IDS)
+        self.assertEqual(len(bounded_role["evidence_ids"]), MAX_GRAPH_EVIDENCE_IDS)
+        self.assertIn("evidence_truncated", bounded_reliability["limitations"])
+        self.assertIn("evidence_truncated", bounded_role["limitations"])
+        self.assertTrue(set(bounded_reliability["evidence_ids"]).issubset(known_evidence))
+        self.assertTrue(set(bounded_role["evidence_ids"]).issubset(known_evidence))
 
     def test_truncated_event_window_marks_every_denominator_partial(self) -> None:
         document = self.compose(event_stream_truncated=True)

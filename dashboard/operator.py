@@ -2145,19 +2145,49 @@ def _outcome_document(
 
     terminal = [event for event in events if event.get("event") == "job.end"]
     successful = sum(1 for event in terminal if event.get("status") == "ok")
+    terminal_evidence_ids = list(
+        dict.fromkeys(evidence_id_by_object[id(event)] for event in terminal)
+    )
+    reliability_limitations = (
+        ["event_window_truncated"]
+        if terminal and event_stream_truncated
+        else ([] if terminal else ["job_terminal_denominator_missing"])
+    )
+    if len(terminal_evidence_ids) > MAX_GRAPH_EVIDENCE_IDS:
+        reliability_limitations.append("evidence_truncated")
     reliability = {
         "state": "partial" if terminal and event_stream_truncated else ("measured" if terminal else "unknown"),
         "completed": len(terminal) if terminal else None,
         "successful": successful if terminal else None,
         "rate": successful / len(terminal) if terminal else None,
-        "limitations": ["event_window_truncated"] if terminal and event_stream_truncated else ([] if terminal else ["job_terminal_denominator_missing"]),
+        "evidence_ids": terminal_evidence_ids[:MAX_GRAPH_EVIDENCE_IDS],
+        "limitations": reliability_limitations,
     }
     roles = sorted({_safe_code(event.get("role")) for event in events if _safe_code(event.get("role"))})
     role_contracts = []
     for role in roles:
-        started = sum(1 for event in events if event.get("role") == role and event.get("event") == "job.start")
-        completed = sum(1 for event in events if event.get("role") == role and event.get("event") == "job.end")
-        ok = sum(1 for event in events if event.get("role") == role and event.get("event") == "job.end" and event.get("status") == "ok")
+        role_events = [
+            event
+            for event in events
+            if event.get("role") == role and event.get("event") in {"job.start", "job.end"}
+        ]
+        started = sum(1 for event in role_events if event.get("event") == "job.start")
+        completed = sum(1 for event in role_events if event.get("event") == "job.end")
+        ok = sum(
+            1
+            for event in role_events
+            if event.get("event") == "job.end" and event.get("status") == "ok"
+        )
+        role_evidence_ids = list(
+            dict.fromkeys(evidence_id_by_object[id(event)] for event in role_events)
+        )
+        role_limitations = (
+            ["event_window_truncated"]
+            if started and event_stream_truncated
+            else ([] if started else ["role_start_denominator_missing"])
+        )
+        if len(role_evidence_ids) > MAX_GRAPH_EVIDENCE_IDS:
+            role_limitations.append("evidence_truncated")
         role_contracts.append(
             {
                 "role": role,
@@ -2166,7 +2196,8 @@ def _outcome_document(
                 "completed": completed if started else None,
                 "successful": ok if started else None,
                 "completion_rate": completed / started if started else None,
-                "limitations": ["event_window_truncated"] if started and event_stream_truncated else ([] if started else ["role_start_denominator_missing"]),
+                "evidence_ids": role_evidence_ids[:MAX_GRAPH_EVIDENCE_IDS],
+                "limitations": role_limitations,
             }
         )
     token_totals = {key: 0 for key in _TOKEN_FIELDS}
@@ -2414,7 +2445,16 @@ def _coverage_rows(
     evidence_truncated: bool,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    if inspection is not None:
+    if inspection is None:
+        rows.append(
+            {
+                "source": "fleet_inspection",
+                "state": "unavailable",
+                "reason": "snapshot_missing",
+                "limitations": ["inspection_snapshot_missing", "inspection_unavailable"],
+            }
+        )
+    else:
         for raw in _array(inspection.get("coverage")):
             item = _object(raw)
             source = _safe_code(item.get("source"))
@@ -2435,6 +2475,15 @@ def _coverage_rows(
                 if isinstance(number, int) and number >= 0:
                     row[key] = number
             rows.append(row)
+    if relationships is None:
+        rows.append(
+            {
+                "source": "operator_relationships",
+                "state": "unavailable",
+                "reason": "snapshot_missing",
+                "limitations": ["relationship_snapshot_missing"],
+            }
+        )
     rows.extend(
         {
             "source": f"relationships_{row['provider']}",
@@ -2569,6 +2618,18 @@ def _brief_document(
     reliability_state = reliability.get("state")
     if not isinstance(reliability_state, str):
         reliability_state = "unknown"
+    reliability_alarm = (
+        reliability_state == "measured"
+        and completed is not None
+        and successful is not None
+        and completed > successful
+    )
+    attention_available = inspection_state != "unavailable"
+    attention_limitations = []
+    if attention_truncated:
+        attention_limitations.append("attention_truncated")
+    if not attention_available:
+        attention_limitations.append("inspection_unavailable")
     signals = [
         {
             "id": "promises_verified",
@@ -2585,7 +2646,7 @@ def _brief_document(
             "label": "Successful runs",
             "value": successful if successful is not None and successful >= 0 else None,
             "unit": "completed run" if successful == 1 else "completed runs",
-            "state": reliability_state,
+            "state": "alarm" if reliability_alarm else reliability_state,
             "observed": successful if successful is not None and successful >= 0 else None,
             "total": completed if completed is not None and completed >= 0 else None,
             "limitations": _safe_limitations(reliability.get("limitations")),
@@ -2593,12 +2654,12 @@ def _brief_document(
         {
             "id": "attention",
             "label": "Attention",
-            "value": len(grouped),
-            "unit": "group" if len(grouped) == 1 else "groups",
-            "state": bounded_groups[0]["state"] if bounded_groups else "unknown",
-            "observed": len(bounded_groups),
-            "total": len(grouped),
-            "limitations": ["attention_truncated"] if attention_truncated else [],
+            "value": len(grouped) if attention_available else None,
+            "unit": "group" if attention_available and len(grouped) == 1 else "groups",
+            "state": bounded_groups[0]["state"] if attention_available and bounded_groups else "unknown",
+            "observed": len(bounded_groups) if attention_available else None,
+            "total": len(grouped) if attention_available else None,
+            "limitations": attention_limitations,
         },
     ][:MAX_BRIEF_SIGNALS]
     if bounded_groups:
@@ -2606,6 +2667,16 @@ def _brief_document(
         state = lead["state"]
         takeaway = lead["label"]
         action = lead["action"]
+    elif reliability_alarm:
+        non_successful = completed - successful
+        noun = "run" if completed == 1 else "runs"
+        state = "alarm"
+        takeaway = f"{non_successful} of {completed} completed {noun} did not succeed"
+        action = "Review terminal evidence and resolve unexpected outcomes"
+    elif inspection_state == "unavailable":
+        state = "unknown"
+        takeaway = "Fleet assessment is unavailable"
+        action = "Restore inspection coverage and reassess the fleet"
     else:
         state = "unknown" if inspection_state != "stale" else "waiting"
         takeaway = "No operator action is currently evidenced"
