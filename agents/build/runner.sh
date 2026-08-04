@@ -163,6 +163,11 @@ if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
               esac
             fi
             ;;
+          # install.sh --wire-shoulder writes this delivery-env fragment at
+          # install time; it is machine-local runtime state, never meant to be
+          # committed, and was never added to a project's .gitignore. Left
+          # unexempted it makes the pre-flight see a permanently dirty tree.
+          '?? .agents/shoulder.env') managed=true ;;
         esac
         [ "$managed" = true ] && continue
         REAL_DIRTY="$REAL_DIRTY$line
