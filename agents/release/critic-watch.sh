@@ -585,10 +585,21 @@ critique_queue() {
   fi
 
   # ---- gather the diff for the exact queued edit batch ----------------------
-  local trunk="" diff="" changed=""
+  local trunk="" remote_trunk="" diff="" changed=""
   # shellcheck disable=SC1091
   source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
   trunk="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR" 2>/dev/null)" || trunk=""
+  # Shoulder review is read-only and should grade against the fetched remote
+  # trunk when detect_trunk returns a simple configured branch name. A local
+  # branch may have advanced independently and would contaminate the queued
+  # hunk. Explicit refs (origin/main, refs/heads/main, tags/...) are already
+  # intentional and remain untouched; missing remotes retain the old fallback.
+  if [ -n "$trunk" ] && [[ "$trunk" != */* ]]; then
+    remote_trunk="refs/remotes/origin/$trunk"
+    if git -C "$PROJECT_DIR" show-ref --verify --quiet "$remote_trunk"; then
+      trunk="$remote_trunk"
+    fi
+  fi
   if [ -z "$trunk" ] ||
      ! git -C "$PROJECT_DIR" rev-parse -q --verify "$trunk" >/dev/null 2>&1; then
     trunk=HEAD
