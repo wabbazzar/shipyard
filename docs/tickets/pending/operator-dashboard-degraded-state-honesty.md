@@ -477,6 +477,34 @@ semantics, and this ticket does not authorize a schema bump or external action.
 - Commit: this phase commit (recorded by Git immediately after this ledger).
 - Installed service was not restarted; no push or external action occurred.
 
+### Phase 3 — Make degraded state legible in the real UI
+
+- builder: subagent (`rival_backend`), independently verified by root with the
+  repository's `ui-design` contract
+- Plan: make failed inspection explicit, humanize machine codes, remove empty
+  evidence controls, hold the degraded fixture for assertions/capture, then
+  prove recovery without changing browser-derived KPI meaning.
+- RED: desktop Chrome timed out waiting for explicit unavailable copy because
+  the old UI still called failed inspection “loading.” The first visual pass
+  also exposed contradictory no-action copy below unknown attention.
+- GREEN: failed refresh reads `Fleet inspection unavailable · retrying locally`;
+  unknown attention is `—`/`Coverage unknown` with `Inspection-based attention
+  is unavailable.`; missing-source coverage is human-readable; zero-evidence
+  actions are absent while all five nonzero fixture actions remain enabled.
+- Root browser gates: 103 assertions passed independently at `1440×900` and
+  `390×844` in Chrome 145. Both held one unavailable response before explicit
+  recovery; overflow was `0px`/`-15px`; console, page, request, non-200,
+  off-origin, and mutation-control counts were zero; cleanup succeeded.
+- Root visually inspected degraded and recovered captures at both viewports:
+  `/tmp/shipyard-phase3-root/dashboard-degraded-1440x900.png`,
+  `/tmp/shipyard-phase3-root/dashboard-degraded-390x844.png`,
+  `/tmp/shipyard-phase3-root/dashboard-1440x900.png`, and
+  `/tmp/shipyard-phase3-root/dashboard-390x844.png`. Hierarchy, wrapping,
+  graph/table row integrity, and narrow recomposition were legible and unclipped.
+- Syntax: both JavaScript files passed `node --check`; `git diff --check` passed.
+- Commit: this phase commit (recorded by Git immediately after this ledger).
+- Installed service was not restarted; no push or external action occurred.
+
 Builder appends each remaining phase plan, `builder:` line, commit hash, exact
 gate output, rendered screenshot paths, and honest blockers here before its
 phase commit.
