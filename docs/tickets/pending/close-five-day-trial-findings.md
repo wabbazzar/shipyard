@@ -234,8 +234,8 @@ The Ice consumer change uses its own repo gate:
 
 ```bash
 cd ~/code/wabbazzar-ice
-python3 -m pytest -q scripts/tests/test_newspaper.py
-python3 scripts/newspaper.py --help
+.venv/bin/python -m pytest -q scripts/tests/test_newspaper.py
+.venv/bin/python scripts/newspaper.py --help
 git diff --check
 ```
 
@@ -436,6 +436,21 @@ The builder appends per phase: plan, `builder:` line, commit hash per repository
 RED/GREEN and real-system output, rendered viewport evidence, and honest
 deferred dependencies. A phase with an unmet observable DoD is not committed as
 complete.
+
+### Phase 1 — Publish the historical finding
+
+- **Plan:** update the Ice owner ledger from immutable event/Git evidence; add
+  one aggregate result to the Shipyard README; turn the existing deck table
+  into the single result ledger; add source/render guards; regenerate the deck;
+  personally run every Phase 1 gate at both declared viewports before separate
+  repository commits.
+- **builder: subagent (1 agent)** — bounded read-only public-closeout review;
+  the orchestrator retains the Ice edit, final copy decisions, rendering, and
+  verification because Ice has inherited unpushed commits and the deck publish
+  boundary is outward-facing.
+- **Starting state:** Shipyard `10b5671` on canonical `main`, clean and one
+  commit ahead of `origin/main`; Ice clean on `master`, six inherited commits
+  ahead of `origin/master`. Ice push is explicitly excluded.
 
 ---
 

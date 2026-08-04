@@ -187,6 +187,13 @@ Each project hands mentat a one-line compass: `[design] north_star` in
 proposals toward what the repo is *for*; it never gates. Evidence still
 decides what gets drafted.
 
+## Five-day fleet trial
+
+The fixed July 22–26, 2026 UTC trial met **2/4 floors** — **T1 PASS ·
+T2 MISS (2/3 projects) · T3 MISS (0 valid ordered chains) · T4 PASS**. Work
+after the window was not backfilled. Both misses and their remediation are
+tracked in [the trial follow-up](docs/tickets/pending/close-five-day-trial-findings.md).
+
 ## ⚠️ Read this before installing
 
 These agents run `claude --dangerously-skip-permissions` **unattended, on a

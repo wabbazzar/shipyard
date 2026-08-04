@@ -45,6 +45,43 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "the closed trial result is exact and routed to its follow-up" {
+  run python3 - "$QUARTET_ROOT/README.md" "$INDEX" "$EDITORIAL" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+readme = pathlib.Path(sys.argv[1]).read_text()
+source = pathlib.Path(sys.argv[2]).read_text()
+editorial = json.loads(pathlib.Path(sys.argv[3]).read_text())
+
+assert readme.count("trial met **2/4 floors**") == 1
+assert "T2 MISS (2/3 projects)" in readme
+assert "T3 MISS (0 valid ordered chains)" in readme
+assert "docs/tickets/pending/close-five-day-trial-findings.md" in readme
+
+table = source.split('<table class="ship-table" id="trial-results">', 1)[1].split("</table>", 1)[0]
+assert re.findall(r'<th scope="col">([^<]+)</th>', table) == ["Criterion", "Floor", "Result"]
+rows = re.findall(r'<tr data-trial-result="(pass|miss)">(.*?)</tr>', table, re.S)
+assert [kind for kind, _ in rows] == ["pass", "miss", "miss", "pass"]
+assert all(len(re.findall(r"<td>", row)) == 3 for _, row in rows)
+assert source.count("Final result: 2/4 floors met.") == 1
+assert "T2 and T3 are written findings" in source
+assert "docs/tickets/pending/close-five-day-trial-findings.md" in source
+
+phase = next(item for item in editorial["phases"] if item["id"] == 12)
+assert phase == {
+    "id": 12,
+    "title": "5-day fleet trial",
+    "status": "done",
+    "gist": "2/4 floors met · T1 PASS · T2 MISS (2/3) · T3 MISS (0 valid ordered chains) · T4 PASS. T2 and T3 are written findings with a tracked follow-up.",
+    "completed": "2026-08-04",
+}
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "fixed deck controls clear the top safe area" {
   STYLES="$QUARTET_ROOT/docs/styles.css"
   [ "$(grep -Fc 'top: calc(1.5rem + env(safe-area-inset-top, 0px));' "$STYLES")" -eq 2 ]

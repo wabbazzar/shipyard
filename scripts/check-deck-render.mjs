@@ -80,7 +80,15 @@ const base = `http://127.0.0.1:${live.address().port}`;
 const findings = [];
 const browser = await pw.chromium.launch({ headless: true });
 try {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const browserErrors = [];
+  const monitor = (target, label) => {
+    target.on('console', message => {
+      if (message.type() === 'error') browserErrors.push(`${label} console: ${message.text()}`);
+    });
+    target.on('pageerror', error => browserErrors.push(`${label} page: ${error.message}`));
+  };
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  monitor(page, 'desktop');
   await page.goto(`${base}/index.html`, { waitUntil: 'load' });
   await page.waitForSelector('.loop-node');
 
@@ -196,6 +204,83 @@ try {
       if (!known.includes(id)) findings.push(`decision link ${id} has no entry in the decisions data`);
     }
   }
+
+  // 6: the closed trial must render truthfully without horizontal overflow at
+  // the two declared publication viewports. This is an outcome ledger now,
+  // not just a statement of the original floors.
+  const viewports = [
+    { label: 'desktop', width: 1440, height: 900, page },
+    { label: 'mobile', width: 390, height: 844, page: null },
+  ];
+  for (const viewport of viewports) {
+    const trialPage = viewport.page || await browser.newPage({
+      viewport: { width: viewport.width, height: viewport.height },
+    });
+    if (!viewport.page) {
+      monitor(trialPage, viewport.label);
+      await trialPage.goto(`${base}/index.html`, { waitUntil: 'load' });
+      await trialPage.waitForSelector('#trial-results');
+    }
+    for (const mode of ['read', 'present']) {
+      await trialPage.click(mode === 'read' ? '#btn-read' : '#btn-present');
+      await trialPage.evaluate(() => document.getElementById('trial-results').scrollIntoView());
+      const trial = await trialPage.evaluate(() => {
+      const table = document.getElementById('trial-results');
+      const summary = document.getElementById('trial-summary');
+      const followUp = document.getElementById('trial-follow-up');
+      const link = followUp?.querySelector('a');
+      const rect = node => {
+        const r = node?.getBoundingClientRect();
+        return r ? { left: r.left, right: r.right, top: r.top, bottom: r.bottom } : null;
+      };
+      return {
+        headers: [...table.querySelectorAll('thead th')].map(th => th.textContent.trim()),
+        results: [...table.querySelectorAll('tbody tr')].map(tr => ({
+          kind: tr.dataset.trialResult,
+          text: tr.lastElementChild.textContent.trim(),
+        })),
+        summary: summary?.textContent.replace(/\s+/g, ' ').trim(),
+        documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        tableOverflow: table.scrollWidth - table.clientWidth,
+        summaryRect: rect(summary),
+        tableRect: rect(table),
+        followUpRect: rect(followUp),
+        linkRect: rect(link),
+        viewportWidth: window.innerWidth,
+      };
+      });
+      const prefix = `trial/${viewport.label}/${mode} ${viewport.width}x${viewport.height}`;
+      if (trial.headers.join('|') !== 'Criterion|Floor|Result') {
+        findings.push(`${prefix}: headers are [${trial.headers.join(', ')}]`);
+      }
+      const expectedKinds = ['pass', 'miss', 'miss', 'pass'];
+      if (JSON.stringify(trial.results.map(r => r.kind)) !== JSON.stringify(expectedKinds)) {
+        findings.push(`${prefix}: result order is [${trial.results.map(r => r.kind).join(', ')}]`);
+      }
+      const expectedText = [
+        'PASS — 1 medic-caught defect fixed',
+        'MISS — 2/3 projects',
+        'MISS — 0 valid ordered chains',
+        'PASS — 1 consequential human decision',
+      ];
+      if (JSON.stringify(trial.results.map(r => r.text)) !== JSON.stringify(expectedText)) {
+        findings.push(`${prefix}: visible results differ from the adjudicated ledger`);
+      }
+      if (!trial.summary?.includes('Final result: 2/4 floors met.')) {
+        findings.push(`${prefix}: exact 2/4 summary is absent`);
+      }
+      if (trial.documentOverflow !== 0) findings.push(`${prefix}: document overflows by ${trial.documentOverflow}px`);
+      if (trial.tableOverflow !== 0) findings.push(`${prefix}: result table overflows by ${trial.tableOverflow}px`);
+      if (trial.summaryRect?.bottom > trial.tableRect?.top || trial.tableRect?.bottom > trial.followUpRect?.top) {
+        findings.push(`${prefix}: summary, table, and follow-up overlap or render out of order`);
+      }
+      if (trial.linkRect && (trial.linkRect.left < 0 || trial.linkRect.right > trial.viewportWidth)) {
+        findings.push(`${prefix}: follow-up link escapes the viewport`);
+      }
+    }
+    if (!viewport.page) await trialPage.close();
+  }
+  findings.push(...browserErrors);
 } finally {
   await browser.close();
   live.close();

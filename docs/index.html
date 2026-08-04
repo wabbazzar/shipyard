@@ -437,17 +437,19 @@ bash install.sh --project &lt;dir&gt; --theme plain       # design &middot; buil
         <p class="pgist" id="adapt-router" style="font-size:0.82rem;color:var(--muted);line-height:1.5;"></p>
 
         <h3>The 5-day trial</h3>
-        <table class="ship-table">
-          <thead><tr><th>Criterion</th><th>Floor</th></tr></thead>
+        <p id="trial-summary"><strong>Final result: 2/4 floors met.</strong>
+        Fixed window: July 22&ndash;26, 2026 UTC; later work was not backfilled.</p>
+        <table class="ship-table" id="trial-results">
+          <thead><tr><th scope="col">Criterion</th><th scope="col">Floor</th><th scope="col">Result</th></tr></thead>
           <tbody>
-            <tr><td>Bugs caught &amp; fixed</td><td>&ge;1 real defect caught by release/on-call and fixed through the loop</td></tr>
-            <tr><td>Usage assessed</td><td>real-telemetry usage assessments for &ge;3 projects in the daily dispatch</td></tr>
-            <tr><td>Features shipped</td><td>&ge;1 feature end-to-end: proposal &rarr; stamp &rarr; build &rarr; release &rarr; merged</td></tr>
-            <tr><td>Decisions surfaced</td><td>&ge;1 consequential choice surfaced to the human and decided by a person, with the default held back until they answer</td></tr>
+            <tr data-trial-result="pass"><td>Bugs caught &amp; fixed</td><td>&ge;1 real defect caught by release/on-call and fixed through the loop</td><td><strong>PASS</strong> &mdash; 1 medic-caught defect fixed</td></tr>
+            <tr data-trial-result="miss"><td>Usage assessed</td><td>real-telemetry usage assessments for &ge;3 projects in the daily dispatch</td><td><strong>MISS</strong> &mdash; 2/3 projects</td></tr>
+            <tr data-trial-result="miss"><td>Features shipped</td><td>&ge;1 feature end-to-end: proposal &rarr; stamp &rarr; build &rarr; release &rarr; merged</td><td><strong>MISS</strong> &mdash; 0 valid ordered chains</td></tr>
+            <tr data-trial-result="pass"><td>Decisions surfaced</td><td>&ge;1 consequential choice surfaced to the human and decided by a person, with the default held back until they answer</td><td><strong>PASS</strong> &mdash; 1 consequential human decision</td></tr>
           </tbody>
         </table>
-        <p>A missed floor becomes a written finding with a follow-up ticket,
-        logged in the dispatch for the human to see.</p>
+        <p id="trial-follow-up">T2 and T3 are written findings; remediation is
+        tracked in <a href="https://github.com/wabbazzar/shipyard/blob/main/docs/tickets/pending/close-five-day-trial-findings.md" target="_blank" rel="noopener">the follow-up ticket</a>.</p>
 
         <p class="footnote">Code: <a href="https://github.com/wabbazzar/shipyard" target="_blank" rel="noopener">github.com/wabbazzar/shipyard</a></p>
       </div>
