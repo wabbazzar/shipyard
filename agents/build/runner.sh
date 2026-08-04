@@ -362,7 +362,8 @@ if [ "$MODE" = "ticket" ]; then
       exit 2
     }
     if [ -n "$UPSTREAM_WORK_ID" ]; then
-      [[ "$UPSTREAM_WORK_ID" =~ ^[A-Za-z0-9._:@-]{1,256}$ ]] || {
+      [ "${#UPSTREAM_WORK_ID}" -le 256 ] &&
+        [[ "$UPSTREAM_WORK_ID" =~ ^[A-Za-z0-9._:@-]+$ ]] || {
         echo "--upstream-work-id must be an opaque identifier" >&2
         exit 2
       }

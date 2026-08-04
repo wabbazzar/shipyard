@@ -86,7 +86,10 @@ do_install() {
 
 @test "launchd Codex shoulder install prepares private runtime verification state" {
   launchd_fixture
-  export XDG_STATE_HOME="$BATS_TEST_TMPDIR/state"
+  # macOS exposes /var as a symlink to /private/var. The security boundary
+  # intentionally rejects symlinked state-path components, so exercise it with
+  # the physical Bats temp path just as a real configured XDG root should.
+  export XDG_STATE_HOME="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/state"
   export CODEX_HOME="$BATS_TEST_TMPDIR/codex"
   mkdir -p "$CODEX_HOME"
   printf 'model = "gpt-5.6"\n' >"$CODEX_HOME/config.toml"

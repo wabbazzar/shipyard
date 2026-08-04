@@ -50,7 +50,9 @@ outcome_lineage_token_fields() {
   outcome_lineage_enabled || return 0
   [[ "${SPAWN_PROVIDER:-}" =~ ^[A-Za-z0-9._:@/-]{1,128}$ ]] &&
     OUTCOME_TOKEN_FIELDS+=("provider=$SPAWN_PROVIDER")
-  [[ "${SPAWN_MODEL:-}" =~ ^[A-Za-z0-9._:@/-]{1,256}$ ]] &&
+  [ -n "${SPAWN_MODEL:-}" ] &&
+    [ "${#SPAWN_MODEL}" -le 256 ] &&
+    [[ "$SPAWN_MODEL" =~ ^[A-Za-z0-9._:@/-]+$ ]] &&
     OUTCOME_TOKEN_FIELDS+=("model=$SPAWN_MODEL")
   [[ "${SPAWN_INPUT_TOKENS:-}" =~ ^[0-9]+$ ]] &&
     OUTCOME_TOKEN_FIELDS+=("input_tokens=$SPAWN_INPUT_TOKENS")
