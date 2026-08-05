@@ -555,6 +555,19 @@ bash scripts/ticket-lifecycle.sh --project . --check  # current config: expected
   passed 1/1 with the explicitly captured original Bash, and deck mirror passed
   10/10 with native Bash fixtures, including the captured sync case. The full
   baseline is restarted next; no publication or live-consumer action occurred.
+- 2026-08-05 — one-hour baseline result/repair plan: the bounded run reached
+  case 699 before its overall timeout, with three isolated failures. Replace
+  doctor's whole-second wall clock with a precise monotonic measurement while
+  preserving the strict `<5.000s` threshold. Add the clean sentinel required
+  since `2b503f4` to both reviews in the security-specialist success fixture and
+  to the dual-author success fixture. Prove all three captured cases and run
+  the remaining post-699 files as a separate bounded partition before the next
+  whole-suite gate. No model/network call or live-consumer action occurred.
+- 2026-08-05 — one-hour baseline repair result: doctor timing passed 1/1 with
+  the exact monotonic threshold; the security specialist file passed 2/2 with
+  generic-before-specialist ordering and bounded evidence; dual-author watcher
+  delivery passed 1/1 for both raw author sessions. The post-699 partition is
+  the next gate. All changes remain local under the SHIPYARD-13 routing rule.
 
 ---
 

@@ -86,9 +86,12 @@ retired_word_a() { printf '%s' "au""gur"; }
 
 @test "doctor: completes well under 5s" {
   doctor_install
-  s="$(date +%s)"; run_doctor; e="$(date +%s)"
+  s="$(python3 -c 'import time; print(time.monotonic_ns())')"
+  run_doctor
+  e="$(python3 -c 'import time; print(time.monotonic_ns())')"
+  elapsed_ms="$(( (e - s) / 1000000 ))"
   [ "$status" -eq 0 ]
-  [ "$((e - s))" -lt 5 ]
+  [ "$elapsed_ms" -lt 5000 ]
 }
 
 @test "doctor (f): missing AGENTS.md skill bridge -> finding" {

@@ -72,12 +72,14 @@ case "$*" in
     jq -nc --arg result "block|docs/tickets/pending/t48.md|External infrastructure escalation lacks the required local source/destination KMS launch matrix.
 block|src/judgify/ec2.py|The shared encrypted AMI root mapping omits the reviewed destination KmsKeyId, so AWS selects the destination default EBS key.
 block|src/judgify/iam.py|The exact source KMS key statement lacks kms:ReEncryptFrom.
-source|https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIEncryption.html|2026-08-04T18:00:00Z|success|A non-owned encrypted snapshot without KmsKeyId restores using the destination account default key." \
+source|https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIEncryption.html|2026-08-04T18:00:00Z|success|A non-owned encrypted snapshot without KmsKeyId restores using the destination account default key.
+TOKENS_HINT|<none>" \
       "{type:\"result\",result:\$result,usage:{input_tokens:20,output_tokens:10}}"
     ;;
   *)
     printf "generic\n" >>"$ORDER_FILE"
-    jq -nc --arg result "warn|docs/tickets/pending/t48.md|External change needs evidence." \
+    jq -nc --arg result "warn|docs/tickets/pending/t48.md|External change needs evidence.
+TOKENS_HINT|<none>" \
       "{type:\"result\",result:\$result,usage:{input_tokens:10,output_tokens:5}}"
     ;;
 esac'
