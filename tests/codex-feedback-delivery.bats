@@ -7,6 +7,7 @@ bats_require_minimum_version 1.5.0
 setup() {
   load helpers
   quartet_setup
+  quartet_use_native_bash
   FEEDBACK="$QUARTET_ROOT/agents/release/critic-codex-feedback.sh"
   NOTE="$QUARTET_ROOT/agents/release/critic-note.sh"
   STOP="$QUARTET_ROOT/agents/release/critic-stop-gate-codex.sh"

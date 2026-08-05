@@ -5,7 +5,7 @@
 # are recording stubs. The queue format is asserted identical to the claude
 # hook's so critic-watch.sh drains all three unchanged.
 
-setup() { load helpers; quartet_setup; }
+setup() { load helpers; quartet_setup; quartet_use_native_bash; }
 
 CODEX_HOOK="agents/release/critic-queue-codex.sh"
 HERMES_HOOK="agents/release/critic-queue-hermes.sh"

@@ -9,6 +9,7 @@
 setup() {
   load helpers
   quartet_setup
+  quartet_use_native_bash
 }
 
 teardown() {

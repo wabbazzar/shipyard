@@ -83,6 +83,15 @@ quartet_setup() {
   make_notify_stub
 }
 
+# Critic hooks are installed with /bin/bash on Darwin. Homebrew Bash 5.3 can
+# stall in their nested Python lock helpers, so hook-focused files opt into the
+# same interpreter as launchd without changing the shell used by other tests.
+quartet_use_native_bash() {
+  if [ "$(uname -s)" = "Darwin" ]; then
+    ln -sf /bin/bash "$SHIM_BIN/bash"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # PATH shim
 # ---------------------------------------------------------------------------

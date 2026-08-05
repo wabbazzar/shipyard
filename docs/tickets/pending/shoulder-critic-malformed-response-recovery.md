@@ -533,6 +533,17 @@ bash scripts/ticket-lifecycle.sh --project . --check  # current config: expected
   command PATH restored to fixtures, the doctor performance guard passed 1/1.
   No live consumer, model, or network call was made. The complete 778-case
   baseline remains the next gate before Phase 1 product work.
+- 2026-08-05 — complete-baseline shell follow-up: cases 1–44 passed. Case 45's
+  maximum-size Codex Stop hook stalled because only watcher invocations, not
+  the sibling critic hooks, had launchd's `/bin/bash`; the process tree pinned
+  the active child to `critic-stop-gate-codex.sh` and its nested Python read.
+  Add a Darwin-only helper that hook-focused files opt into, prove the captured
+  case plus the critic files, then restart the complete baseline. The stopped
+  run made no model/network call and left no test child running.
+- 2026-08-05 — complete-baseline shell follow-up result: the captured
+  maximum-size Codex Stop case passed 1/1 and the cross-harness critic hook file
+  passed 20/20 with the opt-in native Bash helper. No test child remained. This
+  is a test-runtime correction only; the complete baseline is restarted next.
 
 ---
 
