@@ -23,7 +23,7 @@ run_review() {
   local project="$1"
   printf 'src/value.txt %s\n' "$(date +%s)" >"$project/tmp/critic-queue-review"
   CRITIC_IDLE_SEC=0 QUARTET_DIR="$QUARTET_ROOT" QUARTET_EVENTS_DIR="$EVENTS_DIR" \
-    bash "$QUARTET_ROOT/agents/release/critic-watch.sh" \
+    /bin/bash "$QUARTET_ROOT/agents/release/critic-watch.sh" \
     --project "$project" --session review --once
 }
 

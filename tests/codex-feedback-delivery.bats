@@ -6,17 +6,6 @@ bats_require_minimum_version 1.5.0
 
 setup() {
   load helpers
-  if [ "$(uname -s)" = "Darwin" ]; then
-    # Keep Bats on the repository's Bash while avoiding interactive pyenv
-    # startup and the /usr/bin xcrun shim inside lock/race fixtures.
-    NATIVE_PYTHON="$(/usr/bin/xcrun -f python3 2>/dev/null || true)"
-    if [ -x "$NATIVE_PYTHON" ]; then
-      NATIVE_PYTHON_BIN="$BATS_TEST_TMPDIR/native-python-bin"
-      mkdir -p "$NATIVE_PYTHON_BIN"
-      ln -s "$NATIVE_PYTHON" "$NATIVE_PYTHON_BIN/python3"
-      export PATH="$NATIVE_PYTHON_BIN:$PATH"
-    fi
-  fi
   quartet_setup
   FEEDBACK="$QUARTET_ROOT/agents/release/critic-codex-feedback.sh"
   NOTE="$QUARTET_ROOT/agents/release/critic-note.sh"
@@ -425,7 +414,7 @@ PY
   run env QUARTET_DIR="$QUARTET_ROOT" QUARTET_EVENTS_DIR="$EVENTS_DIR" \
     CRITIC_IDLE_SEC=1 CRITIC_HARNESS=claude CRITIC_NOTE_HARNESS=codex \
     CLAUDE_NOTE_CMD="$NOTE --harness codex" \
-    bash "$WATCH" --project "$P" --session session-watcher --once
+    /bin/bash "$WATCH" --project "$P" --session session-watcher --once
   [ "$status" -eq 0 ]
   [ ! -e "$Q" ]
 
@@ -467,7 +456,7 @@ PY
     run env QUARTET_DIR="$QUARTET_ROOT" QUARTET_EVENTS_DIR="$EVENTS_DIR" \
       CRITIC_IDLE_SEC=1 CRITIC_HARNESS=claude CRITIC_NOTE_HARNESS=codex \
       CLAUDE_NOTE_CMD="$SHIM_BIN/codex-note-unavailable" \
-      bash "$WATCH" --project "$P" --session session-retry --once
+      /bin/bash "$WATCH" --project "$P" --session session-retry --once
     [ "$status" -eq 0 ]
     [ -s "$Q" ]
   done
@@ -1547,7 +1536,7 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
     CRITIC_BATCH_FILES=999999 CRITIC_HARNESS=claude \
     CRITIC_NOTE_HARNESS=codex \
     CLAUDE_NOTE_CMD="$NOTE --harness codex" \
-    bash "$WATCH" --project "$P" --session session-urgent --once
+    /bin/bash "$WATCH" --project "$P" --session session-urgent --once
   [ "$status" -eq 0 ]
   [ ! -e "$P/tmp/critic-queue-session-urgent" ]
   jq -e '.status == "deposited"' "$(status_file "$P" session-urgent)"
@@ -1567,7 +1556,7 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
 
   run env QUARTET_DIR="$QUARTET_ROOT" QUARTET_EVENTS_DIR="$EVENTS_DIR" \
     CRITIC_IDLE_SEC=999999 CRITIC_BATCH_FILES=999999 \
-    bash "$WATCH" --project "$P" --session session-budget --once
+    /bin/bash "$WATCH" --project "$P" --session session-budget --once
   [ "$status" -eq 0 ]
   [ -s "$P/tmp/critic-queue-session-budget" ]
   jq -e '.status == "budget"' "$(status_file "$P" session-budget)"
@@ -1598,7 +1587,7 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
         CRITIC_IDLE_SEC=999999 CRITIC_BATCH_FILES=999999 \
         CRITIC_HARNESS=claude CRITIC_NOTE_HARNESS=codex \
         CLAUDE_NOTE_CMD="$NOTE_CMD" \
-        bash "$WATCH" --project "$P" --session session-failure --once
+        /bin/bash "$WATCH" --project "$P" --session session-failure --once
       [ "$status" -eq 0 ]
     done
     [ -s "$P/tmp/critic-queue-session-failure" ]
@@ -1622,7 +1611,7 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
       CRITIC_IDLE_SEC=999999 CRITIC_BATCH_FILES=999999 \
       CRITIC_HARNESS=claude CRITIC_NOTE_HARNESS=codex \
       CLAUDE_NOTE_CMD="$NOTE_CMD" \
-      bash "$WATCH" --project "$P" --session session-failure --once
+      /bin/bash "$WATCH" --project "$P" --session session-failure --once
     [ "$status" -eq 0 ]
     if [ "$failure" = spawn ]; then
       [ "$(grep -c '^-p ' "$SHIM_LOG/claude.argv")" = "$CALLS_BEFORE" ]
@@ -1650,7 +1639,7 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
       CRITIC_IDLE_SEC=999999 CRITIC_BATCH_FILES=999999 \
       CRITIC_HARNESS=claude CRITIC_NOTE_HARNESS=codex \
       CLAUDE_NOTE_CMD="$NOTE_CMD" \
-      bash "$WATCH" --project "$P" --session session-failure --once
+      /bin/bash "$WATCH" --project "$P" --session session-failure --once
     [ "$status" -eq 0 ]
     if [ "$failure" = spawn ]; then
       CALLS_AFTER="$(grep -c '^-p ' "$SHIM_LOG/claude.argv")"

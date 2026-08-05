@@ -106,7 +106,7 @@ EOF
     CRITIC_IDLE_SEC=0 CRITIC_MULTI_AUTHOR=true \
     CRITIC_PRIMARY_HARNESS=claude CRITIC_NOTE_HARNESS=claude \
     CLAUDE_NOTE_CMD=true CRITIC_NOTE_DELIVER_CMD="$recorder" \
-    bash "$QUARTET_ROOT/agents/release/critic-watch.sh" --project "$P" --once
+    /bin/bash "$QUARTET_ROOT/agents/release/critic-watch.sh" --project "$P" --once
   [ "$status" -eq 0 ]
   grep -Fxq 'claude|same' "$BATS_TEST_TMPDIR/deliveries"
   grep -Fxq 'codex|same' "$BATS_TEST_TMPDIR/deliveries"

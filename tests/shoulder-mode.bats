@@ -8,18 +8,6 @@
 
 setup() {
   load helpers
-  if [ "$(uname -s)" = "Darwin" ]; then
-    # Exercise the native hook with the native standard-library interpreter.
-    # Resolve the developer-tool binary once: /usr/bin/python3 is itself an
-    # xcrun shim and can block inside nested Bash command substitutions.
-    NATIVE_PYTHON="$(/usr/bin/xcrun -f python3 2>/dev/null || true)"
-    if [ -x "$NATIVE_PYTHON" ]; then
-      NATIVE_PYTHON_BIN="$BATS_TEST_TMPDIR/native-python-bin"
-      mkdir -p "$NATIVE_PYTHON_BIN"
-      ln -s "$NATIVE_PYTHON" "$NATIVE_PYTHON_BIN/python3"
-      export PATH="$NATIVE_PYTHON_BIN:$PATH"
-    fi
-  fi
   quartet_setup
 }
 
@@ -57,7 +45,7 @@ run_watch() {
   local project="$1"; shift
   QUARTET_DIR="$QUARTET_ROOT" \
   QUARTET_EVENTS_DIR="$EVENTS_DIR" \
-    bash "$QUARTET_ROOT/$WATCH" --project "$project" "$@"
+    /bin/bash "$QUARTET_ROOT/$WATCH" --project "$project" "$@"
 }
 
 @test "native Bash watcher treats an empty queue set as an idle no-op" {

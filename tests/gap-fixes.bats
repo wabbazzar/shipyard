@@ -767,7 +767,7 @@ EOF
 }
 
 @test "delivery retry reuses the cached critique instead of re-running claude" {
-  make_stub claude 0 '{"type":"result","result":"warn|src/a.ts|no test","usage":{"input_tokens":10,"output_tokens":5}}'
+  make_stub claude 0 '{"type":"result","result":"warn|src/a.ts|no test\nTOKENS_HINT|<none>","usage":{"input_tokens":10,"output_tokens":5}}'
   make_stub claude-note 3
   P="$(make_fixture_project critcache can-merge-true.toml)"
   mkdir -p "$P/tmp" "$P/src"
@@ -777,14 +777,14 @@ EOF
   export CRITIC_IDLE_SEC=1 CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
 
   QUARTET_EVENTS_DIR="$EVENTS_DIR" \
-    bash "$QUARTET_ROOT/agents/release/critic-watch.sh" --project "$P" --session s9 --once
+    /bin/bash "$QUARTET_ROOT/agents/release/critic-watch.sh" --project "$P" --session s9 --once
   [ -s "$P/tmp/critic-queue-s9" ]          # exit 3 kept the queue
   C1="$(stub_calls claude)"                         # prompt is multi-line; compare counts
   [ "$C1" -ge 1 ]
 
   run env QUARTET_EVENTS_DIR="$EVENTS_DIR" CRITIC_IDLE_SEC=1 \
     CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note" \
-    bash "$QUARTET_ROOT/agents/release/critic-watch.sh" --project "$P" --session s9 --once
+    /bin/bash "$QUARTET_ROOT/agents/release/critic-watch.sh" --project "$P" --session s9 --once
   [ "$status" -eq 0 ]
   [[ "$output" == *"reusing cached critique"* ]]
   [ "$(stub_calls claude)" = "$C1" ]                # NOT re-run

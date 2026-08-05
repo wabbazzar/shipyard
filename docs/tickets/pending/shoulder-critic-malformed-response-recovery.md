@@ -502,6 +502,37 @@ bash scripts/ticket-lifecycle.sh --project . --check  # current config: expected
   the full run passed all 59 Codex cases before reaching dashboard; dashboard
   then passed 9/9 after its scoped fix; doctor timing passed on retry under
   current host load; no runtime file changed.
+- 2026-08-05 — shared harness repair plan: `builder: inline (test-only helper
+  consolidation and one stale fixture in already-read files)`. The continued
+  baseline exposed the invoking user's pyenv shim after fixture `HOME` changed,
+  causing release-gate timeouts unrelated to product behavior. Resolve the real
+  Python interpreter before changing fixture `HOME` in `quartet_setup`, place it
+  behind explicit test stubs, remove three duplicate per-file setups, and add the strict clean
+  sentinel to the cached-delivery success fixture. Invoke watcher fixtures with
+  `/bin/bash`, matching the launchd plist, while leaving the overall suite on
+  its canonical command PATH. Because Homebrew Bash 5.3 hangs in this host's
+  Bats preprocessor, the gate may put `/bin/bash` first for Bats itself and pass
+  the original PATH through `SHIPYARD_TEST_COMMAND_PATH` for fixtures. Prove the
+  affected files and failed cases before restarting the complete baseline; no
+  live consumer is in scope.
+- 2026-08-05 — stock-Bash baseline repair plan: `builder: inline (one portable
+  empty-array expansion in an already-traced runtime file)`. A retained-fixture
+  `bash -x` reproduction proved that ordinary release success reaches its final
+  event and then exits at `RELEASE_FINISH_OPTIONS[@]: unbound variable` under
+  installed macOS Bash 3.2; Bash 5 masks the defect. Use the same guarded array
+  expansion already established in `critic-watch.sh` for the release options
+  and the build ticket-lineage list (the latter fails identically when
+  telemetry is disabled), then prove release, medic, and ticket-dispatch cases
+  under stock Bash before committing this independent enabling repair.
+- 2026-08-05 — shared/stock-Bash baseline repair result: the watcher suite
+  passed 63/63 and Codex delivery passed 53/53 under `/bin/bash`; cached
+  delivery passed 1/1. Release blocking gates passed 11/11, stall handling
+  passed 12/12, medic notification lineage passed 2/2, and enabled ticket
+  dispatch passed 1/1 under stock Bash after the guarded array repairs. With
+  native Bash restricted to Bats plus watcher launchd parity and the original
+  command PATH restored to fixtures, the doctor performance guard passed 1/1.
+  No live consumer, model, or network call was made. The complete 778-case
+  baseline remains the next gate before Phase 1 product work.
 
 ---
 

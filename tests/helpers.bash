@@ -30,12 +30,34 @@ export QUARTET_ROOT FIXTURES_DIR
 # environment (events dir + notify recorder).
 # ---------------------------------------------------------------------------
 quartet_setup() {
+  local inherited_path="${SHIPYARD_TEST_COMMAND_PATH:-$PATH}"
+  local native_python="" native_python_bin=""
   SHIM_BIN="$BATS_TEST_TMPDIR/bin"
   SHIM_LOG="$BATS_TEST_TMPDIR/shim-log"
   EVENTS_DIR="$BATS_TEST_TMPDIR/events"
   mkdir -p "$SHIM_BIN" "$SHIM_LOG" "$EVENTS_DIR"
 
-  PATH="$SHIM_BIN:$PATH"
+  # A fixture HOME must not make the suite depend on the invoking developer's
+  # pyenv state. Keep explicit test stubs first, then use the real interpreter
+  # resolved while the invoking HOME is still active. /usr/bin/python3 is only
+  # an xcrun shim, and Xcode's Python 3.9 lacks the tomllib used by the runners.
+  if [ "$(uname -s)" = "Darwin" ]; then
+    native_python="$(python3 -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
+    if [ ! -x "$native_python" ]; then
+      native_python="$(/usr/bin/xcrun -f python3 2>/dev/null || true)"
+    fi
+    if [ -x "$native_python" ]; then
+      native_python_bin="$BATS_TEST_TMPDIR/native-python-bin"
+      mkdir -p "$native_python_bin"
+      [ -e "$native_python_bin/python3" ] ||
+        ln -s "$native_python" "$native_python_bin/python3"
+    fi
+  fi
+  if [ -n "$native_python_bin" ]; then
+    PATH="$SHIM_BIN:$native_python_bin:$inherited_path"
+  else
+    PATH="$SHIM_BIN:$inherited_path"
+  fi
   export PATH SHIM_BIN SHIM_LOG EVENTS_DIR
 
   # Deterministic git identity — fixture repos must commit without touching

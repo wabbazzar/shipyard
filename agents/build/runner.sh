@@ -377,7 +377,8 @@ if [ "$MODE" = "ticket" ]; then
   JOB_START="$(date +%s)"
   echo "[$SVC] $(now_iso) start mode=ticket ticket=$TICKET_FILE" > "$LOG_FILE"
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.start \
-    mode="ticket" project="$PROJECT_NAME" "${TICKET_LINEAGE[@]}" || true
+    mode="ticket" project="$PROJECT_NAME" \
+    ${TICKET_LINEAGE[@]+"${TICKET_LINEAGE[@]}"} || true
 
   # Headless: the execute-ticket skill is symlinked into
   # <project>/.claude/skills at install, so a cwd-at-project `claude -p`
@@ -397,18 +398,20 @@ if [ "$MODE" = "ticket" ]; then
 
   JOB_DUR=$(( $(date +%s) - JOB_START ))
   JOB_STATUS=$([ "$EXIT" = "0" ] && echo "ok" || echo "fail")
-  RESULT_LINEAGE=("${TICKET_LINEAGE[@]}")
+  RESULT_LINEAGE=(${TICKET_LINEAGE[@]+"${TICKET_LINEAGE[@]}"})
   if outcome_lineage_enabled; then
     BUILD_COMMIT_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
     if [[ "$BUILD_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
       RESULT_LINEAGE+=("commit_sha=$BUILD_COMMIT_SHA")
     fi
     "$LOG_EVENT" "$SVC" build.ticket.outcome work_id="$TICKET_ID" \
-      outcome="$JOB_STATUS" "${RESULT_LINEAGE[@]}" || true
+      outcome="$JOB_STATUS" \
+      ${RESULT_LINEAGE[@]+"${RESULT_LINEAGE[@]}"} || true
   fi
   [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
     mode="ticket" status="$JOB_STATUS" duration_s="$JOB_DUR" exit_code="$EXIT" \
-    tokens="$TOKENS" project="$PROJECT_NAME" "${RESULT_LINEAGE[@]}" || true
+    tokens="$TOKENS" project="$PROJECT_NAME" \
+    ${RESULT_LINEAGE[@]+"${RESULT_LINEAGE[@]}"} || true
   exit "$EXIT"
 fi
 
