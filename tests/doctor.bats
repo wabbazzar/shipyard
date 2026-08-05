@@ -17,6 +17,15 @@ bats_require_minimum_version 1.5.0
 
 setup() {
   load helpers
+  if [ "$(uname -s)" = "Darwin" ]; then
+    NATIVE_PYTHON="$(/usr/bin/xcrun -f python3 2>/dev/null || true)"
+    if [ -x "$NATIVE_PYTHON" ]; then
+      NATIVE_PYTHON_BIN="$BATS_TEST_TMPDIR/native-python-bin"
+      mkdir -p "$NATIVE_PYTHON_BIN"
+      ln -s "$NATIVE_PYTHON" "$NATIVE_PYTHON_BIN/python3"
+      export PATH="$NATIVE_PYTHON_BIN:$PATH"
+    fi
+  fi
   quartet_setup
   UNITS="$HOME/.config/systemd/user"
 

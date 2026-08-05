@@ -493,6 +493,15 @@ bash scripts/ticket-lifecycle.sh --project . --check  # current config: expected
   waits are bounded. Isolated repaired cases passed; the complete
   `tests/codex-feedback-delivery.bats` file passed 53/53 and the earlier
   `tests/shoulder-mode.bats` run passed 63/63. Runtime files remain untouched.
+- 2026-08-05 — macOS harness follow-up: `builder: inline (test-only setup in
+  already-read files)`. Homebrew Bash 5.3 stalls in the watcher's heredoc lock
+  helper, while globally replacing PATH breaks unrelated fixtures. The bounded
+  gate therefore shims only `bash` to `/bin/bash`; critic/doctor fixtures resolve
+  their native developer-tool Python locally before changing fixture `HOME`,
+  and dashboard fixtures retain their pre-`HOME` real interpreter. Evidence:
+  the full run passed all 59 Codex cases before reaching dashboard; dashboard
+  then passed 9/9 after its scoped fix; doctor timing passed on retry under
+  current host load; no runtime file changed.
 
 ---
 

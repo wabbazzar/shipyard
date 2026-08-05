@@ -6,6 +6,17 @@ bats_require_minimum_version 1.5.0
 
 setup() {
   load helpers
+  if [ "$(uname -s)" = "Darwin" ]; then
+    # Keep Bats on the repository's Bash while avoiding interactive pyenv
+    # startup and the /usr/bin xcrun shim inside lock/race fixtures.
+    NATIVE_PYTHON="$(/usr/bin/xcrun -f python3 2>/dev/null || true)"
+    if [ -x "$NATIVE_PYTHON" ]; then
+      NATIVE_PYTHON_BIN="$BATS_TEST_TMPDIR/native-python-bin"
+      mkdir -p "$NATIVE_PYTHON_BIN"
+      ln -s "$NATIVE_PYTHON" "$NATIVE_PYTHON_BIN/python3"
+      export PATH="$NATIVE_PYTHON_BIN:$PATH"
+    fi
+  fi
   quartet_setup
   FEEDBACK="$QUARTET_ROOT/agents/release/critic-codex-feedback.sh"
   NOTE="$QUARTET_ROOT/agents/release/critic-note.sh"

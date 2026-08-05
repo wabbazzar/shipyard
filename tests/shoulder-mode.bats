@@ -8,16 +8,19 @@
 
 setup() {
   load helpers
-  quartet_setup
-  if [ "$(uname -s)" = "Darwin" ] && [ -x /usr/bin/python3 ]; then
+  if [ "$(uname -s)" = "Darwin" ]; then
     # Exercise the native hook with the native standard-library interpreter.
-    # An interactive pyenv shim may resolve to a translated x86_64 build whose
-    # startup cost overwhelms the queue race fixtures' synchronization seams.
-    NATIVE_PYTHON_BIN="$BATS_TEST_TMPDIR/native-python-bin"
-    mkdir -p "$NATIVE_PYTHON_BIN"
-    ln -s /usr/bin/python3 "$NATIVE_PYTHON_BIN/python3"
-    export PATH="$NATIVE_PYTHON_BIN:$PATH"
+    # Resolve the developer-tool binary once: /usr/bin/python3 is itself an
+    # xcrun shim and can block inside nested Bash command substitutions.
+    NATIVE_PYTHON="$(/usr/bin/xcrun -f python3 2>/dev/null || true)"
+    if [ -x "$NATIVE_PYTHON" ]; then
+      NATIVE_PYTHON_BIN="$BATS_TEST_TMPDIR/native-python-bin"
+      mkdir -p "$NATIVE_PYTHON_BIN"
+      ln -s "$NATIVE_PYTHON" "$NATIVE_PYTHON_BIN/python3"
+      export PATH="$NATIVE_PYTHON_BIN:$PATH"
+    fi
   fi
+  quartet_setup
 }
 
 teardown() {
