@@ -135,15 +135,23 @@ if [ "$last" = "$LOCK_PATH" ] && [ "$generation_query" -eq 1 ]; then
   printf '%s\n' "$count" >"$LOCK_STAT_COUNT"
   if [ "$LOCK_RELEASE_AT" = generation-2 ] && [ "$count" -eq 2 ]; then
     : >"$LOCK_VALIDATED"
-    while [ ! -e "$LOCK_RELEASED" ]; do /bin/sleep 0.001; done
+    for ((attempt=0; attempt<5000; attempt++)); do
+      [ ! -e "$LOCK_RELEASED" ] || break
+      /bin/sleep 0.001
+    done
+    [ -e "$LOCK_RELEASED" ] || exit 75
   fi
 fi
 result="$($LOCK_REAL_STAT "$@" 2>/dev/null)" || exit $?
 if [ "$LOCK_RELEASE_AT" = mode ] && [ "$last" = "$LOCK_PATH" ] &&
    [ "$mode_query" -eq 1 ] && [ "$result" = 700 ] &&
-   mkdir "$LOCK_ONCE" 2>/dev/null; then
+  mkdir "$LOCK_ONCE" 2>/dev/null; then
   : >"$LOCK_VALIDATED"
-  while [ ! -e "$LOCK_RELEASED" ]; do /bin/sleep 0.001; done
+  for ((attempt=0; attempt<5000; attempt++)); do
+    [ ! -e "$LOCK_RELEASED" ] || break
+    /bin/sleep 0.001
+  done
+  [ -e "$LOCK_RELEASED" ] || exit 75
 fi
 printf '%s\n' "$result"
 EOF
@@ -391,7 +399,8 @@ PY
   P="$(make_fixture_project cfb-watcher)"
   authorize "$P"
   RESULT=$'block|src/a.ts|unsafe\nwarn|src/a.ts|untested\nnote|src/a.ts|explain'
-  CANNED="$(jq -cn --arg result "$RESULT" \
+  RESPONSE="$RESULT"$'\nTOKENS_HINT|<none>'
+  CANNED="$(jq -cn --arg result "$RESPONSE" \
     '{type:"result",result:$result,usage:{input_tokens:10,output_tokens:5}}')"
   make_stub claude 0 "$CANNED"
   mkdir -p "$P/src"
@@ -432,8 +441,9 @@ PY
 @test "retryable mailbox failure never acknowledges the reviewed edit queue" {
   P="$(make_fixture_project cfb-watcher-retry)"
   RESULT='warn|src/a.ts|untested'
-  make_stub claude 0 \
-    "{\"type\":\"result\",\"result\":\"$RESULT\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}"
+  RESPONSE="$RESULT"$'\nTOKENS_HINT|<none>'
+  make_stub claude 0 "$(jq -cn --arg result "$RESPONSE" \
+    '{type:"result",result:$result,usage:{input_tokens:10,output_tokens:5}}')"
   make_stub codex-note-unavailable 75
   mkdir -p "$P/src"
   printf '// changed\n' >"$P/src/a.ts"
@@ -740,17 +750,26 @@ EOF
     mkdir "$BOX/.lock"
     chmod 700 "$BOX/.lock"
     TOKEN="$(printf 'a%.0s' {1..32})"
-    IDENTITY="$(python3 "$QUARTET_ROOT/agents/release/critic-process-identity.py" "$BASHPID")"
-    printf '%s %s %s %s\n' "$BASHPID" "$TOKEN" "$IDENTITY" \
+    OWNER_SHELL_PID="$(python3 -c 'import os; print(os.getppid())')"
+    IDENTITY="$(python3 "$QUARTET_ROOT/agents/release/critic-process-identity.py" "$OWNER_SHELL_PID")"
+    printf '%s %s %s %s\n' "$OWNER_SHELL_PID" "$TOKEN" "$IDENTITY" \
       "$(date +%s)" >"$BOX/.lock/owner"
     chmod 600 "$BOX/.lock/owner"
-    while [ ! -e "$VALIDATED" ]; do sleep 0.001; done
+    for ((attempt=0; attempt<5000; attempt++)); do
+      [ ! -e "$VALIDATED" ] || break
+      /bin/sleep 0.001
+    done
+    [ -e "$VALIDATED" ] || exit 75
     rm "$BOX/.lock/owner"
     rmdir "$BOX/.lock"
     : >"$RELEASED"
   ) &
   OWNER_PID=$!
-  while [ ! -e "$BOX/.lock/owner" ]; do sleep 0.001; done
+  for ((attempt=0; attempt<5000; attempt++)); do
+    [ -e "$BOX/.lock/owner" ] && break
+    /bin/sleep 0.001
+  done
+  [ -e "$BOX/.lock/owner" ]
 
   run env PATH="$STAT_BIN:$PATH" LOCK_REAL_STAT="$REAL_STAT" \
     LOCK_STAT_FLAVOR="$STAT_FLAVOR" LOCK_PATH="$BOX/.lock" \
@@ -1502,7 +1521,8 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
   require_feedback "$P" true
   authorize "$P"
   RESULT='warn|src/a.ts|urgent review'
-  CANNED="$(jq -cn --arg result "$RESULT" \
+  RESPONSE="$RESULT"$'\nTOKENS_HINT|<none>'
+  CANNED="$(jq -cn --arg result "$RESPONSE" \
     '{type:"result",result:$result,usage:{input_tokens:3,output_tokens:2}}')"
   make_stub claude 0 "$CANNED"
   mkdir -p "$P/src"
@@ -1554,7 +1574,8 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
       make_stub claude 1
       NOTE_CMD="$NOTE --harness codex"
     else
-      CANNED="$(jq -cn --arg result 'warn|src/a.ts|delivery review' \
+      RESPONSE=$'warn|src/a.ts|delivery review\nTOKENS_HINT|<none>'
+      CANNED="$(jq -cn --arg result "$RESPONSE" \
         '{type:"result",result:$result,usage:{input_tokens:3,output_tokens:2}}')"
       make_stub claude 0 "$CANNED"
       make_stub note-fail 1

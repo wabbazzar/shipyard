@@ -479,6 +479,20 @@ bash scripts/ticket-lifecycle.sh --project . --check  # current config: expected
   stalled in `_cq_outer_lock_create`; no Bats/queue-hook children remained
   after its bounded termination. This slice changes no runtime behavior and
   makes the strict-parser guard truthful. Commit hash is recorded in Phase 1.
+- 2026-08-05 — full-baseline repair plan: `builder: subagent (1 agent)` owning
+  only `tests/codex-feedback-delivery.bats`. The 778-case run reached case 25
+  before being stopped: cases 12/13 failed after strict parsing rejected stale
+  success stubs, and case 25 waited indefinitely for an obsolete external
+  `stat` seam that the current fd/Python lock path does not call. Repair only
+  those fixtures, retain their delivery/queue/race assertions, bound every
+  wait, prove the three isolated cases, then restart the full baseline. No
+  runtime code or live consumer is in scope for this repair.
+- 2026-08-05 — full-baseline repair result: four valid generic-review fixtures
+  now include the strict clean sentinel. The owner-handoff race derives the
+  background shell PID portably (including native Bash 3.2), and all marker
+  waits are bounded. Isolated repaired cases passed; the complete
+  `tests/codex-feedback-delivery.bats` file passed 53/53 and the earlier
+  `tests/shoulder-mode.bats` run passed 63/63. Runtime files remain untouched.
 
 ---
 
