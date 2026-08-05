@@ -151,6 +151,122 @@ safe_private_file() {
   [ "$mode" = "600" ] && [ "$owner" = "$(id -u)" ] && [ "$links" = "1" ]
 }
 
+bounded_uint() {
+  local value="$1" maximum="$2"
+  [[ "$value" =~ ^[0-9]+$ ]] || value=0
+  if [ "$value" -gt "$maximum" ]; then
+    value="$maximum"
+  fi
+  printf '%s\n' "$value"
+}
+
+# Classify only the generic critic response. Specialist output has a separate
+# schema and remains a separate failure stage. Results are returned in bounded
+# globals so callers do not need to preserve rejected response text.
+classify_generic_response() {
+  local raw="$1" text="$2" harness="$3" invalid
+  GENERIC_RESPONSE_REASON=""
+  GENERIC_SENTINEL_COUNT=0
+  GENERIC_INVALID_LINE_COUNT=0
+  GENERIC_RESPONSE_BYTES="$(LC_ALL=C printf '%s' "$raw" | wc -c | tr -d ' ')"
+  GENERIC_RESPONSE_BYTES="$(bounded_uint "$GENERIC_RESPONSE_BYTES" 104857600)"
+  GENERIC_RESPONSE_HASH="$(printf '%s' "$raw" | checked_sha256 2>/dev/null || true)"
+  [[ "$GENERIC_RESPONSE_HASH" =~ ^[0-9a-f]{64}$ ]] || GENERIC_RESPONSE_HASH=""
+
+  # Claude's successful JSON mode must have a string result. A nonempty,
+  # exit-zero stdout blob that cannot satisfy that envelope is distinct from a
+  # normalized empty response. Other harnesses normalize through their own
+  # transport-specific paths in spawn.sh.
+  if [ "$harness" = "claude" ] &&
+      ! jq -e 'type == "object" and (.result | type == "string")' \
+        >/dev/null 2>&1 <<<"$raw"; then
+    GENERIC_RESPONSE_REASON="unnormalizable_envelope"
+    return 1
+  fi
+  if [ -z "$text" ]; then
+    GENERIC_RESPONSE_REASON="empty_text"
+    return 1
+  fi
+
+  GENERIC_SENTINEL_COUNT="$(
+    grep -c '^TOKENS_HINT|<none>$' <<<"$text" || true
+  )"
+  GENERIC_SENTINEL_COUNT="$(bounded_uint "$GENERIC_SENTINEL_COUNT" 100000)"
+  if [ "$GENERIC_SENTINEL_COUNT" -eq 0 ]; then
+    GENERIC_RESPONSE_REASON="missing_sentinel"
+    return 1
+  fi
+  if [ "$GENERIC_SENTINEL_COUNT" -ne 1 ]; then
+    GENERIC_RESPONSE_REASON="duplicate_sentinel"
+    return 1
+  fi
+
+  invalid="$(grep -Evc \
+    '^(block|warn|note)\|[^|]+\|.+$|^TOKENS_HINT\|<none>$|^$' \
+    <<<"$text" || true)"
+  GENERIC_INVALID_LINE_COUNT="$(bounded_uint "$invalid" 100000)"
+  if [ "$GENERIC_INVALID_LINE_COUNT" -ne 0 ]; then
+    GENERIC_RESPONSE_REASON="invalid_line"
+    return 1
+  fi
+  return 0
+}
+
+write_malformed_diagnostic() {
+  local session="$1" reason="$2" harness="$3" tokens="$4" generation="$5"
+  local target tmp now safe_tokens json
+  target="$QUEUE_DIR/critic-malformed-diagnostic-$session"
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    safe_private_file "$target" || {
+      log "malformed response diagnostic path is unsafe; diagnostic not replaced"
+      return 1
+    }
+  fi
+  tmp="$(umask 077; mktemp \
+    "$QUEUE_DIR/.critic-malformed-diagnostic-$session.XXXXXX")" || return 1
+  safe_tokens="$(bounded_uint "$tokens" 1000000000)"
+  now="$(date +%s)"
+  now="$(bounded_uint "$now" 9999999999)"
+  json="$(jq -cn \
+    --arg reason "$reason" --arg harness "$harness" \
+    --arg response_hash "$GENERIC_RESPONSE_HASH" \
+    --arg generation "$generation" \
+    --argjson sentinel_count "$GENERIC_SENTINEL_COUNT" \
+    --argjson invalid_line_count "$GENERIC_INVALID_LINE_COUNT" \
+    --argjson response_bytes "$GENERIC_RESPONSE_BYTES" \
+    --argjson tokens "$safe_tokens" --argjson updated_at "$now" '
+      {schema_version:1,reason:$reason,sentinel_count:$sentinel_count,
+       invalid_line_count:$invalid_line_count,response_bytes:$response_bytes,
+       response_hash:$response_hash,harness:$harness,tokens:$tokens,attempt:1,
+       generation:$generation,updated_at:$updated_at}
+    ')" || {
+      rm -f -- "$tmp"
+      return 1
+    }
+  (umask 077; printf '%s\n' "$json" >"$tmp") || {
+    rm -f -- "$tmp"
+    return 1
+  }
+  chmod 600 "$tmp" || {
+    rm -f -- "$tmp"
+    return 1
+  }
+  # Revalidate immediately before replacement. Refuse symlinks, non-regular
+  # files, foreign owners, permissive modes, and multiply-linked artifacts.
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    safe_private_file "$target" || {
+      rm -f -- "$tmp"
+      log "malformed response diagnostic path became unsafe; diagnostic not replaced"
+      return 1
+    }
+  fi
+  mv -f -- "$tmp" "$target" || {
+    rm -f -- "$tmp"
+    return 1
+  }
+  safe_private_file "$target"
+}
+
 urgent_marker() {
   printf '%s/critic-flush-%s\n' "$QUEUE_DIR" "$(session_hash "$1")"
 }
@@ -516,6 +632,7 @@ critique_queue() {
   local author_harness="${4:-${CRITIC_NOTE_HARNESS:-claude}}"
   local findings_file="$QUEUE_DIR/critic-findings-$session"
   local findings_files_count="$QUEUE_DIR/critic-findings-files-$session"
+  local valid_response_file="$QUEUE_DIR/critic-valid-response-$session"
   local retry_snapshot="$QUEUE_DIR/critic-snapshot-$session"
 
   # Delivery-retry guard: when a critique already ran for this exact queue
@@ -534,6 +651,10 @@ critique_queue() {
       "$delivery_session" "$author_harness"
     return 0
   fi
+
+  # A prior valid marker must never authorize a fresh queue snapshot. Recreate
+  # it only after the current generic and selected specialist responses parse.
+  rm -f "$valid_response_file"
 
   # Budget gate — before any model spend.
   local used
@@ -755,6 +876,20 @@ $diff"
   local result_text tokens
   result_text="$SPAWN_TEXT"
   tokens="$SPAWN_TOKENS"
+  local malformed_generation
+  malformed_generation="$(
+    retry_generation malformed "$session" "$snapshot_id"
+  )" || malformed_generation=""
+  if ! classify_generic_response "$claude_out" "$result_text" \
+      "${CRITIC_HARNESS:-claude}"; then
+    write_malformed_diagnostic "$session" "$GENERIC_RESPONSE_REASON" \
+      "${CRITIC_HARNESS:-claude}" "$tokens" "$malformed_generation" || true
+    log "malformed critic response ($GENERIC_RESPONSE_REASON); queue kept"
+    emit_event release.critique.malformed_response source=shoulder \
+      files="$n_files" reason="$GENERIC_RESPONSE_REASON"
+    write_required_status "$session" malformed_response || true
+    return 0
+  fi
 
   # ---- matching specialist reviews -----------------------------------------
   # The generic cold critic above always runs first. Only then do validated
@@ -908,8 +1043,13 @@ $specialist_hunks"
   n_warn="$(grep -c '^warn|' <<<"$findings" || true)"
   n_note="$(grep -c '^note|' <<<"$findings" || true)"
 
-  printf '%s\n' "$findings" >"$findings_file"
+  if [ -n "$findings" ]; then
+    printf '%s\n' "$findings" >"$findings_file"
+  else
+    : >"$findings_file"
+  fi
   printf '%s\n' "$n_files" >"$findings_files_count"
+  printf 'valid mode=%s\n' "$CRITIC_DIFF_MODE" >"$valid_response_file"
   rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
     "$diff_file" "$response_file"
 

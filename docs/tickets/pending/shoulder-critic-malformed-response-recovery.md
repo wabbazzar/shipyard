@@ -115,7 +115,7 @@ covering the live polling lifecycle.
 | Emit `release.critique.malformed_response` for nonterminal attempts and `release.critique.malformed_response_exhausted` for the third/terminal attempt | Every invocation has exactly one token-bearing event, while operators can distinguish retrying from terminal unavailability without double-counting spend. |
 | Teach fleet inspection about both malformed event types | `skills/shipyard/inspect.py` enumerates critic outcomes; silently dropping the new events would hide the exact degraded state this ticket makes observable. Both are critic failures, and the terminal event carries the attempt count and reason. |
 | Deploy the shared watcher only through an empty-queue launchd preflight | This checkout is fleet-live, and restarting a watcher with queued work can spend tokens or mutate live review state. A nonempty queue defers that consumer restart; it never authorizes a model call. |
-| The owner's 2026-08-05 “drop it through the pipe” instruction authorizes normal pipeline delivery | Commit on `main`, reconcile and push without force, and restart only empty-queue launchd consumers after green gates. It does not authorize discarding either git history, restarting queued consumers, or issuing real model/network review calls. |
+| The owner's 2026-08-05 “drop it through the pipe” instruction authorizes pipeline delivery only through SHIPYARD-13 | Build and commit locally on this Mac, but never push to GitHub origin here. Publishing, PR creation, CI watch, and merge belong to the receive-workmac agent reached through the `wab` SSH alias and the user-visible Linux tmux session `receive-workmac`, using `$(brew --prefix)/bin/tmux` on its default socket and never `/tmp/receive-workmac.sock`. Empty-queue launchd restart remains a separate local safety gate; no authority exists to discard history, restart queued consumers, or issue real model/network review calls. |
 
 ### Open decisions with defaults
 
@@ -309,9 +309,10 @@ turn each obtain a fresh generation.
   print the new PID/state and inspect that project's current-day event JSONL for
   watcher errors. On non-Darwin hosts, record launchd as not applicable rather
   than inventing a systemd deployment.
-- Reconcile `main` with `origin/main` in this checkout (no branch/worktree),
-  rerun the full gate after reconciliation, then push only if the remote can be
-  fast-forwarded without discarding either history.
+- Do not push to GitHub origin from this Mac. After local gates and safe
+  deployment checks, hand publication to the receive-workmac agent through the
+  verified SHIPYARD-13 `wab`/default-tmux route. That Linux agent owns remote
+  reconciliation, push, PR, CI watch, and merge.
 
 **Delegation: subagent.** Update the canonical docs and fleet-inspection parser
 plus its hermetic fixture. Do not restart live watchers or push; the orchestrator
@@ -568,6 +569,37 @@ bash scripts/ticket-lifecycle.sh --project . --check  # current config: expected
   generic-before-specialist ordering and bounded evidence; dual-author watcher
   delivery passed 1/1 for both raw author sessions. The post-699 partition is
   the next gate. All changes remain local under the SHIPYARD-13 routing rule.
+- 2026-08-05 — bounded baseline complete: the one-hour run exercised cases
+  1–699; each of its three isolated failures was repaired and rerun green. The
+  post-cutoff partition (`specialist-watch` through `uninstall`) then passed
+  81/81. Together every one of the 778 baseline cases has current passing
+  evidence. A single-process whole-suite rerun with a longer bound remains a
+  final gate after implementation. No model/network or live-consumer action
+  occurred.
+- 2026-08-05 — SHIPYARD-13 routing override received and acknowledged: this Mac
+  may build and commit locally but must not push to GitHub origin. Any eventual
+  publish handoff must use `wab` and the user-visible Linux default-socket tmux
+  session `receive-workmac` via `$(brew --prefix)/bin/tmux`; its agent
+  owns origin push, PR, CI watch, and merge. `/tmp/receive-workmac.sock` is
+  forbidden.
+- 2026-08-05 — Phase 1 plan: `builder: subagent (1 agent)` owning only
+  `agents/release/critic-watch.sh` and `tests/shoulder-mode.bats`. Preserve the
+  pre-change four-call/token-omission evidence, add the five reason fixtures,
+  implement deterministic generic classification plus a bounded atomic 0600
+  schema-v1 diagnostic, and leave retry suppression for Phase 2. The
+  orchestrator will rerun the exact phase gates and inspect event/diagnostic
+  content before any commit.
+- 2026-08-05 — Phase 1 result: the red-first lifecycle preserved four model
+  calls against one unchanged queue snapshot, four malformed events, zero
+  exhausted events/statuses, and zero `release.critique` token sum. The final
+  slice classifies `empty_text`, `missing_sentinel`, `duplicate_sentinel`,
+  `invalid_line`, and `unnormalizable_envelope`; writes an atomic schema-v1
+  diagnostic; rejects 0644, symlink, and hardlink reuse; and leaves the fourth
+  call possible for Phase 2. Orchestrator verification: syntax rc 0; focused
+  3/3; legacy parser compatibility 2/2; native-Bash full leak scan clean; diff
+  checks clean. Events and diagnostic contain none of the response, prompt,
+  diff, path, filename, or finding canaries. Commit hash is recorded by the
+  next phase after it exists.
 
 ---
 

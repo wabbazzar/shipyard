@@ -344,6 +344,157 @@ fi"
 # (d) severity parser + delivery
 # ---------------------------------------------------------------------------
 
+@test "critic rejects malformed response without clean sentinel and keeps queue" {
+  P="$(make_fixture_project critmalformed)"
+  make_stub claude 0 '{"type":"result","result":"this is not a finding","usage":{"input_tokens":10,"output_tokens":5}}'
+  make_stub claude-note 0
+  queue_files "$P" s1 2
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  export CRITIC_IDLE_SEC=1 CRITIC_DIFF_MODE=staged CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
+  git -C "$P" add src/f01.ts src/f02.ts
+
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ -s "$P/tmp/critic-queue-s1" ]
+  [ ! -e "$P/tmp/critic-findings-s1" ]
+  [ ! -e "$P/tmp/critic-valid-response-s1" ]
+  [ "$(stub_calls claude-note)" = "0" ]
+  [[ "$output" == *"malformed critic response"* ]]
+}
+
+@test "malformed response lifecycle reproduces a fourth invocation on one immutable snapshot" {
+  P="$(make_fixture_project critmalformed-lifecycle)"
+  MALFORMED_CALL_LOG="$BATS_TEST_TMPDIR/malformed-lifecycle-calls"
+  make_stub_script claude "printf 'call\\n' >> '$MALFORMED_CALL_LOG'
+printf '%s\\n' '{\"type\":\"result\",\"result\":\"unsafe prose without a sentinel\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}'"
+  make_stub claude-note 0
+  queue_files "$P" s1 2
+  export CRITIC_IDLE_SEC=1 CRITIC_DIFF_MODE=staged \
+    CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
+  git -C "$P" add src/f01.ts src/f02.ts
+  SNAPSHOT_BEFORE="$(shasum -a 256 "$P/tmp/critic-queue-s1" | awk '{print $1}')"
+
+  for _pass in 1 2 3 4; do
+    fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+    run run_watch "$P" --session s1 --once
+    [ "$status" -eq 0 ]
+  done
+
+  echo "pre-change malformed lifecycle model_calls=$(wc -l <"$MALFORMED_CALL_LOG" | tr -d ' ')" >&3
+  [ "$(wc -l <"$MALFORMED_CALL_LOG" | tr -d ' ')" = "4" ]
+  [ "$(events_json | jq -s '[.[] | select(.event == "release.critique.malformed_response")] | length')" = "4" ]
+  [ "$(events_json | jq -s '[.[] | select(.event == "release.critique.malformed_response_exhausted")] | length')" = "0" ]
+  [ "$SNAPSHOT_BEFORE" = "$(shasum -a 256 "$P/tmp/critic-queue-s1" | awk '{print $1}')" ]
+  [ -z "$(find "$P/tmp" -maxdepth 1 -name 'critic-status-*' -print)" ]
+  [ "$(events_json | jq -s '[.[] | select(.event == "release.critique") | (.tokens // 0)] | add // 0')" = "0" ]
+}
+
+@test "malformed response classification names every generic parser failure" {
+  local -a case_names expected payloads
+  local idx P EV DIAG
+  case_names=(empty-text missing-sentinel duplicate-sentinel invalid-line envelope)
+  expected=(empty_text missing_sentinel duplicate_sentinel invalid_line unnormalizable_envelope)
+  payloads=(
+    '{"type":"result","result":"","usage":{"input_tokens":10,"output_tokens":5}}'
+    '{"type":"result","result":"private-missing-prose","usage":{"input_tokens":10,"output_tokens":5}}'
+    '{"type":"result","result":"TOKENS_HINT|<none>\nTOKENS_HINT|<none>","usage":{"input_tokens":10,"output_tokens":5}}'
+    '{"type":"result","result":"private-invalid-prose\nTOKENS_HINT|<none>","usage":{"input_tokens":10,"output_tokens":5}}'
+    '{"type":"result","usage":{"input_tokens":10,"output_tokens":5}}'
+  )
+
+  for idx in 0 1 2 3 4; do
+    P="$(make_fixture_project "critmalformed-${case_names[$idx]}")"
+    make_stub claude 0 "${payloads[$idx]}"
+    queue_files "$P" s1 1
+    fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+    export CRITIC_IDLE_SEC=1 CRITIC_DIFF_MODE=staged
+    git -C "$P" add src/f01.ts
+
+    run run_watch "$P" --session s1 --once
+    [ "$status" -eq 0 ]
+    [ -s "$P/tmp/critic-queue-s1" ]
+    EV="$(events_json | jq -c \
+      'select(.event == "release.critique.malformed_response")' | tail -1)"
+    [ "$(jq -r '.reason' <<<"$EV")" = "${expected[$idx]}" ]
+    DIAG="$P/tmp/critic-malformed-diagnostic-s1"
+    [ "$(jq -r '.reason' "$DIAG")" = "${expected[$idx]}" ]
+  done
+}
+
+@test "malformed response diagnostic is private bounded and content-safe" {
+  P="$(make_fixture_project critmalformed-diagnostic)"
+  printf '%s\n' 'private-prompt-prose' >"$P/.agents/release.md"
+  make_stub claude 0 '{"type":"result","result":"private-response-prose secret-filename.ts secret-finding\nTOKENS_HINT|<none>","usage":{"input_tokens":10,"output_tokens":5}}'
+  queue_files "$P" s1 1
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  export CRITIC_IDLE_SEC=1 CRITIC_DIFF_MODE=staged
+  git -C "$P" add src/f01.ts
+
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  DIAG="$P/tmp/critic-malformed-diagnostic-s1"
+  [ -f "$DIAG" ]
+  [ ! -L "$DIAG" ]
+  [ "$(stat -c '%a' "$DIAG" 2>/dev/null || stat -f '%Lp' "$DIAG")" = "600" ]
+  [ "$(stat -c '%u' "$DIAG" 2>/dev/null || stat -f '%u' "$DIAG")" = "$(id -u)" ]
+  [ "$(stat -c '%h' "$DIAG" 2>/dev/null || stat -f '%l' "$DIAG")" = "1" ]
+  jq -e '.schema_version == 1 and .reason == "invalid_line"
+    and .sentinel_count == 1 and .invalid_line_count == 1
+    and .response_bytes > 0 and (.response_hash | test("^[0-9a-f]{64}$"))
+    and .harness == "claude" and .tokens == 15 and .attempt == 1
+    and (.generation | test("^[0-9a-f]{64}$"))' "$DIAG" >/dev/null
+  EV="$(events_json | jq -c \
+    'select(.event == "release.critique.malformed_response")' | tail -1)"
+  ! printf '%s\n%s\n' "$EV" "$(cat "$DIAG")" |
+    grep -Eq 'private-(prompt|response)-prose|secret-(filename|finding)|src/f01\.ts|stub 01'
+
+  # Unsafe existing artifacts are never reused or replaced.
+  chmod 644 "$DIAG"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ "$(stat -c '%a' "$DIAG" 2>/dev/null || stat -f '%Lp' "$DIAG")" = "644" ]
+
+  rm -f "$DIAG"
+  TRAP="$BATS_TEST_TMPDIR/diagnostic-symlink-trap"
+  printf 'do-not-replace\n' >"$TRAP"
+  chmod 600 "$TRAP"
+  ln -s "$TRAP" "$DIAG"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ -L "$DIAG" ]
+  [ "$(cat "$TRAP")" = "do-not-replace" ]
+
+  rm -f "$DIAG"
+  HARD="$BATS_TEST_TMPDIR/diagnostic-hardlink"
+  printf 'do-not-replace\n' >"$HARD"
+  chmod 600 "$HARD"
+  ln "$HARD" "$DIAG"
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ "$(stat -c '%h' "$DIAG" 2>/dev/null || stat -f '%l' "$DIAG")" = "2" ]
+  [ "$(cat "$HARD")" = "do-not-replace" ]
+}
+
+@test "explicit clean sentinel writes validation marker and consumes queue" {
+  P="$(make_fixture_project critclean)"
+  make_stub claude 0 '{"type":"result","result":"TOKENS_HINT|<none>","usage":{"input_tokens":10,"output_tokens":5}}'
+  make_stub claude-note 0
+  queue_files "$P" s1 2
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  export CRITIC_IDLE_SEC=1 CRITIC_DIFF_MODE=staged CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
+  git -C "$P" add src/f01.ts src/f02.ts
+
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ ! -e "$P/tmp/critic-queue-s1" ]
+  [ -f "$P/tmp/critic-findings-s1" ]
+  [ ! -s "$P/tmp/critic-findings-s1" ]
+  [ "$(cat "$P/tmp/critic-valid-response-s1")" = "valid mode=staged" ]
+}
+
 @test "canned findings parse to block=1 warn=2 note=1 tokens=1545 and delivery fires" {
   P="$(make_fixture_project critd)"
   make_stub claude 0 "$CANNED_CLAUDE_JSON"
