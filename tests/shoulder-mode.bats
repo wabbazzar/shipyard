@@ -174,6 +174,7 @@ while [ \$# -gt 0 ]; do
 done
 printf '%s' \"\$prompt\" > '$PROMPT_LOG'
 printf '%s\\n' 'warn|src/f01.ts|scoped review'
+printf '%s\\n' 'TOKENS_HINT|<none>'
 printf '%s\\n' 'session_id: scoped-test' >&2
 elif [ \"\$1\" = sessions ]; then
 printf '%s' '{\"input_tokens\":10,\"output_tokens\":5}'

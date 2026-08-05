@@ -466,6 +466,19 @@ bash scripts/ticket-lifecycle.sh --project . --check  # current config: expected
   observable gates, and auto-gate were pinned above. No watcher was restarted
   and no model/network call was made. Polished-ticket commit is recorded by
   Phase 1 after the hash exists.
+- 2026-08-05 — execution preflight plan: `builder: inline (one-line fixture
+  correction in an already-read file, under the execute-ticket exception)`.
+  The native-Python baseline reached case 7 and failed because the Hermes
+  success stub predates strict generic-response validation and omits the clean
+  sentinel introduced by `2b503f4`; the isolated case reproduces the failure.
+  Add only `TOKENS_HINT|<none>` to that success stub, prove the isolated guard
+  passes, then rerun the focused/full baseline before runtime edits.
+- 2026-08-05 — execution preflight result: the isolated Hermes guard passed
+  1/1 and `tests/shoulder-mode.bats` passed 63/63 with native macOS Python
+  ahead of the interactive pyenv shim. The unqualified interactive PATH had
+  stalled in `_cq_outer_lock_create`; no Bats/queue-hook children remained
+  after its bounded termination. This slice changes no runtime behavior and
+  makes the strict-parser guard truthful. Commit hash is recorded in Phase 1.
 
 ---
 
