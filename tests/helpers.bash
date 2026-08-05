@@ -30,7 +30,7 @@ export QUARTET_ROOT FIXTURES_DIR
 # environment (events dir + notify recorder).
 # ---------------------------------------------------------------------------
 quartet_setup() {
-  local inherited_path="${SHIPYARD_TEST_COMMAND_PATH:-$PATH}"
+  local inherited_path="$PATH"
   local native_python="" native_python_bin=""
   SHIM_BIN="$BATS_TEST_TMPDIR/bin"
   SHIM_LOG="$BATS_TEST_TMPDIR/shim-log"

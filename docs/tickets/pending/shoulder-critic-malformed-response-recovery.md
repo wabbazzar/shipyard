@@ -544,6 +544,17 @@ bash scripts/ticket-lifecycle.sh --project . --check  # current config: expected
   maximum-size Codex Stop case passed 1/1 and the cross-harness critic hook file
   passed 20/20 with the opt-in native Bash helper. No test child remained. This
   is a test-runtime correction only; the complete baseline is restarted next.
+- 2026-08-05 — complete-baseline shell follow-up 2: cases 1–91 passed, including
+  the formerly stalled case 45. Case 92 pinned a second Homebrew Bash stall to
+  `sync-deck-mirror.sh`, proving the incompatibility is not critic-specific.
+  Keep the native-Bash shim for all fixtures; only doctor resolves the original
+  Bash before setup and uses it for its explicit sub-five-second performance
+  assertion. Prove doctor performance and deck mirror, then restart the full
+  baseline. The stopped run left no test child and made no model/network call.
+- 2026-08-05 — complete-baseline shell follow-up 2 result: doctor performance
+  passed 1/1 with the explicitly captured original Bash, and deck mirror passed
+  10/10 with native Bash fixtures, including the captured sync case. The full
+  baseline is restarted next; no publication or live-consumer action occurred.
 
 ---
 
