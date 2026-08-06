@@ -1404,7 +1404,7 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
 }
 
 @test "second required Stop names every terminal critic failure state" {
-  for critic_state in budget spawn delivery running absent; do
+  for critic_state in budget spawn delivery malformed_response_exhausted running absent; do
     P="$(make_fixture_project "cfb-stop-terminal-$critic_state")"
     require_feedback "$P" true
     printf 'src/a.ts 1\n' >"$P/tmp/critic-queue-session-terminal"

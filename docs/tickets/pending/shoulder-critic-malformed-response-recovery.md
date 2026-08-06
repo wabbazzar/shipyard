@@ -600,6 +600,31 @@ bash scripts/ticket-lifecycle.sh --project . --check  # current config: expected
   checks clean. Events and diagnostic contain none of the response, prompt,
   diff, path, filename, or finding canaries. Commit hash is recorded by the
   next phase after it exists.
+- 2026-08-05 — Phase 1 committed locally as `f6bc9b9` (`fix: classify malformed
+  critic responses`). Phase 2 plan: `builder: subagent (1 agent)` owning only
+  `agents/release/critic-watch.sh`, `agents/release/critic-stop-gate-lib.sh`,
+  `tests/shoulder-mode.bats`, and `tests/codex-feedback-delivery.bats`. Add the
+  generation-scoped three-attempt counter and exact-once malformed token
+  accounting; preserve non-required exact-prefix consumption, required queue
+  blocking, changed-snapshot/later-turn reset, valid recovery, and independent
+  spawn/specialist/delivery state. The orchestrator will re-run both focused
+  files, inspect events/status/queue assertions, and commit locally only.
+- 2026-08-05 — Phase 2 result: malformed generic responses now use an
+  immutable-snapshot/urgent-turn generation and an independent three-attempt
+  counter. Attempts 1–2 emit one token-bearing retry event each; attempt 3 emits
+  only the terminal exhausted event. Non-required exhaustion consumes only the
+  reviewed byte prefix, while required exhaustion preserves the queue and
+  publishes the `malformed_response_exhausted` Stop blocker without a fourth
+  model call. Changed work and a later urgent turn reset to attempt 1, a valid
+  response clears stale malformed state, and rejected invocation spend counts
+  once toward the daily budget. The new counter refuses permissive regular
+  files, symlinks, hardlinks, FIFOs, and foreign-owner artifacts before any
+  model invocation; its normal artifact is regular, owner-only, current-owner,
+  and single-link. Orchestrator verification: lifecycle/retry/budget/required
+  fixtures 8/8; Stop terminal fixture 1/1; parser/diagnostic regressions 2/2;
+  shell syntax rc 0; full native-Bash leak scan clean; staged and worktree diff
+  checks clean. No real model, network, live-consumer, push, or publish action
+  occurred; SHIPYARD-13 remains honored.
 
 ---
 

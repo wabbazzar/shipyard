@@ -256,7 +256,7 @@ csg_status_kind() {
     return 0
   }
   case "$raw" in
-    budget|spawn|delivery) CSG_STATUS="$raw" ;;
+    budget|spawn|delivery|malformed_response_exhausted) CSG_STATUS="$raw" ;;
     running|deposited) CSG_STATUS=timeout ;;
     *) CSG_STATUS=delivery ;;
   esac

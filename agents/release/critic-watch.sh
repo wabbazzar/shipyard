@@ -214,6 +214,7 @@ classify_generic_response() {
 
 write_malformed_diagnostic() {
   local session="$1" reason="$2" harness="$3" tokens="$4" generation="$5"
+  local attempt="$6"
   local target tmp now safe_tokens json
   target="$QUEUE_DIR/critic-malformed-diagnostic-$session"
   if [ -e "$target" ] || [ -L "$target" ]; then
@@ -234,10 +235,11 @@ write_malformed_diagnostic() {
     --argjson sentinel_count "$GENERIC_SENTINEL_COUNT" \
     --argjson invalid_line_count "$GENERIC_INVALID_LINE_COUNT" \
     --argjson response_bytes "$GENERIC_RESPONSE_BYTES" \
-    --argjson tokens "$safe_tokens" --argjson updated_at "$now" '
+    --argjson tokens "$safe_tokens" --argjson attempt "$attempt" \
+    --argjson updated_at "$now" '
       {schema_version:1,reason:$reason,sentinel_count:$sentinel_count,
        invalid_line_count:$invalid_line_count,response_bytes:$response_bytes,
-       response_hash:$response_hash,harness:$harness,tokens:$tokens,attempt:1,
+       response_hash:$response_hash,harness:$harness,tokens:$tokens,attempt:$attempt,
        generation:$generation,updated_at:$updated_at}
     ')" || {
       rm -f -- "$tmp"
@@ -382,7 +384,10 @@ tokens_used_today() {
   f="$EVENTS_DIR/$(date -u +%Y-%m-%d).jsonl"
   [ -f "$f" ] || { echo 0; return; }
   jq -R 'fromjson?' <"$f" 2>/dev/null | \
-    jq -s '[.[] | select(.event=="release.critique") | (.tokens // 0)] | add // 0' \
+    jq -s '[.[] | select(.event=="release.critique" or
+      .event=="release.critique.malformed_response" or
+      .event=="release.critique.malformed_response_exhausted") |
+      (.tokens // 0)] | add // 0' \
     2>/dev/null || echo 0
 }
 
@@ -688,6 +693,7 @@ critique_queue() {
     return 0
   fi
   local spawn_attempts_file snapshot_id spawn_generation prior_spawn_attempts
+  local malformed_attempts_file malformed_generation prior_malformed_attempts
   spawn_attempts_file="$QUEUE_DIR/critic-spawn-attempts-$session"
   snapshot_id="$(checked_sha256 <"$reviewed_queue")" || {
     log "snapshot hashing failed; queue kept for retry"
@@ -700,6 +706,30 @@ critique_queue() {
   prior_spawn_attempts="$(
     retry_state_count "$spawn_attempts_file" "$spawn_generation"
   )"
+  malformed_attempts_file="$QUEUE_DIR/critic-malformed-attempts-$session"
+  if { [ -e "$malformed_attempts_file" ] || \
+       [ -L "$malformed_attempts_file" ]; } &&
+     ! safe_private_file "$malformed_attempts_file"; then
+    log "malformed retry state path is unsafe; queue kept without model invocation"
+    return 0
+  fi
+  malformed_generation="$(
+    retry_generation malformed "$session" "$snapshot_id"
+  )" || {
+    log "malformed retry generation failed; queue kept for retry"
+    return 0
+  }
+  prior_malformed_attempts="$(
+    retry_state_count "$malformed_attempts_file" "$malformed_generation"
+  )"
+  if [ "$prior_malformed_attempts" -ge 3 ]; then
+    if [ "$REQUIRE_FEEDBACK" = true ]; then
+      write_required_status "$session" malformed_response_exhausted || true
+    elif consume_queue "$queue" "$session"; then
+      rm -f "$malformed_attempts_file"
+    fi
+    return 0
+  fi
   if [ "$REQUIRE_FEEDBACK" = true ] && [ "$prior_spawn_attempts" -ge 3 ]; then
     write_required_status "$session" spawn || true
     return 0
@@ -876,20 +906,37 @@ $diff"
   local result_text tokens
   result_text="$SPAWN_TEXT"
   tokens="$SPAWN_TOKENS"
-  local malformed_generation
-  malformed_generation="$(
-    retry_generation malformed "$session" "$snapshot_id"
-  )" || malformed_generation=""
   if ! classify_generic_response "$claude_out" "$result_text" \
       "${CRITIC_HARNESS:-claude}"; then
+    local malformed_attempt
+    malformed_attempt=$((prior_malformed_attempts + 1))
+    write_retry_state "$malformed_attempts_file" "$malformed_attempt" \
+      "$malformed_generation" || true
     write_malformed_diagnostic "$session" "$GENERIC_RESPONSE_REASON" \
-      "${CRITIC_HARNESS:-claude}" "$tokens" "$malformed_generation" || true
-    log "malformed critic response ($GENERIC_RESPONSE_REASON); queue kept"
-    emit_event release.critique.malformed_response source=shoulder \
-      files="$n_files" reason="$GENERIC_RESPONSE_REASON"
-    write_required_status "$session" malformed_response || true
+      "${CRITIC_HARNESS:-claude}" "$tokens" "$malformed_generation" \
+      "$malformed_attempt" || true
+    if [ "$malformed_attempt" -ge 3 ]; then
+      log "malformed critic response ($GENERIC_RESPONSE_REASON); exhausted after $malformed_attempt attempts"
+      emit_event release.critique.malformed_response_exhausted source=shoulder \
+        files="$n_files" reason="$GENERIC_RESPONSE_REASON" \
+        attempt="$malformed_attempt" generation="$malformed_generation" \
+        tokens="$tokens"
+      if [ "$REQUIRE_FEEDBACK" = true ]; then
+        write_required_status "$session" malformed_response_exhausted || true
+        log "required feedback: reviewed queue preserved after malformed response exhaustion"
+      elif consume_queue "$queue" "$session"; then
+        rm -f "$malformed_attempts_file"
+      fi
+    else
+      log "malformed critic response ($GENERIC_RESPONSE_REASON); queue kept for retry ($malformed_attempt/3)"
+      emit_event release.critique.malformed_response source=shoulder \
+        files="$n_files" reason="$GENERIC_RESPONSE_REASON" \
+        attempt="$malformed_attempt" generation="$malformed_generation" \
+        tokens="$tokens"
+    fi
     return 0
   fi
+  rm -f "$malformed_attempts_file"
 
   # ---- matching specialist reviews -----------------------------------------
   # The generic cold critic above always runs first. Only then do validated

@@ -362,7 +362,7 @@ fi"
   [[ "$output" == *"malformed critic response"* ]]
 }
 
-@test "malformed response lifecycle reproduces a fourth invocation on one immutable snapshot" {
+@test "malformed response lifecycle stops after three calls and accounts tokens once" {
   P="$(make_fixture_project critmalformed-lifecycle)"
   MALFORMED_CALL_LOG="$BATS_TEST_TMPDIR/malformed-lifecycle-calls"
   make_stub_script claude "printf 'call\\n' >> '$MALFORMED_CALL_LOG'
@@ -375,18 +375,363 @@ printf '%s\\n' '{\"type\":\"result\",\"result\":\"unsafe prose without a sentine
   SNAPSHOT_BEFORE="$(shasum -a 256 "$P/tmp/critic-queue-s1" | awk '{print $1}')"
 
   for _pass in 1 2 3 4; do
+    [ ! -e "$P/tmp/critic-queue-s1" ] || \
+      fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+    run run_watch "$P" --session s1 --once
+    [ "$status" -eq 0 ]
+  done
+
+  echo "malformed lifecycle model_calls=$(wc -l <"$MALFORMED_CALL_LOG" | tr -d ' ') tokens=45" >&3
+  [ "$(wc -l <"$MALFORMED_CALL_LOG" | tr -d ' ')" = "3" ]
+  [ "$(events_json | jq -s '[.[] | select(.event == "release.critique.malformed_response")] | length')" = "2" ]
+  [ "$(events_json | jq -s '[.[] | select(.event == "release.critique.malformed_response_exhausted")] | length')" = "1" ]
+  events_json | jq -s -e '
+    ([.[] | select(.event | startswith("release.critique.malformed_response"))]
+      | map(.attempt)) == [1,2,3]
+    and ([.[] | select(.event | startswith("release.critique.malformed_response"))]
+      | map(.tokens) | add) == 45
+    and ([.[] | select(.event | startswith("release.critique.malformed_response"))]
+      | map(.generation) | unique | length) == 1
+    and ([.[] | select(.event | startswith("release.critique.malformed_response"))]
+      | all(.reason == "missing_sentinel" and .files == 2))
+  ' >/dev/null
+  [ ! -e "$P/tmp/critic-queue-s1" ]
+  [ ! -e "$P/tmp/critic-findings-s1" ]
+  [ ! -e "$P/tmp/critic-valid-response-s1" ]
+  [ "$(stub_calls claude-note)" = "0" ]
+  [ -z "$(find "$P/tmp" -maxdepth 1 -name 'critic-status-*' -print)" ]
+  [ -n "$SNAPSHOT_BEFORE" ]
+}
+
+@test "malformed response lifecycle exhaustion consumes only reviewed prefix" {
+  P="$(make_fixture_project critmalformed-prefix)"
+  PREFIX_QUEUE="$P/tmp/critic-queue-s1"
+  PREFIX_CALLS="$BATS_TEST_TMPDIR/malformed-prefix-calls"
+  export PREFIX_QUEUE PREFIX_CALLS
+  make_stub_script claude '
+count="$(cat "$PREFIX_CALLS" 2>/dev/null || echo 0)"
+count=$((count + 1))
+printf "%s\n" "$count" >"$PREFIX_CALLS"
+if [ "$count" -eq 3 ]; then
+  printf "%s\n" "src/late.ts 9999999999" >>"$PREFIX_QUEUE"
+fi
+printf "%s\n" "{\"type\":\"result\",\"result\":\"bad\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"'
+  queue_files "$P" s1 1
+  export CRITIC_IDLE_SEC=1 CRITIC_DIFF_MODE=staged
+  git -C "$P" add src/f01.ts
+
+  for _pass in 1 2 3; do
+    fixture_set_mtime_ago 120 "$PREFIX_QUEUE"
+    run run_watch "$P" --session s1 --once
+    [ "$status" -eq 0 ]
+  done
+
+  [ "$(cat "$PREFIX_CALLS")" = "3" ]
+  [ "$(cat "$PREFIX_QUEUE")" = "src/late.ts 9999999999" ]
+  [ "$(events_json | jq -s '[.[] | select(.event == "release.critique.malformed_response_exhausted")] | length')" = "1" ]
+}
+
+@test "malformed response required exhaustion preserves queue and terminal status" {
+  P="$(make_fixture_project critmalformed-required)"
+  printf '\n[shoulder]\nrequire_feedback = true\n' >>"$P/.agents/config.toml"
+  REQUIRED_CALLS="$BATS_TEST_TMPDIR/malformed-required-calls"
+  export REQUIRED_CALLS
+  make_stub_script claude '
+printf "call\n" >>"$REQUIRED_CALLS"
+printf "%s\n" "{\"type\":\"result\",\"result\":\"bad\",\"usage\":{\"input_tokens\":4,\"output_tokens\":1}}"'
+  make_stub claude-note 0
+  queue_files "$P" s1 1
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  export CRITIC_IDLE_SEC=1 CRITIC_DIFF_MODE=staged \
+    CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
+  git -C "$P" add src/f01.ts
+  QUEUE_HASH="$(shasum -a 256 "$P/tmp/critic-queue-s1" | awk '{print $1}')"
+  SESSION_HASH="$(printf 'shipyard-session-v1:%s' s1 | shasum -a 256 | awk '{print $1}')"
+  TURN_HASH="$(printf 'shipyard-turn-v1:%s:%s' s1 required-turn | shasum -a 256 | awk '{print $1}')"
+  jq -cn --arg sh "$SESSION_HASH" --arg th "$TURN_HASH" \
+    '{schema_version:1,session_hash:$sh,turn_hash:$th,created_at:1}' \
+    >"$P/tmp/critic-flush-$SESSION_HASH"
+  chmod 600 "$P/tmp/critic-flush-$SESSION_HASH"
+
+  for _pass in 1 2; do
+    run run_watch "$P" --session s1 --once
+    [ "$status" -eq 0 ]
+    jq -e '.status == "running"' \
+      "$P/tmp/critic-status-$SESSION_HASH" >/dev/null
+  done
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+
+  [ "$(wc -l <"$REQUIRED_CALLS" | tr -d ' ')" = "3" ]
+  [ "$QUEUE_HASH" = "$(shasum -a 256 "$P/tmp/critic-queue-s1" | awk '{print $1}')" ]
+  jq -e --arg sh "$SESSION_HASH" --arg th "$TURN_HASH" '
+    .schema_version == 1 and .session_hash == $sh and .turn_hash == $th
+    and .status == "malformed_response_exhausted"
+  ' "$P/tmp/critic-status-$SESSION_HASH" >/dev/null
+  jq -e '.attempts == 3 and (.generation | test("^[0-9a-f]{64}$"))' \
+    "$P/tmp/critic-malformed-attempts-s1" >/dev/null
+  [ -f "$P/tmp/critic-malformed-attempts-s1" ]
+  [ ! -L "$P/tmp/critic-malformed-attempts-s1" ]
+  [ "$(stat -c '%a' "$P/tmp/critic-malformed-attempts-s1" 2>/dev/null || \
+    stat -f '%Lp' "$P/tmp/critic-malformed-attempts-s1")" = "600" ]
+  [ "$(stat -c '%u' "$P/tmp/critic-malformed-attempts-s1" 2>/dev/null || \
+    stat -f '%u' "$P/tmp/critic-malformed-attempts-s1")" = "$(id -u)" ]
+  [ "$(stat -c '%h' "$P/tmp/critic-malformed-attempts-s1" 2>/dev/null || \
+    stat -f '%l' "$P/tmp/critic-malformed-attempts-s1")" = "1" ]
+  [ "$(events_json | jq -s '[.[] | select(.event == "release.critique.malformed_response_exhausted")] | length')" = "1" ]
+  [ ! -e "$P/tmp/critic-valid-response-s1" ]
+  [ ! -e "$P/tmp/critic-findings-s1" ]
+  [ "$(stub_calls claude-note)" = "0" ]
+}
+
+@test "malformed response retry counter rejects unsafe artifacts before reuse" {
+  COUNTER_CALLS="$BATS_TEST_TMPDIR/malformed-counter-calls"
+  REAL_STAT="$(command -v stat)"
+  export COUNTER_CALLS REAL_STAT
+  make_stub_script claude '
+printf "call\n" >>"$COUNTER_CALLS"
+printf "%s\n" "{\"type\":\"result\",\"result\":\"bad\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"'
+  export CRITIC_IDLE_SEC=1 CRITIC_DIFF_MODE=staged
+
+  for KIND in permissive symlink hardlink fifo owner; do
+    P="$(make_fixture_project "critmalformed-counter-$KIND")"
+    queue_files "$P" s1 1
+    fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+    git -C "$P" add src/f01.ts
+    COUNTER="$P/tmp/critic-malformed-attempts-s1"
+    TRAP="$BATS_TEST_TMPDIR/malformed-counter-$KIND-trap"
+    case "$KIND" in
+      permissive)
+        printf '%s\n' '{"schema_version":1,"attempts":3,"generation":"poison"}' \
+          >"$COUNTER"
+        chmod 644 "$COUNTER"
+        ;;
+      symlink)
+        printf 'do-not-replace\n' >"$TRAP"
+        chmod 600 "$TRAP"
+        ln -s "$TRAP" "$COUNTER"
+        ;;
+      hardlink)
+        printf 'do-not-replace\n' >"$TRAP"
+        chmod 600 "$TRAP"
+        ln "$TRAP" "$COUNTER"
+        ;;
+      fifo) mkfifo "$COUNTER" ;;
+      owner)
+        printf '%s\n' '{"schema_version":1,"attempts":3,"generation":"poison"}' \
+          >"$COUNTER"
+        chmod 600 "$COUNTER"
+        FOREIGN_COUNTER="$COUNTER"
+        export FOREIGN_COUNTER
+        make_stub_script stat '
+if [ "${3:-}" = "$FOREIGN_COUNTER" ] &&
+   { { [ "${1:-}" = "-c" ] && [ "${2:-}" = "%u" ]; } ||
+     { [ "${1:-}" = "-f" ] && [ "${2:-}" = "%u" ]; }; }; then
+  printf "%s\n" 999999
+  exit 0
+fi
+exec "$REAL_STAT" "$@"'
+        ;;
+    esac
+
+    run run_watch "$P" --session s1 --once
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"malformed retry state path is unsafe"* ]]
+    [ -s "$P/tmp/critic-queue-s1" ]
+    case "$KIND" in
+      permissive)
+        [ "$(stat -c '%a' "$COUNTER" 2>/dev/null || stat -f '%Lp' "$COUNTER")" = "644" ]
+        ;;
+      symlink)
+        [ -L "$COUNTER" ]
+        [ "$(cat "$TRAP")" = "do-not-replace" ]
+        ;;
+      hardlink)
+        [ "$(stat -c '%h' "$COUNTER" 2>/dev/null || stat -f '%l' "$COUNTER")" = "2" ]
+        [ "$(cat "$TRAP")" = "do-not-replace" ]
+        ;;
+      fifo) [ -p "$COUNTER" ] ;;
+      owner)
+        [ "$(cat "$COUNTER")" = \
+          '{"schema_version":1,"attempts":3,"generation":"poison"}' ]
+        ;;
+    esac
+  done
+
+  [ ! -e "$COUNTER_CALLS" ]
+  [ -z "$(events_json)" ]
+}
+
+@test "malformed response budget includes rejected invocation spend" {
+  P="$(make_fixture_project critmalformed-budget)"
+  awk '
+    { print }
+    $0 == "[release]" { print "budget_tokens_daily = 30" }
+  ' "$P/.agents/config.toml" >"$P/.agents/config.toml.next"
+  mv "$P/.agents/config.toml.next" "$P/.agents/config.toml"
+  make_stub claude 0 '{"type":"result","result":"bad","usage":{"input_tokens":10,"output_tokens":5}}'
+  queue_files "$P" s1 1
+  export CRITIC_IDLE_SEC=1 CRITIC_DIFF_MODE=staged
+  git -C "$P" add src/f01.ts
+
+  for _pass in 1 2 3; do
     fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
     run run_watch "$P" --session s1 --once
     [ "$status" -eq 0 ]
   done
 
-  echo "pre-change malformed lifecycle model_calls=$(wc -l <"$MALFORMED_CALL_LOG" | tr -d ' ')" >&3
-  [ "$(wc -l <"$MALFORMED_CALL_LOG" | tr -d ' ')" = "4" ]
-  [ "$(events_json | jq -s '[.[] | select(.event == "release.critique.malformed_response")] | length')" = "4" ]
+  CALLS="$(grep -c '^-p ' "$SHIM_LOG/claude.argv")"
+  [ "$CALLS" = "2" ] || {
+    printf 'budget malformed calls=%s events=%s\n' "$CALLS" \
+      "$(events_json | jq -s -c '.')" >&3
+    false
+  }
+  events_json | jq -s -e '
+    ([.[] | select(.event == "release.critique.malformed_response")
+      | .tokens] | add) == 30
+    and any(.[]; .event == "release.critique.skipped" and
+      .reason == "budget" and .tokens_used == 30)
+  ' >/dev/null
+  [ -s "$P/tmp/critic-queue-s1" ]
+}
+
+@test "malformed response retry resets for changed snapshot and later urgent turn" {
+  P="$(make_fixture_project critmalformed-generations)"
+  printf '\n[shoulder]\nrequire_feedback = true\n' >>"$P/.agents/config.toml"
+  make_stub claude 0 '{"type":"result","result":"bad","usage":{"input_tokens":2,"output_tokens":1}}'
+  queue_files "$P" s1 1
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  export CRITIC_IDLE_SEC=1 CRITIC_DIFF_MODE=staged
+  git -C "$P" add src/f01.ts
+  SESSION_HASH="$(printf 'shipyard-session-v1:%s' s1 | shasum -a 256 | awk '{print $1}')"
+  TURN_HASH="$(printf 'shipyard-turn-v1:%s:%s' s1 turn-one | shasum -a 256 | awk '{print $1}')"
+  jq -cn --arg sh "$SESSION_HASH" --arg th "$TURN_HASH" \
+    '{schema_version:1,session_hash:$sh,turn_hash:$th,created_at:1}' \
+    >"$P/tmp/critic-flush-$SESSION_HASH"
+  chmod 600 "$P/tmp/critic-flush-$SESSION_HASH"
+
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  printf '// later\n' >"$P/src/f02.ts"
+  printf 'src/f02.ts 2\n' >>"$P/tmp/critic-queue-s1"
+  git -C "$P" add src/f02.ts
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  FIRST_GENERATIONS="$(events_json | jq -s -c '[.[] |
+    select(.event == "release.critique.malformed_response") |
+    {attempt,generation}]')"
+  [ "$(jq -r 'map(.attempt) == [1,1]' <<<"$FIRST_GENERATIONS")" = true ]
+  [ "$(jq -r 'map(.generation) | unique | length' <<<"$FIRST_GENERATIONS")" = 2 ]
+
+  for _pass in 1 2; do
+    run run_watch "$P" --session s1 --once
+    [ "$status" -eq 0 ]
+  done
+  CALLS_BEFORE="$(grep -c '^-p ' "$SHIM_LOG/claude.argv")"
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^-p ' "$SHIM_LOG/claude.argv")" = "$CALLS_BEFORE" ]
+
+  TURN_HASH="$(printf 'shipyard-turn-v1:%s:%s' s1 turn-two | shasum -a 256 | awk '{print $1}')"
+  jq -cn --arg sh "$SESSION_HASH" --arg th "$TURN_HASH" \
+    '{schema_version:1,session_hash:$sh,turn_hash:$th,created_at:2}' \
+    >"$P/tmp/critic-flush-$SESSION_HASH"
+  chmod 600 "$P/tmp/critic-flush-$SESSION_HASH"
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^-p ' "$SHIM_LOG/claude.argv")" -eq "$((CALLS_BEFORE + 1))" ]
+  LAST_EVENT="$(events_json | jq -c \
+    'select(.event == "release.critique.malformed_response")' | tail -1)"
+  [ "$(jq -r '.attempt' <<<"$LAST_EVENT")" = "1" ]
+  [ "$(jq -r '.generation' <<<"$LAST_EVENT")" != \
+    "$(jq -r '.[-1].generation' <<<"$FIRST_GENERATIONS")" ]
+}
+
+@test "malformed response retry clears after valid second response" {
+  P="$(make_fixture_project critmalformed-recovery)"
+  RESPONSE_CALLS="$BATS_TEST_TMPDIR/malformed-recovery-calls"
+  export RESPONSE_CALLS
+  make_stub_script claude '
+count="$(cat "$RESPONSE_CALLS" 2>/dev/null || echo 0)"
+count=$((count + 1))
+printf "%s\n" "$count" >"$RESPONSE_CALLS"
+if [ "$count" -eq 1 ]; then
+  printf "%s\n" "{\"type\":\"result\",\"result\":\"bad\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}"
+else
+  printf "%s\n" "{\"type\":\"result\",\"result\":\"warn|src/f01.ts|recovered\\nTOKENS_HINT|<none>\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}"
+fi'
+  make_stub claude-note 0
+  queue_files "$P" s1 1
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  export CRITIC_IDLE_SEC=1 CRITIC_DIFF_MODE=staged \
+    CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
+  git -C "$P" add src/f01.ts
+
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ -f "$P/tmp/critic-malformed-attempts-s1" ]
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+
+  [ "$(grep -c '^-p ' "$SHIM_LOG/claude.argv")" = "2" ]
+  [ ! -e "$P/tmp/critic-malformed-attempts-s1" ]
+  [ ! -e "$P/tmp/critic-queue-s1" ]
+  [ -f "$P/tmp/critic-valid-response-s1" ]
+  [ "$(grep -c '^s1 release critic:' "$SHIM_LOG/claude-note.argv")" = "1" ]
   [ "$(events_json | jq -s '[.[] | select(.event == "release.critique.malformed_response_exhausted")] | length')" = "0" ]
-  [ "$SNAPSHOT_BEFORE" = "$(shasum -a 256 "$P/tmp/critic-queue-s1" | awk '{print $1}')" ]
-  [ -z "$(find "$P/tmp" -maxdepth 1 -name 'critic-status-*' -print)" ]
-  [ "$(events_json | jq -s '[.[] | select(.event == "release.critique") | (.tokens // 0)] | add // 0')" = "0" ]
+  [ "$(events_json | jq -s '[.[] | select(.event == "release.critique") | .tokens] | add')" = "10" ]
+}
+
+@test "malformed response retry state is isolated from spawn delivery and specialist failures" {
+  P="$(make_fixture_project critmalformed-isolation)"
+  make_stub claude 0 '{"type":"result","result":"bad","usage":{"input_tokens":2,"output_tokens":1}}'
+  queue_files "$P" s1 1
+  fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
+  export CRITIC_IDLE_SEC=1 CRITIC_DIFF_MODE=staged
+  git -C "$P" add src/f01.ts
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.attempts' "$P/tmp/critic-malformed-attempts-s1")" = "1" ]
+  [ ! -e "$P/tmp/critic-spawn-attempts-s1" ]
+  [ ! -e "$P/tmp/critic-attempts-s1" ]
+
+  make_stub claude 126
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.attempts' "$P/tmp/critic-malformed-attempts-s1")" = "1" ]
+  [ "$(jq -r '.attempts' "$P/tmp/critic-spawn-attempts-s1")" = "1" ]
+
+  make_stub claude 0 "$CANNED_CLAUDE_JSON"
+  make_stub claude-note 127
+  export CLAUDE_NOTE_CMD="$SHIM_BIN/claude-note"
+  run run_watch "$P" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ ! -e "$P/tmp/critic-malformed-attempts-s1" ]
+  [ "$(jq -r '.attempts' "$P/tmp/critic-attempts-s1")" = "1" ]
+
+  S="$(make_fixture_project critmalformed-specialist-isolation)"
+  QUARTET_DIR="$QUARTET_ROOT" bash "$QUARTET_ROOT/skills/shipyard/shipyard.sh" \
+    add-specialist security --project "$S" >/dev/null
+  fixture_replace_in_place "$S/.agents/specialists/security.toml" \
+    '^hunk_path_patterns = \[\]$' 'hunk_path_patterns = ["src/*.ts"]'
+  fixture_replace_in_place "$S/.agents/specialists/security.toml" \
+    '^prompt_definition = ".*"$' 'prompt_definition = "../outside.md"'
+  make_stub claude 0 "$CANNED_CLAUDE_JSON"
+  queue_files "$S" s1 1
+  fixture_set_mtime_ago 120 "$S/tmp/critic-queue-s1"
+  git -C "$S" add src/f01.ts
+  run run_watch "$S" --session s1 --once
+  [ "$status" -eq 0 ]
+  [ ! -e "$S/tmp/critic-malformed-attempts-s1" ]
+  SPECIALIST_FAILURES="$(events_json | jq -s \
+    '[.[] | select(.event == "release.critique.specialist_failed")] | length')"
+  [ "$SPECIALIST_FAILURES" = "1" ] || {
+    printf 'specialist isolation failures=%s events=%s\n' \
+      "$SPECIALIST_FAILURES" "$(events_json | jq -s -c '.')" >&3
+    false
+  }
 }
 
 @test "malformed response classification names every generic parser failure" {
@@ -460,6 +805,11 @@ printf '%s\\n' '{\"type\":\"result\",\"result\":\"unsafe prose without a sentine
   printf 'do-not-replace\n' >"$TRAP"
   chmod 600 "$TRAP"
   ln -s "$TRAP" "$DIAG"
+  # Move to a new immutable snapshot so artifact-safety coverage does not
+  # collide with the same-generation three-attempt exhaustion policy.
+  printf '// later diagnostic probe\n' >"$P/src/f02.ts"
+  printf 'src/f02.ts %s\n' "$(date +%s)" >>"$P/tmp/critic-queue-s1"
+  git -C "$P" add src/f02.ts
   fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   run run_watch "$P" --session s1 --once
   [ "$status" -eq 0 ]
