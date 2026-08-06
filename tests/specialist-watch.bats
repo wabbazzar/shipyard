@@ -47,12 +47,14 @@ case "$*" in
     printf "specialist\n" >>"$ORDER_FILE"
     printf "%s" "$*" >"$SPECIALIST_PROMPT"
     jq -nc --arg result "block|src/infra.tf|missing source grant
-source|https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIEncryption.html|2026-08-04T18:00:00Z|success|shared encrypted AMIs require source and destination key authorization" \
+source|https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIEncryption.html|2026-08-04T18:00:00Z|success|shared encrypted AMIs require source and destination key authorization
+TOKENS_HINT|<none>" \
       "{type:\"result\",result:\$result,usage:{input_tokens:20,output_tokens:10}}"
     ;;
   *)
     printf "generic\n" >>"$ORDER_FILE"
-    jq -nc --arg result "warn|src/infra.tf|Missing   source grant" \
+    jq -nc --arg result "warn|src/infra.tf|Missing   source grant
+TOKENS_HINT|<none>" \
       "{type:\"result\",result:\$result,usage:{input_tokens:10,output_tokens:5}}"
     ;;
 esac'
@@ -98,7 +100,7 @@ esac'
   fixture_set_mtime_ago 120 "$P/tmp/critic-queue-s1"
   order="$BATS_TEST_TMPDIR/no-hunk-order"; export order
   make_stub_script claude 'printf "generic\n" >>"$order"
-printf "%s\n" "{\"type\":\"result\",\"result\":\"note|src/app.py|generic only\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"'
+printf "%s\n" "{\"type\":\"result\",\"result\":\"note|src/app.py|generic only\\nTOKENS_HINT|<none>\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"'
   make_stub claude-note 0
 
   run run_watch "$P"
@@ -117,7 +119,7 @@ printf "%s\n" "{\"type\":\"result\",\"result\":\"note|src/app.py|generic only\",
   queue_path "$P" src/infra.tf
   order="$BATS_TEST_TMPDIR/malformed-order"; export order
   make_stub_script claude 'printf "generic\n" >>"$order"
-printf "%s\n" "{\"type\":\"result\",\"result\":\"note|src/infra.tf|generic complete\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"'
+printf "%s\n" "{\"type\":\"result\",\"result\":\"note|src/infra.tf|generic complete\\nTOKENS_HINT|<none>\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"'
   make_stub claude-note 0
 
   run run_watch "$P"
@@ -126,6 +128,36 @@ printf "%s\n" "{\"type\":\"result\",\"result\":\"note|src/infra.tf|generic compl
   [ -s "$P/tmp/critic-queue-s1" ]
   [ "$(stub_calls claude-note)" = "0" ]
   [[ "$output" == *"specialist manifest invalid"* ]]
+}
+
+@test "malformed specialist verdict fails closed and preserves queue" {
+  P="$(make_fixture_project specialist-bad-response)"
+  configure_specialist "$P" 'src/*.tf'
+  mkdir -p "$P/src"
+  printf 'resource "aws_instance" "worker" {}\n' >"$P/src/infra.tf"
+  queue_path "$P" src/infra.tf
+  order="$BATS_TEST_TMPDIR/bad-response-order"; export order
+  make_stub_script claude '
+case "$*" in
+  *"Specialist — generic subsystem-steward role"*)
+    printf "specialist\n" >>"$order"
+    jq -nc --arg result "BLOCK" "{type:\"result\",result:\$result,usage:{input_tokens:1,output_tokens:1}}"
+    ;;
+  *)
+    printf "generic\n" >>"$order"
+    jq -nc --arg result "TOKENS_HINT|<none>" "{type:\"result\",result:\$result,usage:{input_tokens:1,output_tokens:1}}"
+    ;;
+esac'
+  make_stub claude-note 0
+
+  run run_watch "$P"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$order")" = $'generic\nspecialist' ]
+  [ -s "$P/tmp/critic-queue-s1" ]
+  [ ! -e "$P/tmp/critic-findings-s1" ]
+  [ ! -e "$P/tmp/critic-valid-response-s1" ]
+  [ "$(stub_calls claude-note)" = "0" ]
+  [[ "$output" == *"malformed review output"* ]]
 }
 
 @test "ticket hunk containing external repository trigger invokes specialist without a matching path glob" {

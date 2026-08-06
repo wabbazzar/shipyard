@@ -1540,6 +1540,46 @@ EOF
   ' <<<"$output"
 }
 
+@test "inspect: malformed critic events retain evidence and derive failure health" {
+  make_phase3_core
+  root="$BATS_TEST_TMPDIR/events-malformed-critic"
+  mkdir -p "$root"
+  make_phase6_project_at "$P3_CORE" core "release" "$root"
+  write_phase3_watcher "$P3_PROJECT" "$root"
+  cat >"$root/2026-07-29.jsonl" <<'EOF'
+{"ts":"2026-07-29T08:00:00Z","svc":"core-release","event":"release.critique.malformed_response","source":"shoulder","files":2,"tokens":11,"reason":"missing_sentinel","attempt":1,"generation":"gen-safe"}
+{"ts":"2026-07-29T08:01:00Z","svc":"core-release","event":"release.critique.malformed_response_exhausted","source":"shoulder","files":2,"tokens":13,"reason":"invalid_line","attempt":3,"generation":"gen-safe"}
+EOF
+
+  run run_phase3
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    [.evidence[] | select(.kind=="critique_event")] as $events
+    | ($events|length)==2
+      and ([$events[].source_ref]|unique|length)==2
+      and ([$events[].fields.event]|sort)==[
+        "release.critique.malformed_response",
+        "release.critique.malformed_response_exhausted"]
+      and ([$events[].fields.reason]|sort)==["invalid_line","missing_sentinel"]
+      and ([$events[].fields.attempt]|sort)==[1,3]
+      and ([$events[].fields.generation]|unique)==["gen-safe"]
+      and .fleet[0].critiques.files==4
+      and .fleet[0].critiques.tokens==24
+      and .fleet[0].state=="fault_observed"
+      and ([.priorities[]
+        | select(.rule_id=="core_critic_failure_v1"
+          and .category=="confirmed_failure"
+          and .operands.failure_records==2)]|length)==1
+      and .fleet[0].pressure.daily_budget_consumers[3].attributed_tokens_today==24
+      and .fleet[0].pressure.daily_budget_consumers[3].gate_tokens_today==24
+  ' <<<"$output"
+  [ ! -s "$SHIM_LOG/systemctl.rejected" ]
+  [ ! -s "$SHIM_LOG/journalctl.rejected" ]
+  [ ! -s "$SHIM_LOG/runner.rejected" ]
+  [ ! -s "$NOTIFY_LOG" ]
+}
+
 @test "inspect: malformed missing-ts and out-of-window records remain coverage" {
   make_phase3_core
   root="$BATS_TEST_TMPDIR/events-malformed"

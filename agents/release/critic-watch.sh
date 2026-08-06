@@ -105,6 +105,11 @@ case "$REQUIRE_FEEDBACK" in
     echo "critic-watch: shoulder.require_feedback must be boolean" >&2
     exit 2 ;;
 esac
+CRITIC_DIFF_MODE="${CRITIC_DIFF_MODE:-branch}"
+case "$CRITIC_DIFF_MODE" in
+  branch|staged) ;;
+  *) echo "critic-watch: CRITIC_DIFF_MODE must be branch or staged" >&2; exit 2 ;;
+esac
 
 # The shoulder-mode critic IS the release role's out-of-band voice: svc is
 # "<project>-<display>" (role id when no [names]) and the critique event
@@ -792,9 +797,14 @@ critique_queue() {
       rel="${qf#"$PROJECT_DIR"/}"
     fi
     abs="$PROJECT_DIR/$rel"
-    patch="$(git -C "$PROJECT_DIR" --literal-pathspecs diff "$trunk" -- \
-      "$rel" 2>/dev/null || true)"
-    if [ -z "$patch" ] && [ -f "$abs" ] &&
+    if [ "$CRITIC_DIFF_MODE" = staged ]; then
+      patch="$(git -C "$PROJECT_DIR" --literal-pathspecs diff --cached -- \
+        "$rel" 2>/dev/null || true)"
+    else
+      patch="$(git -C "$PROJECT_DIR" --literal-pathspecs diff "$trunk" -- \
+        "$rel" 2>/dev/null || true)"
+    fi
+    if [ "$CRITIC_DIFF_MODE" = branch ] && [ -z "$patch" ] && [ -f "$abs" ] &&
        git -C "$PROJECT_DIR" --literal-pathspecs ls-files \
          --others --exclude-standard -- "$rel" 2>/dev/null |
          grep -Fxq -- "$rel"; then
@@ -985,6 +995,7 @@ $diff"
   local specialist_entry slug prompt_rel log_rel specialist_project specialist_log
   local specialist_gates specialist_hunks live_docs registry specialist_prompt
   local specialist_rc specialist_tokens=0
+  local specialist_clean_count specialist_invalid_lines
   while IFS= read -r specialist_entry; do
     [ -n "$specialist_entry" ] || continue
     slug="$(jq -r '.slug' <<<"$specialist_entry")"
@@ -1069,6 +1080,18 @@ $specialist_hunks"
     fi
     specialist_tokens=$((specialist_tokens + SPAWN_TOKENS))
     printf '%s\n' "$SPAWN_TEXT" >"$response_file"
+    specialist_clean_count="$(grep -c '^TOKENS_HINT|<none>$' "$response_file" || true)"
+    specialist_invalid_lines="$(grep -Ev \
+      '^(block|warn|note)\|[^|]+\|.+$|^source\|[^|]+\|[^|]+\|(success|failure|unverified)\|.+$|^TOKENS_HINT\|<none>$|^$' \
+      "$response_file" || true)"
+    if [ "$specialist_clean_count" -ne 1 ] || [ -n "$specialist_invalid_lines" ]; then
+      log "specialist '$slug' returned malformed review output; queue kept"
+      emit_event release.critique.specialist_failed source=shoulder \
+        reason=malformed_response specialist="$slug" files="$n_files"
+      rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+        "$diff_file" "$response_file" "$evidence_file"
+      return 0
+    fi
     grep -E '^(block|warn|note)\|' "$response_file" \
       >>"$specialist_findings" || true
     reviewed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

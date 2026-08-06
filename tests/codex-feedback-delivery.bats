@@ -746,12 +746,14 @@ EOF
   VALIDATED="$BATS_TEST_TMPDIR/lock-validated"
   RELEASED="$BATS_TEST_TMPDIR/lock-released"
   ONCE="$BATS_TEST_TMPDIR/lock-mode-once"
+  OWNER_PID_FILE="$BATS_TEST_TMPDIR/owner-shell-pid"
 
   (
     mkdir "$BOX/.lock"
     chmod 700 "$BOX/.lock"
     TOKEN="$(printf 'a%.0s' {1..32})"
-    OWNER_SHELL_PID="$(python3 -c 'import os; print(os.getppid())')"
+    python3 -c 'import os; print(os.getppid())' >"$OWNER_PID_FILE"
+    read -r OWNER_SHELL_PID <"$OWNER_PID_FILE"
     IDENTITY="$(python3 "$QUARTET_ROOT/agents/release/critic-process-identity.py" "$OWNER_SHELL_PID")"
     printf '%s %s %s %s\n' "$OWNER_SHELL_PID" "$TOKEN" "$IDENTITY" \
       "$(date +%s)" >"$BOX/.lock/owner"

@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-05
 - **Owner:** wabbazzar
-- **Status:** POLISHED — decision-complete and ready for `execute-ticket`
+- **Status:** COMPLETE — built and verified locally 2026-08-05; publication routed through SHIPYARD-13
 - **Priority:** high
 - **Type:** bugfix
 - **Estimated Points:** 8 (three phases: 3 · 3 · 2)
@@ -625,6 +625,44 @@ bash scripts/ticket-lifecycle.sh --project . --check  # current config: expected
   shell syntax rc 0; full native-Bash leak scan clean; staged and worktree diff
   checks clean. No real model, network, live-consumer, push, or publish action
   occurred; SHIPYARD-13 remains honored.
+- 2026-08-05 — Phase 2 committed locally as `b7727cd` (`fix: bound malformed
+  critic retries`). Phase 3 plan: `builder: subagent (1 agent)` owning only
+  `docs/shoulder-mode.md`, `skills/shipyard/inspect.py`, and
+  `tests/shipyard-inspect.bats`; the orchestrator retains ticket Ledger/status,
+  live-consumer checks, and publication routing. Document retry generation,
+  event/diagnostic/budget/exact-prefix/required-blocker semantics; teach fleet
+  inspection to retain both malformed event types with exact-once tokens/files,
+  reason, attempt, and failure priority; and prove the behavior hermetically.
+  The orchestrator will independently run the focused inspect checks and the
+  complete repository verification surface before any local deployment or
+  Linux publication handoff.
+- 2026-08-05 — Phase 3 result: canonical shoulder documentation now defines
+  generation-scoped malformed retries, nonterminal/terminal event schemas,
+  exact-prefix consumption, exact-once budget attribution, the private 0600
+  diagnostic contract, and required-feedback exhaustion as unavailable rather
+  than passed. Fleet inspection retains both malformed event types as distinct
+  `critique_event` evidence, preserves reason/attempt/generation, counts each
+  event's files and tokens once, attributes the same spend to the critic budget
+  gate, and derives fault/recurrence/core-critic priority. The hermetic fixture
+  passed 1/1 with two unique records, 4 aggregate files, 24 aggregate/attributed
+  tokens, `fault_observed`, and one two-record `core_critic_failure_v1`
+  priority. The uninterrupted canonical repository run passed all 789 cases
+  (rc 0, with only seven documented environment skips). Deck freshness, shell
+  syntax, Python compile, focused inspection, diff checks, and leak scan all
+  passed; deck render returned the documented rc 3 because Playwright is not
+  installed.
+- 2026-08-05 — Darwin deployment result: both launchd plists linted and both
+  jobs printed as running. Judgify had no nonempty critic queue immediately
+  before restart, then restarted from PID 46181 to PID 40564 and remained
+  running with only its 30-second sleep child; its current-day event JSONL is
+  valid and contains no Judgify failure/error event. Its stderr entry was
+  confirmed stale (mtime 2026-08-03), not produced by this deployment.
+  Distillery remained running at PID 40592 and was deliberately not restarted
+  because it has two nonempty critic queues. No real model call occurred.
+  Local `main` remains 35 commits ahead and 35 behind `origin/main`; per the
+  locked SHIPYARD-13 rule, the `receive-workmac` Linux agent owns reconciliation,
+  origin push, PR, CI watch, and merge through the verified `wab` default-tmux
+  route. This Mac has not pushed or published.
 
 ---
 

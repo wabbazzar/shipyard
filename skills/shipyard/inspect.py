@@ -91,6 +91,17 @@ PRIORITY_CATEGORIES = (
     "instrumentation_gap",
     "hygiene",
 )
+CRITIQUE_SPEND_EVENTS = (
+    "release.critique",
+    "release.critique.malformed_response",
+    "release.critique.malformed_response_exhausted",
+)
+CRITIQUE_FAILURE_EVENTS = (
+    "release.critique.spawn_failed",
+    "release.critique.delivery_failed",
+    "release.critique.malformed_response",
+    "release.critique.malformed_response_exhausted",
+)
 
 
 class InspectInvocationError(ValueError):
@@ -1403,7 +1414,9 @@ def _jq_gate_filter(consumer: str) -> str:
         )
     if consumer == "release_shoulder_critic":
         return (
-            '[.[] | select(.event=="release.critique") | '
+            '[.[] | select(.event=="release.critique" or '
+            '.event=="release.critique.malformed_response" or '
+            '.event=="release.critique.malformed_response_exhausted") | '
             "(.tokens // 0)] | add // 0"
         )
     return (
@@ -1631,11 +1644,7 @@ def _event_route(
             or ("proposal_id" in record and fields["proposal_id"] is None),
         )
 
-    critique_events = {
-        "release.critique",
-        "release.critique.delivery_failed",
-        "release.critique.spawn_failed",
-    }
+    critique_events = {*CRITIQUE_SPEND_EVENTS, *CRITIQUE_FAILURE_EVENTS}
     if event in critique_events:
         fields = {
             "svc": _string(record.get("svc")),
@@ -1647,7 +1656,9 @@ def _event_route(
             "files": number("files"),
             "tokens": number("tokens"),
             "reason": reason,
+            "attempt": number("attempt"),
             "attempts": number("attempts"),
+            "generation": _string(record.get("generation")),
         }
         return (
             "critique_event",
@@ -1986,6 +1997,11 @@ def _apply_event_evidence(
             fault = True
         elif event == "release.critique.delivery_failed":
             project["critiques"]["delivery_failed"] += 1
+            fault = True
+        elif event in {
+            "release.critique.malformed_response",
+            "release.critique.malformed_response_exhausted",
+        }:
             fault = True
         project["critiques"]["evidence_ids"].append(evidence["id"])
     elif kind == "design_control_event":
@@ -4462,7 +4478,7 @@ def _consumer_matches(
     if consumer == "design_runner":
         return event is not None and event.startswith("design.")
     if consumer == "release_shoulder_critic":
-        return event == "release.critique"
+        return event in CRITIQUE_SPEND_EVENTS
     return event == "job.end"
 
 
@@ -4884,10 +4900,7 @@ def _is_recurrence_failure(item: dict[str, Any]) -> bool:
     if item["kind"] == "job_end":
         return item["fields"].get("status") in {"fail", "partial"}
     if item["kind"] == "critique_event":
-        return item["fields"].get("event") in {
-            "release.critique.spawn_failed",
-            "release.critique.delivery_failed",
-        }
+        return item["fields"].get("event") in CRITIQUE_FAILURE_EVENTS
     return False
 
 
@@ -4927,11 +4940,7 @@ def _derive_priorities(document: dict[str, Any]) -> list[dict[str, Any]]:
             direct_rules["core_restart_failure_v1"].append(item["id"])
         elif (
             item["kind"] == "critique_event"
-            and fields.get("event")
-            in {
-                "release.critique.spawn_failed",
-                "release.critique.delivery_failed",
-            }
+            and fields.get("event") in CRITIQUE_FAILURE_EVENTS
         ):
             direct_rules["core_critic_failure_v1"].append(item["id"])
     direct_titles = {
