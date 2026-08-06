@@ -92,7 +92,7 @@ install_project() {
   now="$(date +%s)"
   printf 'src/primary.ts %s\n' "$now" >"$P/tmp/critic-queue-same"
   printf 'src/additional.ts %s\n' "$now" >"$P/tmp/critic-queue-codex--same"
-  make_stub claude 0 '{"type":"result","result":"note|src/x.ts|checked","usage":{"input_tokens":1,"output_tokens":1}}'
+  make_stub claude 0 '{"type":"result","result":"note|src/x.ts|checked\nTOKENS_HINT|<none>","usage":{"input_tokens":1,"output_tokens":1}}'
   recorder="$BATS_TEST_TMPDIR/record-note.sh"
   cat >"$recorder" <<EOF
 #!/bin/bash
@@ -106,7 +106,7 @@ EOF
     CRITIC_IDLE_SEC=0 CRITIC_MULTI_AUTHOR=true \
     CRITIC_PRIMARY_HARNESS=claude CRITIC_NOTE_HARNESS=claude \
     CLAUDE_NOTE_CMD=true CRITIC_NOTE_DELIVER_CMD="$recorder" \
-    bash "$QUARTET_ROOT/agents/release/critic-watch.sh" --project "$P" --once
+    /bin/bash "$QUARTET_ROOT/agents/release/critic-watch.sh" --project "$P" --once
   [ "$status" -eq 0 ]
   grep -Fxq 'claude|same' "$BATS_TEST_TMPDIR/deliveries"
   grep -Fxq 'codex|same' "$BATS_TEST_TMPDIR/deliveries"

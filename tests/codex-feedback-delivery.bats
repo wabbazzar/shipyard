@@ -7,6 +7,7 @@ bats_require_minimum_version 1.5.0
 setup() {
   load helpers
   quartet_setup
+  quartet_use_native_bash
   FEEDBACK="$QUARTET_ROOT/agents/release/critic-codex-feedback.sh"
   NOTE="$QUARTET_ROOT/agents/release/critic-note.sh"
   STOP="$QUARTET_ROOT/agents/release/critic-stop-gate-codex.sh"
@@ -135,15 +136,23 @@ if [ "$last" = "$LOCK_PATH" ] && [ "$generation_query" -eq 1 ]; then
   printf '%s\n' "$count" >"$LOCK_STAT_COUNT"
   if [ "$LOCK_RELEASE_AT" = generation-2 ] && [ "$count" -eq 2 ]; then
     : >"$LOCK_VALIDATED"
-    while [ ! -e "$LOCK_RELEASED" ]; do /bin/sleep 0.001; done
+    for ((attempt=0; attempt<5000; attempt++)); do
+      [ ! -e "$LOCK_RELEASED" ] || break
+      /bin/sleep 0.001
+    done
+    [ -e "$LOCK_RELEASED" ] || exit 75
   fi
 fi
 result="$($LOCK_REAL_STAT "$@" 2>/dev/null)" || exit $?
 if [ "$LOCK_RELEASE_AT" = mode ] && [ "$last" = "$LOCK_PATH" ] &&
    [ "$mode_query" -eq 1 ] && [ "$result" = 700 ] &&
-   mkdir "$LOCK_ONCE" 2>/dev/null; then
+  mkdir "$LOCK_ONCE" 2>/dev/null; then
   : >"$LOCK_VALIDATED"
-  while [ ! -e "$LOCK_RELEASED" ]; do /bin/sleep 0.001; done
+  for ((attempt=0; attempt<5000; attempt++)); do
+    [ ! -e "$LOCK_RELEASED" ] || break
+    /bin/sleep 0.001
+  done
+  [ -e "$LOCK_RELEASED" ] || exit 75
 fi
 printf '%s\n' "$result"
 EOF
@@ -391,7 +400,8 @@ PY
   P="$(make_fixture_project cfb-watcher)"
   authorize "$P"
   RESULT=$'block|src/a.ts|unsafe\nwarn|src/a.ts|untested\nnote|src/a.ts|explain'
-  CANNED="$(jq -cn --arg result "$RESULT" \
+  RESPONSE="$RESULT"$'\nTOKENS_HINT|<none>'
+  CANNED="$(jq -cn --arg result "$RESPONSE" \
     '{type:"result",result:$result,usage:{input_tokens:10,output_tokens:5}}')"
   make_stub claude 0 "$CANNED"
   mkdir -p "$P/src"
@@ -405,7 +415,7 @@ PY
   run env QUARTET_DIR="$QUARTET_ROOT" QUARTET_EVENTS_DIR="$EVENTS_DIR" \
     CRITIC_IDLE_SEC=1 CRITIC_HARNESS=claude CRITIC_NOTE_HARNESS=codex \
     CLAUDE_NOTE_CMD="$NOTE --harness codex" \
-    bash "$WATCH" --project "$P" --session session-watcher --once
+    /bin/bash "$WATCH" --project "$P" --session session-watcher --once
   [ "$status" -eq 0 ]
   [ ! -e "$Q" ]
 
@@ -432,8 +442,9 @@ PY
 @test "retryable mailbox failure never acknowledges the reviewed edit queue" {
   P="$(make_fixture_project cfb-watcher-retry)"
   RESULT='warn|src/a.ts|untested'
-  make_stub claude 0 \
-    "{\"type\":\"result\",\"result\":\"$RESULT\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}"
+  RESPONSE="$RESULT"$'\nTOKENS_HINT|<none>'
+  make_stub claude 0 "$(jq -cn --arg result "$RESPONSE" \
+    '{type:"result",result:$result,usage:{input_tokens:10,output_tokens:5}}')"
   make_stub codex-note-unavailable 75
   mkdir -p "$P/src"
   printf '// changed\n' >"$P/src/a.ts"
@@ -446,7 +457,7 @@ PY
     run env QUARTET_DIR="$QUARTET_ROOT" QUARTET_EVENTS_DIR="$EVENTS_DIR" \
       CRITIC_IDLE_SEC=1 CRITIC_HARNESS=claude CRITIC_NOTE_HARNESS=codex \
       CLAUDE_NOTE_CMD="$SHIM_BIN/codex-note-unavailable" \
-      bash "$WATCH" --project "$P" --session session-retry --once
+      /bin/bash "$WATCH" --project "$P" --session session-retry --once
     [ "$status" -eq 0 ]
     [ -s "$Q" ]
   done
@@ -735,22 +746,33 @@ EOF
   VALIDATED="$BATS_TEST_TMPDIR/lock-validated"
   RELEASED="$BATS_TEST_TMPDIR/lock-released"
   ONCE="$BATS_TEST_TMPDIR/lock-mode-once"
+  OWNER_PID_FILE="$BATS_TEST_TMPDIR/owner-shell-pid"
 
   (
     mkdir "$BOX/.lock"
     chmod 700 "$BOX/.lock"
     TOKEN="$(printf 'a%.0s' {1..32})"
-    IDENTITY="$(python3 "$QUARTET_ROOT/agents/release/critic-process-identity.py" "$BASHPID")"
-    printf '%s %s %s %s\n' "$BASHPID" "$TOKEN" "$IDENTITY" \
+    python3 -c 'import os; print(os.getppid())' >"$OWNER_PID_FILE"
+    read -r OWNER_SHELL_PID <"$OWNER_PID_FILE"
+    IDENTITY="$(python3 "$QUARTET_ROOT/agents/release/critic-process-identity.py" "$OWNER_SHELL_PID")"
+    printf '%s %s %s %s\n' "$OWNER_SHELL_PID" "$TOKEN" "$IDENTITY" \
       "$(date +%s)" >"$BOX/.lock/owner"
     chmod 600 "$BOX/.lock/owner"
-    while [ ! -e "$VALIDATED" ]; do sleep 0.001; done
+    for ((attempt=0; attempt<5000; attempt++)); do
+      [ ! -e "$VALIDATED" ] || break
+      /bin/sleep 0.001
+    done
+    [ -e "$VALIDATED" ] || exit 75
     rm "$BOX/.lock/owner"
     rmdir "$BOX/.lock"
     : >"$RELEASED"
   ) &
   OWNER_PID=$!
-  while [ ! -e "$BOX/.lock/owner" ]; do sleep 0.001; done
+  for ((attempt=0; attempt<5000; attempt++)); do
+    [ -e "$BOX/.lock/owner" ] && break
+    /bin/sleep 0.001
+  done
+  [ -e "$BOX/.lock/owner" ]
 
   run env PATH="$STAT_BIN:$PATH" LOCK_REAL_STAT="$REAL_STAT" \
     LOCK_STAT_FLAVOR="$STAT_FLAVOR" LOCK_PATH="$BOX/.lock" \
@@ -1384,7 +1406,7 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
 }
 
 @test "second required Stop names every terminal critic failure state" {
-  for critic_state in budget spawn delivery running absent; do
+  for critic_state in budget spawn delivery malformed_response_exhausted running absent; do
     P="$(make_fixture_project "cfb-stop-terminal-$critic_state")"
     require_feedback "$P" true
     printf 'src/a.ts 1\n' >"$P/tmp/critic-queue-session-terminal"
@@ -1502,7 +1524,8 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
   require_feedback "$P" true
   authorize "$P"
   RESULT='warn|src/a.ts|urgent review'
-  CANNED="$(jq -cn --arg result "$RESULT" \
+  RESPONSE="$RESULT"$'\nTOKENS_HINT|<none>'
+  CANNED="$(jq -cn --arg result "$RESPONSE" \
     '{type:"result",result:$result,usage:{input_tokens:3,output_tokens:2}}')"
   make_stub claude 0 "$CANNED"
   mkdir -p "$P/src"
@@ -1516,7 +1539,7 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
     CRITIC_BATCH_FILES=999999 CRITIC_HARNESS=claude \
     CRITIC_NOTE_HARNESS=codex \
     CLAUDE_NOTE_CMD="$NOTE --harness codex" \
-    bash "$WATCH" --project "$P" --session session-urgent --once
+    /bin/bash "$WATCH" --project "$P" --session session-urgent --once
   [ "$status" -eq 0 ]
   [ ! -e "$P/tmp/critic-queue-session-urgent" ]
   jq -e '.status == "deposited"' "$(status_file "$P" session-urgent)"
@@ -1536,7 +1559,7 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
 
   run env QUARTET_DIR="$QUARTET_ROOT" QUARTET_EVENTS_DIR="$EVENTS_DIR" \
     CRITIC_IDLE_SEC=999999 CRITIC_BATCH_FILES=999999 \
-    bash "$WATCH" --project "$P" --session session-budget --once
+    /bin/bash "$WATCH" --project "$P" --session session-budget --once
   [ "$status" -eq 0 ]
   [ -s "$P/tmp/critic-queue-session-budget" ]
   jq -e '.status == "budget"' "$(status_file "$P" session-budget)"
@@ -1554,7 +1577,8 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
       make_stub claude 1
       NOTE_CMD="$NOTE --harness codex"
     else
-      CANNED="$(jq -cn --arg result 'warn|src/a.ts|delivery review' \
+      RESPONSE=$'warn|src/a.ts|delivery review\nTOKENS_HINT|<none>'
+      CANNED="$(jq -cn --arg result "$RESPONSE" \
         '{type:"result",result:$result,usage:{input_tokens:3,output_tokens:2}}')"
       make_stub claude 0 "$CANNED"
       make_stub note-fail 1
@@ -1566,7 +1590,7 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
         CRITIC_IDLE_SEC=999999 CRITIC_BATCH_FILES=999999 \
         CRITIC_HARNESS=claude CRITIC_NOTE_HARNESS=codex \
         CLAUDE_NOTE_CMD="$NOTE_CMD" \
-        bash "$WATCH" --project "$P" --session session-failure --once
+        /bin/bash "$WATCH" --project "$P" --session session-failure --once
       [ "$status" -eq 0 ]
     done
     [ -s "$P/tmp/critic-queue-session-failure" ]
@@ -1590,7 +1614,7 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
       CRITIC_IDLE_SEC=999999 CRITIC_BATCH_FILES=999999 \
       CRITIC_HARNESS=claude CRITIC_NOTE_HARNESS=codex \
       CLAUDE_NOTE_CMD="$NOTE_CMD" \
-      bash "$WATCH" --project "$P" --session session-failure --once
+      /bin/bash "$WATCH" --project "$P" --session session-failure --once
     [ "$status" -eq 0 ]
     if [ "$failure" = spawn ]; then
       [ "$(grep -c '^-p ' "$SHIM_LOG/claude.argv")" = "$CALLS_BEFORE" ]
@@ -1618,7 +1642,7 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
       CRITIC_IDLE_SEC=999999 CRITIC_BATCH_FILES=999999 \
       CRITIC_HARNESS=claude CRITIC_NOTE_HARNESS=codex \
       CLAUDE_NOTE_CMD="$NOTE_CMD" \
-      bash "$WATCH" --project "$P" --session session-failure --once
+      /bin/bash "$WATCH" --project "$P" --session session-failure --once
     [ "$status" -eq 0 ]
     if [ "$failure" = spawn ]; then
       CALLS_AFTER="$(grep -c '^-p ' "$SHIM_LOG/claude.argv")"

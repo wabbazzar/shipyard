@@ -105,6 +105,11 @@ case "$REQUIRE_FEEDBACK" in
     echo "critic-watch: shoulder.require_feedback must be boolean" >&2
     exit 2 ;;
 esac
+CRITIC_DIFF_MODE="${CRITIC_DIFF_MODE:-branch}"
+case "$CRITIC_DIFF_MODE" in
+  branch|staged) ;;
+  *) echo "critic-watch: CRITIC_DIFF_MODE must be branch or staged" >&2; exit 2 ;;
+esac
 
 # The shoulder-mode critic IS the release role's out-of-band voice: svc is
 # "<project>-<display>" (role id when no [names]) and the critique event
@@ -149,6 +154,124 @@ safe_private_file() {
   links="$(stat -c '%h' "$path" 2>/dev/null ||
     stat -f '%l' "$path" 2>/dev/null || true)"
   [ "$mode" = "600" ] && [ "$owner" = "$(id -u)" ] && [ "$links" = "1" ]
+}
+
+bounded_uint() {
+  local value="$1" maximum="$2"
+  [[ "$value" =~ ^[0-9]+$ ]] || value=0
+  if [ "$value" -gt "$maximum" ]; then
+    value="$maximum"
+  fi
+  printf '%s\n' "$value"
+}
+
+# Classify only the generic critic response. Specialist output has a separate
+# schema and remains a separate failure stage. Results are returned in bounded
+# globals so callers do not need to preserve rejected response text.
+classify_generic_response() {
+  local raw="$1" text="$2" harness="$3" invalid
+  GENERIC_RESPONSE_REASON=""
+  GENERIC_SENTINEL_COUNT=0
+  GENERIC_INVALID_LINE_COUNT=0
+  GENERIC_RESPONSE_BYTES="$(LC_ALL=C printf '%s' "$raw" | wc -c | tr -d ' ')"
+  GENERIC_RESPONSE_BYTES="$(bounded_uint "$GENERIC_RESPONSE_BYTES" 104857600)"
+  GENERIC_RESPONSE_HASH="$(printf '%s' "$raw" | checked_sha256 2>/dev/null || true)"
+  [[ "$GENERIC_RESPONSE_HASH" =~ ^[0-9a-f]{64}$ ]] || GENERIC_RESPONSE_HASH=""
+
+  # Claude's successful JSON mode must have a string result. A nonempty,
+  # exit-zero stdout blob that cannot satisfy that envelope is distinct from a
+  # normalized empty response. Other harnesses normalize through their own
+  # transport-specific paths in spawn.sh.
+  if [ "$harness" = "claude" ] &&
+      ! jq -e 'type == "object" and (.result | type == "string")' \
+        >/dev/null 2>&1 <<<"$raw"; then
+    GENERIC_RESPONSE_REASON="unnormalizable_envelope"
+    return 1
+  fi
+  if [ -z "$text" ]; then
+    GENERIC_RESPONSE_REASON="empty_text"
+    return 1
+  fi
+
+  GENERIC_SENTINEL_COUNT="$(
+    grep -c '^TOKENS_HINT|<none>$' <<<"$text" || true
+  )"
+  GENERIC_SENTINEL_COUNT="$(bounded_uint "$GENERIC_SENTINEL_COUNT" 100000)"
+  if [ "$GENERIC_SENTINEL_COUNT" -eq 0 ]; then
+    GENERIC_RESPONSE_REASON="missing_sentinel"
+    return 1
+  fi
+  if [ "$GENERIC_SENTINEL_COUNT" -ne 1 ]; then
+    GENERIC_RESPONSE_REASON="duplicate_sentinel"
+    return 1
+  fi
+
+  invalid="$(grep -Evc \
+    '^(block|warn|note)\|[^|]+\|.+$|^TOKENS_HINT\|<none>$|^$' \
+    <<<"$text" || true)"
+  GENERIC_INVALID_LINE_COUNT="$(bounded_uint "$invalid" 100000)"
+  if [ "$GENERIC_INVALID_LINE_COUNT" -ne 0 ]; then
+    GENERIC_RESPONSE_REASON="invalid_line"
+    return 1
+  fi
+  return 0
+}
+
+write_malformed_diagnostic() {
+  local session="$1" reason="$2" harness="$3" tokens="$4" generation="$5"
+  local attempt="$6"
+  local target tmp now safe_tokens json
+  target="$QUEUE_DIR/critic-malformed-diagnostic-$session"
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    safe_private_file "$target" || {
+      log "malformed response diagnostic path is unsafe; diagnostic not replaced"
+      return 1
+    }
+  fi
+  tmp="$(umask 077; mktemp \
+    "$QUEUE_DIR/.critic-malformed-diagnostic-$session.XXXXXX")" || return 1
+  safe_tokens="$(bounded_uint "$tokens" 1000000000)"
+  now="$(date +%s)"
+  now="$(bounded_uint "$now" 9999999999)"
+  json="$(jq -cn \
+    --arg reason "$reason" --arg harness "$harness" \
+    --arg response_hash "$GENERIC_RESPONSE_HASH" \
+    --arg generation "$generation" \
+    --argjson sentinel_count "$GENERIC_SENTINEL_COUNT" \
+    --argjson invalid_line_count "$GENERIC_INVALID_LINE_COUNT" \
+    --argjson response_bytes "$GENERIC_RESPONSE_BYTES" \
+    --argjson tokens "$safe_tokens" --argjson attempt "$attempt" \
+    --argjson updated_at "$now" '
+      {schema_version:1,reason:$reason,sentinel_count:$sentinel_count,
+       invalid_line_count:$invalid_line_count,response_bytes:$response_bytes,
+       response_hash:$response_hash,harness:$harness,tokens:$tokens,attempt:$attempt,
+       generation:$generation,updated_at:$updated_at}
+    ')" || {
+      rm -f -- "$tmp"
+      return 1
+    }
+  (umask 077; printf '%s\n' "$json" >"$tmp") || {
+    rm -f -- "$tmp"
+    return 1
+  }
+  chmod 600 "$tmp" || {
+    rm -f -- "$tmp"
+    return 1
+  }
+  # Revalidate immediately before replacement. Refuse symlinks, non-regular
+  # files, foreign owners, permissive modes, and multiply-linked artifacts.
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    safe_private_file "$target" || {
+      rm -f -- "$tmp"
+      log "malformed response diagnostic path became unsafe; diagnostic not replaced"
+      return 1
+    }
+  fi
+  mv -f -- "$tmp" "$target" || {
+    rm -f -- "$tmp"
+    return 1
+  }
+  safe_private_file "$target"
 }
 
 urgent_marker() {
@@ -266,7 +389,10 @@ tokens_used_today() {
   f="$EVENTS_DIR/$(date -u +%Y-%m-%d).jsonl"
   [ -f "$f" ] || { echo 0; return; }
   jq -R 'fromjson?' <"$f" 2>/dev/null | \
-    jq -s '[.[] | select(.event=="release.critique") | (.tokens // 0)] | add // 0' \
+    jq -s '[.[] | select(.event=="release.critique" or
+      .event=="release.critique.malformed_response" or
+      .event=="release.critique.malformed_response_exhausted") |
+      (.tokens // 0)] | add // 0' \
     2>/dev/null || echo 0
 }
 
@@ -516,6 +642,7 @@ critique_queue() {
   local author_harness="${4:-${CRITIC_NOTE_HARNESS:-claude}}"
   local findings_file="$QUEUE_DIR/critic-findings-$session"
   local findings_files_count="$QUEUE_DIR/critic-findings-files-$session"
+  local valid_response_file="$QUEUE_DIR/critic-valid-response-$session"
   local retry_snapshot="$QUEUE_DIR/critic-snapshot-$session"
 
   # Delivery-retry guard: when a critique already ran for this exact queue
@@ -534,6 +661,10 @@ critique_queue() {
       "$delivery_session" "$author_harness"
     return 0
   fi
+
+  # A prior valid marker must never authorize a fresh queue snapshot. Recreate
+  # it only after the current generic and selected specialist responses parse.
+  rm -f "$valid_response_file"
 
   # Budget gate — before any model spend.
   local used
@@ -567,6 +698,7 @@ critique_queue() {
     return 0
   fi
   local spawn_attempts_file snapshot_id spawn_generation prior_spawn_attempts
+  local malformed_attempts_file malformed_generation prior_malformed_attempts
   spawn_attempts_file="$QUEUE_DIR/critic-spawn-attempts-$session"
   snapshot_id="$(checked_sha256 <"$reviewed_queue")" || {
     log "snapshot hashing failed; queue kept for retry"
@@ -579,6 +711,30 @@ critique_queue() {
   prior_spawn_attempts="$(
     retry_state_count "$spawn_attempts_file" "$spawn_generation"
   )"
+  malformed_attempts_file="$QUEUE_DIR/critic-malformed-attempts-$session"
+  if { [ -e "$malformed_attempts_file" ] || \
+       [ -L "$malformed_attempts_file" ]; } &&
+     ! safe_private_file "$malformed_attempts_file"; then
+    log "malformed retry state path is unsafe; queue kept without model invocation"
+    return 0
+  fi
+  malformed_generation="$(
+    retry_generation malformed "$session" "$snapshot_id"
+  )" || {
+    log "malformed retry generation failed; queue kept for retry"
+    return 0
+  }
+  prior_malformed_attempts="$(
+    retry_state_count "$malformed_attempts_file" "$malformed_generation"
+  )"
+  if [ "$prior_malformed_attempts" -ge 3 ]; then
+    if [ "$REQUIRE_FEEDBACK" = true ]; then
+      write_required_status "$session" malformed_response_exhausted || true
+    elif consume_queue "$queue" "$session"; then
+      rm -f "$malformed_attempts_file"
+    fi
+    return 0
+  fi
   if [ "$REQUIRE_FEEDBACK" = true ] && [ "$prior_spawn_attempts" -ge 3 ]; then
     write_required_status "$session" spawn || true
     return 0
@@ -641,9 +797,14 @@ critique_queue() {
       rel="${qf#"$PROJECT_DIR"/}"
     fi
     abs="$PROJECT_DIR/$rel"
-    patch="$(git -C "$PROJECT_DIR" --literal-pathspecs diff "$trunk" -- \
-      "$rel" 2>/dev/null || true)"
-    if [ -z "$patch" ] && [ -f "$abs" ] &&
+    if [ "$CRITIC_DIFF_MODE" = staged ]; then
+      patch="$(git -C "$PROJECT_DIR" --literal-pathspecs diff --cached -- \
+        "$rel" 2>/dev/null || true)"
+    else
+      patch="$(git -C "$PROJECT_DIR" --literal-pathspecs diff "$trunk" -- \
+        "$rel" 2>/dev/null || true)"
+    fi
+    if [ "$CRITIC_DIFF_MODE" = branch ] && [ -z "$patch" ] && [ -f "$abs" ] &&
        git -C "$PROJECT_DIR" --literal-pathspecs ls-files \
          --others --exclude-standard -- "$rel" 2>/dev/null |
          grep -Fxq -- "$rel"; then
@@ -755,6 +916,37 @@ $diff"
   local result_text tokens
   result_text="$SPAWN_TEXT"
   tokens="$SPAWN_TOKENS"
+  if ! classify_generic_response "$claude_out" "$result_text" \
+      "${CRITIC_HARNESS:-claude}"; then
+    local malformed_attempt
+    malformed_attempt=$((prior_malformed_attempts + 1))
+    write_retry_state "$malformed_attempts_file" "$malformed_attempt" \
+      "$malformed_generation" || true
+    write_malformed_diagnostic "$session" "$GENERIC_RESPONSE_REASON" \
+      "${CRITIC_HARNESS:-claude}" "$tokens" "$malformed_generation" \
+      "$malformed_attempt" || true
+    if [ "$malformed_attempt" -ge 3 ]; then
+      log "malformed critic response ($GENERIC_RESPONSE_REASON); exhausted after $malformed_attempt attempts"
+      emit_event release.critique.malformed_response_exhausted source=shoulder \
+        files="$n_files" reason="$GENERIC_RESPONSE_REASON" \
+        attempt="$malformed_attempt" generation="$malformed_generation" \
+        tokens="$tokens"
+      if [ "$REQUIRE_FEEDBACK" = true ]; then
+        write_required_status "$session" malformed_response_exhausted || true
+        log "required feedback: reviewed queue preserved after malformed response exhaustion"
+      elif consume_queue "$queue" "$session"; then
+        rm -f "$malformed_attempts_file"
+      fi
+    else
+      log "malformed critic response ($GENERIC_RESPONSE_REASON); queue kept for retry ($malformed_attempt/3)"
+      emit_event release.critique.malformed_response source=shoulder \
+        files="$n_files" reason="$GENERIC_RESPONSE_REASON" \
+        attempt="$malformed_attempt" generation="$malformed_generation" \
+        tokens="$tokens"
+    fi
+    return 0
+  fi
+  rm -f "$malformed_attempts_file"
 
   # ---- matching specialist reviews -----------------------------------------
   # The generic cold critic above always runs first. Only then do validated
@@ -803,6 +995,7 @@ $diff"
   local specialist_entry slug prompt_rel log_rel specialist_project specialist_log
   local specialist_gates specialist_hunks live_docs registry specialist_prompt
   local specialist_rc specialist_tokens=0
+  local specialist_clean_count specialist_invalid_lines
   while IFS= read -r specialist_entry; do
     [ -n "$specialist_entry" ] || continue
     slug="$(jq -r '.slug' <<<"$specialist_entry")"
@@ -887,6 +1080,18 @@ $specialist_hunks"
     fi
     specialist_tokens=$((specialist_tokens + SPAWN_TOKENS))
     printf '%s\n' "$SPAWN_TEXT" >"$response_file"
+    specialist_clean_count="$(grep -c '^TOKENS_HINT|<none>$' "$response_file" || true)"
+    specialist_invalid_lines="$(grep -Ev \
+      '^(block|warn|note)\|[^|]+\|.+$|^source\|[^|]+\|[^|]+\|(success|failure|unverified)\|.+$|^TOKENS_HINT\|<none>$|^$' \
+      "$response_file" || true)"
+    if [ "$specialist_clean_count" -ne 1 ] || [ -n "$specialist_invalid_lines" ]; then
+      log "specialist '$slug' returned malformed review output; queue kept"
+      emit_event release.critique.specialist_failed source=shoulder \
+        reason=malformed_response specialist="$slug" files="$n_files"
+      rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+        "$diff_file" "$response_file" "$evidence_file"
+      return 0
+    fi
     grep -E '^(block|warn|note)\|' "$response_file" \
       >>"$specialist_findings" || true
     reviewed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -908,8 +1113,13 @@ $specialist_hunks"
   n_warn="$(grep -c '^warn|' <<<"$findings" || true)"
   n_note="$(grep -c '^note|' <<<"$findings" || true)"
 
-  printf '%s\n' "$findings" >"$findings_file"
+  if [ -n "$findings" ]; then
+    printf '%s\n' "$findings" >"$findings_file"
+  else
+    : >"$findings_file"
+  fi
   printf '%s\n' "$n_files" >"$findings_files_count"
+  printf 'valid mode=%s\n' "$CRITIC_DIFF_MODE" >"$valid_response_file"
   rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
     "$diff_file" "$response_file"
 

@@ -592,7 +592,7 @@ JOB_DUR=$(( $(date +%s) - JOB_START ))
 
 # Emit job.end + (on fail) escalate to medic, via shared trailer.
 agent_finish "$SVC" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
-  "${RELEASE_FINISH_OPTIONS[@]}" \
+  ${RELEASE_FINISH_OPTIONS[@]+"${RELEASE_FINISH_OPTIONS[@]}"} \
   --episode "$RUN_EPISODE" mode="$MODE" exit_code="$FINAL_EXIT" tokens="$TOKENS" \
   category="$CATEGORY" >> "$LOG_FILE" 2>&1
 

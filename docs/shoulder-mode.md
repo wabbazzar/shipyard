@@ -97,12 +97,14 @@ a poll loop.
 measured from the queue file's mtime, so it tracks the last edit, not the last
 poll. A 20-file burst at batch size 8 costs at most two critiques.
 
-**Budget gate — before any model spend.** Sums today's `release.critique`
-`tokens` from the events dir and compares against `[release]
-budget_tokens_daily` (default 1,000,000). Over cap, the queue is **deferred,
-not discarded** — the review happens in the next budget window — and a
-`release.critique.skipped reason=budget` event fires once per session per UTC
-day (a marker file dedupes it; the gate itself is hit on every poll).
+**Budget gate — before any model spend.** Sums today's `tokens` from successful
+`release.critique` events and from both malformed-response event types, then
+compares the result against `[release] budget_tokens_daily` (default
+1,000,000). A completed model invocation counts once even when its output is
+rejected. Over cap, the queue is **deferred, not discarded** — the review
+happens in the next budget window — and a `release.critique.skipped`
+`reason=budget` event fires once per session per UTC day (a marker file dedupes
+it; the gate itself is hit on every poll).
 
 **Critique caching.** If a findings file exists and is newer than the queue,
 the critique is reused instead of re-spending the model. Without this, a
@@ -110,9 +112,11 @@ the critique is reused instead of re-spending the model. Without this, a
 whole critique on every 30-second poll.
 
 **Snapshot.** The queue is copied to `critic-snapshot-<session>` before the
-(minutes-long) `claude` run. Delivery consumes only those entries;
-anything the hook appended while the model was thinking stays queued for the
-next pass instead of being deleted unreviewed.
+(minutes-long) `claude` run. Successful delivery and non-required terminal
+outcomes consume only the exact byte prefix in that snapshot. Anything the hook
+appended while the model was thinking stays queued for the next pass instead of
+being deleted unreviewed; if the prefix itself changed, acknowledgement is
+deferred and both queue and snapshot are kept.
 
 **Diff assembly.** Scoped to the exact queued edit batch, not the whole
 branch — pulling every historical branch hunk into each batch made
@@ -149,6 +153,34 @@ before finalizing findings.
 `.result` and real usage is `.usage.input_tokens + .usage.output_tokens`.
 Findings are the lines matching `^(block|warn|note)\|`; they are written to
 `critic-findings-<session>` and counted into the event.
+
+The generic parser stays fail-closed. Empty normalized text, a missing or
+duplicate `TOKENS_HINT|<none>` sentinel, an invalid output line, or an
+unnormalizable successful harness envelope is malformed and never creates a
+valid-response marker or reaches finding delivery. Malformed retry state is
+separate from spawn, specialist, and delivery state. Its generation hashes the
+immutable queue snapshot plus the current required-feedback turn, so the same
+generation receives at most three model calls. A changed snapshot or a later
+required-feedback turn starts at attempt 1; a valid parsed response clears stale
+malformed state for its generation.
+
+Attempts 1 and 2 keep the queue and emit
+`release.critique.malformed_response`. Attempt 3 emits only
+`release.critique.malformed_response_exhausted`; subsequent polls make no model
+call for that generation. In ordinary mode, terminal exhaustion consumes only
+the exact reviewed prefix. With `require_feedback=true`, it preserves the queue
+and writes terminal status `malformed_response_exhausted`: review is
+unavailable, not passed. The Stop gate remains a hard blocker until the human
+or authoring agent records that blocker, changes the reviewed work, or begins a
+later required-feedback turn that can form a new generation.
+
+For local diagnosis, `tmp/critic-malformed-diagnostic-<session>` is an atomic,
+owner-only mode-0600 schema-v1 JSON file. It contains only `reason`, bounded
+`sentinel_count`, `invalid_line_count`, `response_bytes`, `response_hash`,
+`harness`, `tokens`, `attempt`, opaque `generation`, and `updated_at`; it never
+stores response prose, prompts, diffs, filenames, paths, or findings. Existing
+diagnostic and retry targets must be regular, singly linked, current-owner
+private files: unsafe symlink, owner, mode, or link-count states are refused.
 
 **Spawn failure** (bad model, oversized prompt, missing binary) retries for 3
 passes, then gives up loudly with `release.critique.spawn_failed` and drops the
@@ -223,13 +255,21 @@ headless runs never set it, so they are unaffected.
 
 ```
 release.critique                 source=shoulder files= block= warn= note= tokens=
+release.critique.malformed_response
+                                  source=shoulder files= tokens= reason= attempt= generation=
+release.critique.malformed_response_exhausted
+                                  source=shoulder files= tokens= reason= attempt= generation=
 release.critique.skipped         reason=budget|empty_diff
 release.critique.spawn_failed    rc= attempts= files=
 release.critique.delivery_failed rc= attempts=
 ```
 
-Counts and token spend land in the event stream, so a critique that can't be
-delivered is still on record, and the daily cap is computed from the crew's own
+Malformed events are content-safe and mutually exclusive per invocation: the
+terminal third call is not also recorded as a nonterminal attempt. Fleet
+inspection retains their reason, attempt, and generation evidence, counts each
+event's file/token fields once, and treats both as critic failures. Counts and
+token spend land in the event stream, so a critique that can't be delivered or
+parsed is still on record, and the daily cap is computed from the crew's own
 telemetry rather than a separate meter.
 
 ## Harness support

@@ -5,6 +5,7 @@ bats_require_minimum_version 1.5.0
 
 setup() {
   load helpers
+  DASHBOARD_TEST_PYTHON="$(python3 -c 'import sys; print(sys.executable)')"
   quartet_setup
   TEST_ROOT="$(cd "$BATS_TEST_TMPDIR" && pwd -P)"
   DASH_HOME="$TEST_ROOT/dashboard-home"
@@ -14,6 +15,7 @@ setup() {
   DASH_STATE="$TEST_ROOT/dashboard-active"
   DASH_PORT_FILE="$TEST_ROOT/dashboard-port"
   DASH_SERVER_LOG="$TEST_ROOT/dashboard-server.log"
+  DASHBOARD_PYTHON="$DASHBOARD_TEST_PYTHON"
   INSTALLER="$QUARTET_ROOT/scripts/install-dashboard.sh"
   SHIPYARD="$QUARTET_ROOT/skills/shipyard/shipyard.sh"
   SERVER_PID=""
@@ -82,7 +84,7 @@ start_dashboard() {
 }
 
 @test "operator loader preserves the dashboard Python when ambient python3 is incompatible" {
-  good_python="$(command -v python3)"
+  good_python="$DASHBOARD_TEST_PYTHON"
   project="$(make_fixture_project dashboard-interpreter clean-install.toml)"
   export SHIPYARD_SYSTEMD_DIR="$DASH_UNITS"
   export CLAUDE_PROJECTS_DIR="$TEST_ROOT/no-claude-transcripts"

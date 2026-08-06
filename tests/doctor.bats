@@ -17,6 +17,7 @@ bats_require_minimum_version 1.5.0
 
 setup() {
   load helpers
+  DOCTOR_TEST_BASH="$(PATH="${SHIPYARD_TEST_COMMAND_PATH:-$PATH}" command -v bash)"
   quartet_setup
   UNITS="$HOME/.config/systemd/user"
 
@@ -48,7 +49,7 @@ doctor_install() {
 
 run_doctor() {
   run env QUARTET_DIR="$QUARTET_ROOT" \
-    bash "$QUARTET_ROOT/install.sh" --doctor --project "$P"
+    "$DOCTOR_TEST_BASH" "$QUARTET_ROOT/install.sh" --doctor --project "$P"
 }
 
 # split-string retired words (never literal in tests/)
@@ -85,9 +86,12 @@ retired_word_a() { printf '%s' "au""gur"; }
 
 @test "doctor: completes well under 5s" {
   doctor_install
-  s="$(date +%s)"; run_doctor; e="$(date +%s)"
+  s="$(python3 -c 'import time; print(time.monotonic_ns())')"
+  run_doctor
+  e="$(python3 -c 'import time; print(time.monotonic_ns())')"
+  elapsed_ms="$(( (e - s) / 1000000 ))"
   [ "$status" -eq 0 ]
-  [ "$((e - s))" -lt 5 ]
+  [ "$elapsed_ms" -lt 5000 ]
 }
 
 @test "doctor (f): missing AGENTS.md skill bridge -> finding" {
