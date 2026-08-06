@@ -1,6 +1,6 @@
 {
   "meta": {
-    "updated": "2026-07-22",
+    "updated": "2026-08-06",
     "ticket": "citadel:docs/tickets/quartet-gaps-guardian-teeth.md",
     "repo": "https://github.com/wabbazzar/shipyard",
     "note": "The data behind this deck — the crews, the skills each inherits, and the decisions that shaped them. Generated from the skill files themselves, so it can't drift from the system it describes."
@@ -377,6 +377,10 @@
         "proof": "skills-parity: one skill file per workflow, symlinked everywhere — no agent-only fork to drift."
       },
       {
+        "claim": "One dashboard renderer, two thin hosts",
+        "proof": "Standalone Shipyard and Ice mount the same Shipyard-owned module and scoped stylesheet. Adapters carry transport, route, provenance, assets, teardown, and host isolation; launchd/systemd carry lifecycle only."
+      },
+      {
         "claim": "This deck can't quietly lie",
         "proof": "Its structure is generated from the skill files themselves; CI fails on a stale deck."
       },
@@ -400,7 +404,7 @@
         "n": 1,
         "name": "hub knobs",
         "where": "baked into systemd units at install time",
-        "what": "Where events, notifications, and dashboard state flow (env knobs). Changing them means re-running the installer — units bake env, they don't read it live."
+        "what": "Where events, notifications, and dashboard transport flow (env knobs). Changing them means re-running the installer — units bake env, they don't read it live. The dashboard itself is one Shipyard-owned renderer: standalone and Ice only adapt transport, route, assets, provenance, teardown, and outer-shell isolation; launchd and systemd differ only in native service lifecycle."
       },
       {
         "n": 2,
@@ -453,7 +457,7 @@
         "how": "Rubric and convention lines that only ever produce notes for two weeks are removed. Adaptation includes forgetting — a critic that flags everything teaches nothing."
       }
     ],
-    "router": "The routing rule, stated once: one-off correction → the ticket's decision tables; project taste → .agents/<role>.md Conventions; project gates → config.toml; portable doctrine → a core PR (leak-checked, fleet-live on merge); a question every future install should ask → the installer interview."
+    "router": "The routing rule, stated once: one-off correction → the ticket's decision tables; project taste → .agents/<role>.md Conventions; project gates → config.toml; portable doctrine → a core PR (leak-checked, fleet-live on merge); a question every future install should ask → the installer interview. The shared dashboard is the concrete example: portable renderer doctrine lands in Shipyard core, while Ice navigation and outer-shell taste stay local in a thin host adapter."
   },
   "graph": {
     "note": "Every agent inherits a subset of one shared skill set. The spine write-ticket → polish-ticket → execute-ticket is the pipeline both a human and an agent run; /bugfix and /feature are the human front doors into it; coverage-audit and check-config span several agents. Dotted membership lines show the overlap.",

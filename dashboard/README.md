@@ -1,4 +1,21 @@
-# Operator schema-v1 producer contract
+# Private operator dashboard
+
+Shipyard owns one browser presentation: `static/renderer.js` exports
+`mountShipyardRenderer(root, adapter)`, and `static/renderer.css` is its scoped
+Hearth visual system. The renderer owns all product hierarchy, copy, semantic
+state, graph layout, controls, accessibility, and responsive behavior inside
+the supplied root. Its teardown removes the subtree, subscriptions, observers,
+timers, and root listeners it created.
+
+`static/app.js` is the standalone loopback adapter. Ice keeps its outer global
+and Health navigation, but `/shipyard` is a thin transport, route, provenance,
+asset, mount, teardown, and theme-isolation adapter around the exact same
+Shipyard module and stylesheet; it does not render a second dashboard. The
+macOS launchd and Linux systemd installers likewise select the same renderer
+asset list and digest. Only their native manifest, environment, activation,
+log, and restart lifecycle differs.
+
+## Operator schema-v1 producer contract
 
 `GET /api/operator?window=24h|7d|30d` is additive within schema v1. Clients
 must preserve core order and treat unknown members and enum values as

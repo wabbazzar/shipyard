@@ -525,6 +525,18 @@ skills/shipyard/shipyard.sh dashboard       # prints URL + health
 skills/shipyard/shipyard.sh dashboard --open
 ```
 
+There is one authored dashboard presentation:
+[`renderer.js`](dashboard/static/renderer.js) and its scoped
+[`renderer.css`](dashboard/static/renderer.css). Standalone Shipyard supplies a
+small same-origin loopback adapter. Ice retains its own global and Health
+navigation around `/shipyard`, but supplies only transport, route, asset,
+provenance, mount/teardown, and theme isolation to that exact renderer—no
+second component tree, state grammar, graph implementation, or dashboard CSS.
+macOS launchd and Linux systemd install the same renderer assets and digest;
+their differences stop at native service manifests, environment discovery,
+activation, logs, and restart commands. The full adapter and teardown contract
+is documented in [dashboard/README.md](dashboard/README.md).
+
 Adapters consume `GET /api/operator?window=24h|7d|30d`. A successful response
 has `schema_version: 1`, `kind: "shipyard.operator"`, and the public sections
 `metadata`, `brief`, `narrative`, `promises`, `outcomes`, `topology`, `changes`,

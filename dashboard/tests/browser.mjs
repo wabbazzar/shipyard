@@ -13,17 +13,20 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..", "..");
 
 function parseArgs(argv) {
-  const options = {browser: "chromium", viewport: "1440x900", screenshotDir: null};
+  const options = {browser: "chromium", host: "standalone", viewport: "1440x900", screenshotDir: null, snapshotFile: null};
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index];
     const value = argv[index + 1];
     if (key === "--browser") options.browser = value;
+    else if (key === "--host") options.host = value;
     else if (key === "--viewport") options.viewport = value;
     else if (key === "--screenshot-dir") options.screenshotDir = value;
+    else if (key === "--snapshot-file") options.snapshotFile = value;
     else throw new Error(`unknown argument: ${key}`);
     index += 1;
   }
   if (options.browser !== "chromium") throw new Error("only --browser chromium is supported");
+  if (!["standalone", "embedded"].includes(options.host)) throw new Error("--host must be standalone or embedded");
   if (!options.screenshotDir) throw new Error("--screenshot-dir is required");
   const match = /^(\d+)x(\d+)$/.exec(options.viewport);
   if (!match) throw new Error("--viewport must use WIDTHxHEIGHT");
@@ -167,6 +170,7 @@ async function launchBrowser(executable, profile, width, height) {
     cdp.send("Page.enable", {}, sessionId),
     cdp.send("Runtime.enable", {}, sessionId),
     cdp.send("Network.enable", {}, sessionId),
+    cdp.send("Accessibility.enable", {}, sessionId),
     cdp.send("Emulation.setDeviceMetricsOverride", {width, height, deviceScaleFactor: 1, mobile: false}, sessionId),
     cdp.send("Emulation.setEmulatedMedia", {features: [{name: "prefers-reduced-motion", value: "reduce"}]}, sessionId),
   ]);
@@ -211,6 +215,94 @@ async function screenshot(browser, path) {
 
 function sha256(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
+}
+
+async function rendererContract(browser, origin, checkpoints) {
+  const savedProvenance = await evaluate(browser, `(() => {
+    const item = document.querySelector('#shipyard-renderer-root #host-provenance');
+    const saved = {hidden: item.hidden, text: item.textContent};
+    item.hidden = true;
+    item.textContent = '[declared host provenance]';
+    return saved;
+  })()`);
+  try {
+    const surface = await evaluate(browser, `(() => {
+      const root = document.getElementById('shipyard-renderer-root');
+      const round = value => Math.round(value * 100) / 100;
+      const relativeRect = item => {
+        const box = item.getBoundingClientRect();
+        const base = root.getBoundingClientRect();
+        return [round(box.left - base.left), round(box.top - base.top), round(box.width), round(box.height)];
+      };
+      const clone = root.cloneNode(true);
+      for (const item of clone.querySelectorAll('time')) item.textContent = '[fixture timestamp]';
+      let dom = clone.outerHTML
+        .replaceAll(${JSON.stringify(origin)}, '[asset origin]')
+        .replace(/\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z/g, '[fixture timestamp]');
+      const visibleCopy = [...root.querySelectorAll('*')]
+        .filter(item => item.children.length === 0 && item.textContent.trim() && !item.closest('[hidden]') && getComputedStyle(item).display !== 'none')
+        .map(item => item.textContent.trim());
+      const stateAttributes = [...root.querySelectorAll('[data-source-state]')]
+        .map(item => [item.tagName.toLowerCase(), item.id, item.dataset.sourceState, item.dataset.state]);
+      const styles = getComputedStyle(root);
+      const tokens = Object.fromEntries(['--hull','--chalk','--signal','--clear','--waiting','--alarm','--neutral']
+        .map(name => [name, styles.getPropertyValue(name).trim()]));
+      const computedStates = [...root.querySelectorAll('[data-source-state]')].map(item => {
+        const style = getComputedStyle(item);
+        return [item.dataset.sourceState, item.dataset.state, style.color, style.borderColor, style.backgroundColor];
+      });
+      const selectors = ['.topbar','.control-row','#shipyard-main','#mode-crew','.crew-layout','#graph-stage','#crew-selection'];
+      const geometry = {root: relativeRect(root), ...Object.fromEntries(selectors.map(selector => [selector, relativeRect(root.querySelector(selector))]))};
+      geometry.nodes = [...root.querySelectorAll('[data-node-id]')].map(item => [item.dataset.nodeId, relativeRect(item)]);
+      geometry.edges = [...root.querySelectorAll('#graph-edges > path')].map(item => [item.dataset.edgeId, item.dataset.from, item.dataset.to, item.getAttribute('d')]);
+      const active = document.activeElement;
+      const activeStyle = getComputedStyle(active);
+      const skip = root.querySelector('.skip-link');
+      const skipStyle = getComputedStyle(skip);
+      const skipBox = skip.getBoundingClientRect();
+      return {
+        dom,
+        visibleCopy,
+        stateAttributes,
+        tokens,
+        computedStates,
+        geometry,
+        focus: {
+          active: [active.id, active.getAttribute('role'), activeStyle.outlineWidth, activeStyle.outlineStyle, root.contains(active)],
+          skip: [skip === active, skipStyle.transform, [round(skipBox.left), round(skipBox.top), round(skipBox.width), round(skipBox.height)], skipBox.bottom <= 0],
+        },
+      };
+    })()`);
+
+    const {root: documentNode} = await browser.cdp.send("DOM.getDocument", {depth: 0}, browser.sessionId);
+    const {nodeId} = await browser.cdp.send("DOM.querySelector", {nodeId: documentNode.nodeId, selector: "#shipyard-renderer-root"}, browser.sessionId);
+    const {node} = await browser.cdp.send("DOM.describeNode", {nodeId}, browser.sessionId);
+    const {nodes} = await browser.cdp.send("Accessibility.getFullAXTree", {}, browser.sessionId);
+    const byId = new Map(nodes.map(item => [item.nodeId, item]));
+    const rootNode = nodes.find(item => item.backendDOMNodeId === node.backendNodeId);
+    if (!rootNode) throw new Error("renderer root is absent from the accessibility tree");
+    const accessibility = [];
+    const visit = item => {
+      if (!item.ignored) {
+        const properties = Object.fromEntries((item.properties || [])
+          .filter(property => ["selected", "disabled", "focused", "level", "live", "orientation"].includes(property.name))
+          .map(property => [property.name, property.value?.value]));
+        accessibility.push([item.role?.value || "", item.name?.value || "", properties]);
+      }
+      for (const childId of item.childIds || []) {
+        const child = byId.get(childId);
+        if (child) visit(child);
+      }
+    };
+    visit(rootNode);
+    return {...surface, accessibility, interactions: checkpoints};
+  } finally {
+    await evaluate(browser, `(() => {
+      const item = document.querySelector('#shipyard-renderer-root #host-provenance');
+      item.hidden = ${JSON.stringify(savedProvenance.hidden)};
+      item.textContent = ${JSON.stringify(savedProvenance.text)};
+    })()`);
+  }
 }
 
 function graphNode(id, kind, label, state, projectId = null, limitations = [], reason = null) {
@@ -444,6 +536,9 @@ async function main() {
   let rawScrollBefore = 0;
   let rawScrollAfter = 0;
   let outcomesHeight = 0;
+  const parityCheckpoints = {};
+  let contractSnapshot = null;
+  let hostProof = null;
 
   try {
     const port = await waitForFile(portFile, server);
@@ -453,7 +548,17 @@ async function main() {
 
     const handlePaused = async params => {
       const url = new URL(params.request.url);
-      if (url.pathname === "/api/operator") {
+      if (options.host === "embedded" && url.pathname === "/app.js") {
+        await browser.cdp.send("Fetch.fulfillRequest", {
+          requestId: params.requestId,
+          responseCode: 200,
+          responseHeaders: [
+            {name: "Content-Type", value: "text/javascript; charset=utf-8"},
+            {name: "Cache-Control", value: "no-store"},
+          ],
+          body: Buffer.from("export {};\n").toString("base64"),
+        }, browser.sessionId);
+      } else if (url.pathname === "/api/operator") {
         operatorRequests += 1;
         const document = allowRecovery
           ? (serveRefreshFailed ? sentinel.refreshFailed : sentinel.operator)
@@ -495,13 +600,131 @@ async function main() {
     });
     browser.cdp.on("Network.loadingFailed", params => requestErrors.push(`${requestUrls.get(params.requestId) || "unknown"}:${params.errorText}`));
     browser.cdp.on("Fetch.requestPaused", params => {
-      if (pausedApi) paused.push(params);
+      const pathname = new URL(params.request.url).pathname;
+      if (options.host === "embedded" && pathname === "/app.js") handlePaused(params).catch(error => pageErrors.push(error.message));
+      else if (pausedApi) paused.push(params);
       else handlePaused(params).catch(error => pageErrors.push(error.message));
     });
-    await browser.cdp.send("Fetch.enable", {patterns: [{urlPattern: "*/api/*"}]}, browser.sessionId);
-    await browser.cdp.send("Page.navigate", {url: origin}, browser.sessionId);
+    const fetchPatterns = [{urlPattern: "*/api/*"}];
+    if (options.host === "embedded") fetchPatterns.push({urlPattern: "*/app.js"});
+    await browser.cdp.send("Fetch.enable", {patterns: fetchPatterns}, browser.sessionId);
+    const pageUrl = origin;
+    await browser.cdp.send("Page.navigate", {url: pageUrl}, browser.sessionId);
     await waitFor(browser, "document.readyState === 'interactive' || document.readyState === 'complete'", "DOM ready");
+    if (options.host === "embedded") {
+      await evaluate(browser, `(async () => {
+        document.title = 'Ice · Shipyard';
+        document.open();
+        document.write('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>Ice · Shipyard</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/renderer.css"><style>html,body{min-width:320px;margin:0}#ice-test-shell{min-height:100vh;background:#121721;color:#e7edf7;font-family:system-ui,sans-serif;--signal:#123456}#ice-test-nav{display:flex;align-items:center;min-height:48px;padding:0 16px;border-bottom:1px solid #344054}#ice-test-nav a{color:#9cc7ff;margin-right:16px}#ice-shipyard-region{display:block}</style></head><body><div id="ice-test-shell"><nav id="ice-test-nav" aria-label="Ice Health"><a href="/operations">Operations</a><a href="/shipyard" aria-current="page">Shipyard</a><button id="ice-host-sentinel" type="button" style="color:rgb(1,2,3)">Ice host sentinel</button></nav><div id="ice-shipyard-region"><div id="shipyard-renderer-root"></div></div></div></body></html>');
+        document.close();
+        const hostStyle = document.createElement('style');
+        hostStyle.textContent = 'html,body{min-width:320px;margin:0}#ice-test-shell{min-height:100vh;background:#121721;color:#e7edf7;font-family:system-ui,sans-serif;--signal:#123456}#ice-test-nav{display:flex;align-items:center;min-height:48px;padding:0 16px;border-bottom:1px solid #344054}#ice-test-nav a{color:#9cc7ff;margin-right:16px}#ice-shipyard-region{display:block}';
+        document.head.append(hostStyle);
+        document.getElementById('ice-host-sentinel').style.setProperty('color', 'rgb(1, 2, 3)', 'important');
+        const {mountShipyardRenderer} = await import('/renderer.js');
+        const windows = new Set(['24h','7d','30d']);
+        const createAdapter = () => {
+          const controllers = new Set();
+          let tornDown = false;
+          const fetchJson = async path => {
+            if (tornDown) throw new Error('Embedded dashboard adapter is torn down');
+            const url = new URL(path, location.href);
+            if (url.origin !== location.origin) throw new Error('Cross-origin embedded request blocked');
+            const controller = new AbortController();
+            controllers.add(controller);
+            try {
+              const response = await fetch(url.pathname + url.search, {headers:{Accept:'application/json'},signal:controller.signal});
+              if (!response.ok) throw new Error('Embedded API returned ' + response.status);
+              return response.json();
+            } finally {
+              controllers.delete(controller);
+            }
+          };
+          const routeWindow = new URL(location.href).searchParams.get('window');
+          return {
+            initialWindow: windows.has(routeWindow) ? routeWindow : '7d',
+            hostProvenance: 'Ice host · shared Shipyard renderer',
+            fetchOperator: value => fetchJson('/api/operator?window=' + encodeURIComponent(value)),
+            fetchEvents: (value, limit) => fetchJson('/api/events?window=' + encodeURIComponent(value) + '&limit=' + encodeURIComponent(limit)),
+            subscribe({onOpen,onUpdate,onError}) {
+              if (tornDown) throw new Error('Embedded dashboard adapter is torn down');
+              const source = new EventSource('/api/stream');
+              source.addEventListener('open', onOpen);
+              source.addEventListener('shipyard', onUpdate);
+              source.addEventListener('error', onError);
+              return () => { source.removeEventListener('open',onOpen); source.removeEventListener('shipyard',onUpdate); source.removeEventListener('error',onError); source.close(); };
+            },
+            updateRoute(value) {
+              if (!windows.has(value)) return;
+              const url = new URL(location.href);
+              url.searchParams.set('window', value);
+              history.pushState({shipyardWindow:value}, '', url);
+            },
+            subscribeRoute(onWindow) {
+              const listener = () => {
+                const value = new URL(location.href).searchParams.get('window');
+                onWindow(windows.has(value) ? value : '7d');
+              };
+              addEventListener('popstate', listener);
+              return () => removeEventListener('popstate', listener);
+            },
+            teardown() {
+              tornDown = true;
+              for (const controller of controllers) controller.abort();
+              controllers.clear();
+            },
+          };
+        };
+        window.__mountTestHost = root => mountShipyardRenderer(root, createAdapter());
+        window.__hostUnmount = window.__mountTestHost(document.getElementById('shipyard-renderer-root'));
+        await new Promise(resolve => {
+          const stylesheet = document.querySelector('link[href="/renderer.css"]');
+          if (stylesheet.sheet) resolve();
+          else { stylesheet.addEventListener('load', resolve, {once:true}); stylesheet.addEventListener('error', resolve, {once:true}); }
+        });
+      })()`);
+      await evaluate(browser, `(() => {
+        document.documentElement.style.margin = '0';
+        document.documentElement.style.minWidth = '320px';
+        document.body.style.margin = '0';
+        document.body.style.minWidth = '320px';
+        const shell = document.getElementById('ice-test-shell');
+        shell.style.cssText = 'min-height:100vh;background:#121721;color:#e7edf7;font-family:system-ui,sans-serif;--signal:#123456';
+        const nav = document.getElementById('ice-test-nav');
+        nav.style.cssText = 'display:flex;align-items:center;gap:16px;min-height:48px;padding:0 16px;border-bottom:1px solid #344054;background:#18202d';
+        for (const link of nav.querySelectorAll('a')) {
+          link.style.color = '#9cc7ff';
+          link.style.textDecoration = 'none';
+        }
+        const sentinel = document.getElementById('ice-host-sentinel');
+        sentinel.style.cssText = 'margin-left:auto;min-height:32px;padding:4px 9px;border:1px solid #526071;border-radius:6px;background:#d7dee8;color:rgb(1,2,3)';
+      })()`);
+    } else {
+      await evaluate(browser, `(async () => {
+        const module = await import('/app.js');
+        window.__mountTestHost = root => module.bootstrapStandaloneDashboard(root);
+      })()`);
+    }
     await waitFor(browser, "Boolean(document.getElementById('loading-state'))", "renderer mount shell");
+
+    hostProof = await evaluate(browser, `(() => {
+      const root = document.getElementById('shipyard-renderer-root');
+      const nav = document.getElementById('ice-test-nav');
+      const sentinel = document.getElementById('ice-host-sentinel');
+      return {
+        kind: ${JSON.stringify(options.host)},
+        outerNav: nav ? [nav.getAttribute('aria-label'), nav.textContent.trim(), root.contains(nav)] : null,
+        sentinel: sentinel ? [sentinel.textContent, getComputedStyle(sentinel).color, root.contains(sentinel)] : null,
+        provenance: [document.getElementById('host-provenance').textContent, document.getElementById('host-provenance').hidden],
+      };
+    })()`);
+    if (options.host === "embedded") {
+      verify.deepEqual(hostProof.outerNav, ["Ice Health", "OperationsShipyardIce host sentinel", false], "embedded navigation entered the renderer root");
+      verify.deepEqual(hostProof.sentinel, ["Ice host sentinel", "rgb(1, 2, 3)", false], "embedded host sentinel was changed or nested in the renderer");
+      verify.deepEqual(hostProof.provenance, ["Ice host · shared Shipyard renderer", false], "embedded provenance was not supplied through the adapter slot");
+    } else {
+      verify.deepEqual(hostProof, {kind: "standalone", outerNav: null, sentinel: null, provenance: ["", true]}, "standalone shell unexpectedly contains embedded-host presentation");
+    }
 
     verify.equal(await evaluate(browser, "document.getElementById('loading-state').hidden"), false, "loading state vanished before operator response");
     verify.equal(requestPaths.some(path => path.startsWith("/api/events")), false, "raw events were fetched outside Evidence");
@@ -541,6 +764,7 @@ async function main() {
     verify.ok(degraded.overflow <= 0, `degraded horizontal overflow: ${degraded.overflow}px`);
     verify.deepEqual(degraded.mutationControls, [], "mutation-like controls appeared while degraded");
     verify.equal(degraded.mutationForms, 0, "mutation form appeared while degraded");
+    parityCheckpoints.degraded = degraded;
     degradedScreenshotPath = join(resolve(options.screenshotDir), `dashboard-degraded-${options.width}x${options.height}.png`);
     await screenshot(browser, degradedScreenshotPath);
     verify.ok(unavailableResponses >= 1, "unavailable fixture was not held for inspection");
@@ -569,6 +793,24 @@ async function main() {
     verify.equal(await evaluate(browser, "document.getElementById('window-select').value"), "7d", "shared dashboard did not default to 7d");
     verify.equal(await evaluate(browser, "document.getElementById('brief-takeaway').textContent"), "Repair observed Shipyard core job failure", "core takeaway was not rendered verbatim");
     verify.equal(await evaluate(browser, "document.getElementById('brief-action').textContent"), "Repair 18 observed Shipyard job failures", "qualified core action was not rendered verbatim");
+    const routeSequence = [];
+    for (const windowValue of ["24h", "30d"]) {
+      await evaluate(browser, `(() => {
+        const select = document.getElementById('window-select');
+        select.value = ${JSON.stringify(windowValue)};
+        select.dispatchEvent(new Event('change', {bubbles:true}));
+      })()`);
+      await waitFor(browser, `new URL(location.href).searchParams.get('window') === ${JSON.stringify(windowValue)}`, `${windowValue} route update`);
+      routeSequence.push(await evaluate(browser, "[document.getElementById('window-select').value, new URL(location.href).searchParams.get('window')]"));
+    }
+    await evaluate(browser, "history.back()");
+    await waitFor(browser, "document.getElementById('window-select').value === '24h'", "back route to 24h");
+    routeSequence.push(await evaluate(browser, "[document.getElementById('window-select').value, new URL(location.href).searchParams.get('window')]"));
+    await evaluate(browser, "history.back()");
+    await waitFor(browser, "document.getElementById('window-select').value === '7d'", "back route to default window");
+    routeSequence.push(await evaluate(browser, "[document.getElementById('window-select').value, new URL(location.href).searchParams.get('window')]"));
+    verify.deepEqual(routeSequence, [["24h", "24h"], ["30d", "30d"], ["24h", "24h"], ["7d", "7d"]], "window route/back-forward sequence drifted");
+    parityCheckpoints.windows = routeSequence;
     verify.deepEqual(await evaluate(browser, "[...document.querySelectorAll('.signal-card')].map(card => card.dataset.signalId)"), ["promises_verified", "successful_runs", "attention"], "brief signal order was re-derived");
     verify.equal(await evaluate(browser, "document.querySelector('.attention-summary button').textContent"), "Review 18 records", "summary evidence was not compressed into a count");
     verify.equal(await evaluate(browser, `(() => { const text = document.getElementById('mode-outcomes').innerText; return /\\b[0-9a-f]{16,}\\b/i.test(text); })()`), false, "opaque evidence ID was visible in Outcomes");
@@ -594,6 +836,7 @@ async function main() {
       ["shoulder", "measured"], ["changes", "unknown"],
     ], "outcome/KPI order or states drifted");
     verify.deepEqual(operatorOrder.brief, ["Repair observed Shipyard core job failure", "Repair 18 observed Shipyard job failures"]);
+    parityCheckpoints.operatorOrder = operatorOrder;
     const semanticTokens = await evaluate(browser, `Object.fromEntries(
       [...document.querySelectorAll('[data-source-state]')].map(item => [item.dataset.sourceState, item.dataset.state]))`);
     verify.deepEqual(semanticTokens, {
@@ -602,6 +845,7 @@ async function main() {
       incomplete: "waiting", measured: "measured", observed: "observed", partial: "partial",
       unknown: "unknown", unverified: "unverified", verified: "verified", violated: "violated", waiting: "waiting",
     }, "rendered core enum to semantic-token mapping is incomplete");
+    parityCheckpoints.semanticTokens = semanticTokens;
     verify.equal(await evaluate(browser, "document.querySelector('[data-metric-group=operator_load]').textContent.includes('73')"), true, "supplied operator load lost");
     verify.deepEqual(await evaluate(browser, `(() => {
       const card = document.querySelector('[data-metric-group=reliability]');
@@ -640,6 +884,7 @@ async function main() {
     verify.ok(topology.firstWidth >= 44 && topology.firstHeight >= 44, "graph node target is below 44px");
     verify.notEqual(topology.activityDisplay, "none", "reduced motion removed the static activity mark");
     verify.equal(topology.activityAnimation, "none", "reduced motion retained an activity pulse");
+    parityCheckpoints.architectureGraph = topology;
     verify.equal(await evaluate(browser, `(() => {
       const term = [...document.querySelectorAll('#crew-selection dt')].find(item => item.textContent === 'reason code');
       return term?.nextElementSibling?.textContent;
@@ -706,6 +951,7 @@ async function main() {
       converge: ["delivery:work:left>delivery:work:joined", "delivery:work:right>delivery:work:joined"],
       adjacentNonedge: false,
     }, "branch, convergence, or non-edge semantics drifted");
+    parityCheckpoints.deliveryGraph = deliveryGraph;
     await evaluate(browser, "document.getElementById('window-select').dispatchEvent(new Event('change', {bubbles: true}))");
     await waitFor(browser, "document.querySelectorAll('#graph-edges > path').length === 8", "stable graph selection after refresh");
     verify.equal(await evaluate(browser, "document.getElementById('graph-select').value"), "graph:delivery:demo", "graph selection changed across refresh");
@@ -728,6 +974,10 @@ async function main() {
       rawConflict: document.getElementById('raw-event-list').textContent.includes('raw.conflict.says.clear')
     })`);
     verify.deepEqual(hostileEvidence, {executed: false, elements: false, text: true, rawConflict: true}, "hostile operator text executed or raw evidence was missing");
+    parityCheckpoints.evidence = {
+      selected: await evaluate(browser, "document.querySelector('#evidence-list button[aria-current=true]').dataset.evidenceId"),
+      hostile: hostileEvidence,
+    };
 
     await evaluate(browser, `document.querySelector('#raw-event-list button[data-raw-key*="raw.conflict.says.clear"]').click()`);
     verify.equal(await evaluate(browser, "document.getElementById('raw-detail').textContent.includes('RAW SAYS CLEAR SENTINEL')"), true, "raw evidence cannot be inspected inside Evidence");
@@ -748,10 +998,18 @@ async function main() {
       text: document.querySelector('#story-card .story-body').textContent.includes('<script>window.__hostile=1</script>')
     })`);
     verify.deepEqual(hostileStory, {state: "clear", token: "clear", executed: false, elements: false, text: true}, "story copy/state was changed or executed");
+    parityCheckpoints.story = {
+      heading: await evaluate(browser, "document.querySelector('#story-card .story-heading').textContent"),
+      position: await evaluate(browser, "document.getElementById('story-position').textContent"),
+      hostile: hostileStory,
+    };
     verify.equal(await evaluate(browser, `(() => /\\b[0-9a-f]{16,}\\b/i.test(document.getElementById('mode-story').innerText))()`), false, "opaque evidence ID was visible in Story");
 
     await evaluate(browser, `(() => {
-      document.body.setAttribute('tabindex', '-1'); document.body.focus(); document.body.removeAttribute('tabindex'); window.scrollTo(0, 0);
+      const hostBoundary = document.getElementById('ice-host-sentinel');
+      if (hostBoundary) hostBoundary.focus();
+      else { document.body.setAttribute('tabindex', '-1'); document.body.focus(); document.body.removeAttribute('tabindex'); }
+      window.scrollTo(0, 0);
     })()`);
     await press(browser, "Tab", "Tab", 9);
     verify.equal(await evaluate(browser, "document.activeElement.classList.contains('skip-link')"), true, "skip link is not first keyboard stop");
@@ -796,6 +1054,7 @@ async function main() {
     verify.equal(responsive.graphItems, 8, "semantic delivery graph is incomplete");
     verify.equal(responsive.graphTargets, true, "crew controls are below 44px");
     verify.equal(responsive.promiseChildrenContained, true, "promise content escaped its card");
+    parityCheckpoints.responsive = responsive;
 
     const contrast = await evaluate(browser, `(() => {
       const root = getComputedStyle(document.getElementById('shipyard-renderer-root'));
@@ -805,6 +1064,7 @@ async function main() {
       return Object.fromEntries(['--chalk','--signal','--clear','--waiting','--alarm','--neutral'].map(token => [token, ratio(token,'--hull')]));
     })()`);
     for (const [name, ratio] of Object.entries(contrast)) verify.ok(ratio >= 4.5, `${name} contrast ${ratio} is below 4.5`);
+    parityCheckpoints.contrast = contrast;
 
     verify.deepEqual([...requestOrigins], [origin], `requests escaped same origin: ${[...requestOrigins].join(",")}`);
     verify.equal(requestPaths.some(path => path.startsWith("/api/summary") || path.startsWith("/api/health")), false, "legacy semantic endpoints were fetched");
@@ -861,15 +1121,9 @@ async function main() {
       };
       window.__mountProof = {root, sentinel, counters, listenerRecords, get sentinelClicks() { return sentinelClicks; }};
     })()`);
-    await evaluate(browser, `(async () => {
-      const module = await import('/app.js');
-      window.__phase1Unmount = module.bootstrapStandaloneDashboard(window.__mountProof.root);
-    })()`);
+    await evaluate(browser, "window.__phase1Unmount = window.__mountTestHost(window.__mountProof.root)");
     await waitFor(browser, "document.getElementById('brief-takeaway').textContent === 'Repair observed Shipyard core job failure'", "first standalone remount");
-    await evaluate(browser, `(async () => {
-      const module = await import('/app.js');
-      window.__phase1Unmount = module.bootstrapStandaloneDashboard(window.__mountProof.root);
-    })()`);
+    await evaluate(browser, "window.__phase1Unmount = window.__mountTestHost(window.__mountProof.root)");
     await waitFor(browser, "document.getElementById('brief-takeaway').textContent === 'Repair observed Shipyard core job failure'", "second standalone remount");
     verify.deepEqual(await evaluate(browser, `({
       sources: __mountProof.counters.sources,
@@ -897,17 +1151,33 @@ async function main() {
       rootMarked: __mountProof.root.hasAttribute('data-shipyard-renderer'),
       sentinelClicks: __mountProof.sentinelClicks,
     })`), {sources: 0, observers: 0, rootListeners: 0, rootChildren: 0, rootMarked: false, sentinelClicks: 2}, "explicit teardown left resources, renderer DOM, or duplicate host listeners");
-    await evaluate(browser, `(async () => {
-      const module = await import('/app.js');
-      window.__phase1Unmount = module.bootstrapStandaloneDashboard(window.__mountProof.root);
-    })()`);
+    await evaluate(browser, "window.__phase1Unmount = window.__mountTestHost(window.__mountProof.root)");
     await waitFor(browser, "document.getElementById('brief-takeaway').textContent === 'Repair observed Shipyard core job failure'", "post-teardown remount");
     verify.deepEqual(requestErrors, Array.from({length: 3}, () => "/api/stream:net::ERR_ABORTED"), `unexpected request errors after remount: ${requestErrors.join(" | ")}`);
     verify.deepEqual(consoleErrors, [], `console errors after remount: ${consoleErrors.join(" | ")}`);
     verify.deepEqual(pageErrors, [], `page errors after remount: ${pageErrors.join(" | ")}`);
 
     await evaluate(browser, "document.getElementById('tab-crew').focus(); document.getElementById('tab-crew').click()");
-    screenshotPath = join(resolve(options.screenshotDir), `dashboard-${options.width}x${options.height}.png`);
+    await waitFor(browser, "document.querySelectorAll('#graph-edges > path').length === 3", "final architecture graph");
+    parityCheckpoints.finalMode = await evaluate(browser, `({
+      selectedTab: document.querySelector('[role=tab][aria-selected=true]').id,
+      activePanel: [...document.querySelectorAll('[role=tabpanel]')].find(item => !item.hidden).id,
+      graph: document.getElementById('graph-select').value,
+    })`);
+    contractSnapshot = await rendererContract(browser, origin, parityCheckpoints);
+    if (options.snapshotFile) {
+      await mkdir(dirname(resolve(options.snapshotFile)), {recursive: true});
+      await writeFile(resolve(options.snapshotFile), JSON.stringify({
+        schemaVersion: 1,
+        host: options.host,
+        viewport: `${options.width}x${options.height}`,
+        normalization: ["outer host excluded by renderer-root boundary", "declared host provenance hidden and replaced", "exact asset origin strings replaced", "fixture timestamps replaced"],
+        hostProof,
+        renderer: contractSnapshot,
+      }, null, 2));
+    }
+    const screenshotName = options.host === "standalone" ? "dashboard" : "dashboard-embedded";
+    screenshotPath = join(resolve(options.screenshotDir), `${screenshotName}-${options.width}x${options.height}.png`);
     await screenshot(browser, screenshotPath);
     server.kill("SIGTERM");
     await waitForExit(server);
@@ -915,7 +1185,7 @@ async function main() {
     verify.equal(await evaluate(browser, "document.getElementById('stream-state').textContent"), "Updates paused; retrying locally");
     success = true;
 
-    console.log(`browser=${browser.version.product} executable=${browser.executable}`);
+    console.log(`browser=${browser.version.product} executable=${browser.executable} host=${options.host}`);
     console.log(`viewport=${options.width}x${options.height} overflow=${overflow}px outcomes_height=${outcomesHeight}px`);
     console.log(`operator_requests=${operatorRequests} unavailable_responses=${unavailableResponses} recovered_responses=${recoveredResponses} final_inspection_state=stale operator_wins=true`);
     console.log(`modes=Outcomes,Crew,Evidence,Story keyboard=skip,tabs,node,story focus_outline=${focusOutline}`);
@@ -929,6 +1199,7 @@ async function main() {
     console.log(`degraded_screenshot=${degradedScreenshotPath}`);
     console.log(`exhausted_screenshot=${exhaustedScreenshotPath}`);
     console.log(`screenshot=${screenshotPath}`);
+    if (options.snapshotFile) console.log(`renderer_contract=${resolve(options.snapshotFile)} ax_nodes=${contractSnapshot.accessibility.length} dom_bytes=${Buffer.byteLength(contractSnapshot.dom)}`);
     console.log(`server_port=${port} server_log_lines=${serverLog.trim().split("\n").filter(Boolean).length}`);
   } finally {
     if (browser) {
