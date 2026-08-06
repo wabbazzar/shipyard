@@ -1187,15 +1187,61 @@ class ServerTest(unittest.TestCase):
                 if method != "HEAD":
                     self.assertEqual(json.loads(body)["error"]["code"], "method_not_allowed")
 
+    def test_renderer_assets_are_fixed_mountable_and_digest_covered(self) -> None:
+        static_root = Path(server_module.__file__).resolve().parent / "static"
+        expected_assets = {
+            "/renderer.js": ("renderer.js", "text/javascript"),
+            "/renderer.css": ("renderer.css", "text/css"),
+        }
+        for request_path, (filename, content_type) in expected_assets.items():
+            with self.subTest(asset=request_path):
+                self.assertEqual(server_module.STATIC_FILES.get(request_path), (filename, f"{content_type}; charset=utf-8"))
+                status, headers, body = self.request("GET", request_path)
+                self.assertEqual(status, 200)
+                self.assertTrue(headers["content-type"].startswith(content_type))
+                self.assertEqual(headers["cache-control"], "no-store")
+                self.assertEqual(body, (static_root / filename).read_bytes())
+
+        renderer_source = (static_root / "renderer.js").read_text(encoding="utf-8")
+        self.assertIn("export function mountShipyardRenderer(root, adapter)", renderer_source)
+        self.assertIn("const document = scopedDocument(root)", renderer_source)
+        self.assertIn("activeMounts.get(root)?.()", renderer_source)
+        self.assertIn("return teardown", renderer_source)
+        self.assertNotIn("/api/", renderer_source)
+        self.assertNotIn("new EventSource", renderer_source)
+        self.assertIn('type="module" src="/app.js"', (static_root / "index.html").read_text(encoding="utf-8"))
+
+        digest_paths = set(server_module._SOURCE_DIGEST_PATHS)
+        for relative in (
+            "dashboard/static/index.html",
+            "dashboard/static/favicon.svg",
+            "dashboard/static/styles.css",
+            "dashboard/static/renderer.css",
+            "dashboard/static/app.js",
+            "dashboard/static/renderer.js",
+        ):
+            self.assertIn(relative, digest_paths)
+        with tempfile.TemporaryDirectory() as temporary:
+            repo_root = Path(temporary)
+            for relative in digest_paths:
+                path = repo_root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"fixture:{relative}\n", encoding="utf-8")
+            before = server_module._source_content_digest(repo_root)
+            (repo_root / "dashboard/static/renderer.js").write_text("fixture:renderer-mutated\n", encoding="utf-8")
+            self.assertNotEqual(server_module._source_content_digest(repo_root), before)
+
     def test_fixed_static_routes_cannot_traverse(self) -> None:
         static_root = self.root / "static"
         static_root.mkdir()
         (static_root / "index.html").write_text("<!doctype html><title>fixture</title>", encoding="utf-8")
         (static_root / "favicon.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>", encoding="utf-8")
         (static_root / "styles.css").write_text("body{}", encoding="utf-8")
+        (static_root / "renderer.css").write_text(".shipyard-renderer{}", encoding="utf-8")
         (static_root / "app.js").write_text("'use strict';", encoding="utf-8")
+        (static_root / "renderer.js").write_text("export function mountShipyardRenderer(){}", encoding="utf-8")
         with mock.patch("dashboard.server.STATIC_DIR", static_root):
-            for path, content_type in (("/", "text/html"), ("/index.html", "text/html"), ("/favicon.svg", "image/svg+xml"), ("/styles.css", "text/css"), ("/app.js", "text/javascript")):
+            for path, content_type in (("/", "text/html"), ("/index.html", "text/html"), ("/favicon.svg", "image/svg+xml"), ("/styles.css", "text/css"), ("/renderer.css", "text/css"), ("/app.js", "text/javascript"), ("/renderer.js", "text/javascript")):
                 with self.subTest(path=path):
                     status, headers, body = self.request("GET", path)
                     self.assertEqual(status, 200)

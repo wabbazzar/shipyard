@@ -98,7 +98,9 @@ paths = [
     root / "dashboard" / "static" / "index.html",
     root / "dashboard" / "static" / "favicon.svg",
     root / "dashboard" / "static" / "styles.css",
+    root / "dashboard" / "static" / "renderer.css",
     root / "dashboard" / "static" / "app.js",
+    root / "dashboard" / "static" / "renderer.js",
 ]
 digest = hashlib.sha256()
 for path in paths:
@@ -429,6 +431,7 @@ run_install() {
   echo "events_dir=$EVENTS_DIR (source=$EVENTS_ORIGIN)"
   echo "url=http://$HOST:$PORT"
   echo "manifest=$MANIFEST"
+  echo "asset_digest=$ASSET_DIGEST"
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "DRY RUN: would write manifest mode 0644 and activate only $SERVICE_ID"
     return 0

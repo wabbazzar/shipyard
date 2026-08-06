@@ -72,7 +72,9 @@ STATIC_FILES = {
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),
     "/styles.css": ("styles.css", "text/css; charset=utf-8"),
+    "/renderer.css": ("renderer.css", "text/css; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/renderer.js": ("renderer.js", "text/javascript; charset=utf-8"),
 }
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 _SOURCE_DIGEST_PATHS = (
@@ -80,7 +82,10 @@ _SOURCE_DIGEST_PATHS = (
     "dashboard/reader.py",
     "dashboard/server.py",
     "dashboard/static/app.js",
+    "dashboard/static/favicon.svg",
     "dashboard/static/index.html",
+    "dashboard/static/renderer.css",
+    "dashboard/static/renderer.js",
     "dashboard/static/styles.css",
     "skills/shipyard/shipyard.sh",
     "skills/shipyard/inspect.py",

@@ -260,7 +260,12 @@ install_dashboard_fixture() {
   [ "$output" = "400" ]
   run curl --fail --silent --show-error "http://127.0.0.1:$DASH_PORT/"
   [ "$status" -eq 0 ]
+  [[ "$output" == *'id="shipyard-renderer-root"'* ]]
+  [[ "$output" == *'type="module" src="/app.js"'* ]]
+  run curl --fail --silent --show-error "http://127.0.0.1:$DASH_PORT/renderer.js"
+  [ "$status" -eq 0 ]
   [[ "$output" == *"<h1>Shipyard</h1>"* ]]
+  [[ "$output" == *"export function mountShipyardRenderer(root, adapter)"* ]]
   [ "$(cksum "$DASH_EVENTS/$(date -u +%Y-%m-%d).jsonl")" = "$before" ]
 }
 

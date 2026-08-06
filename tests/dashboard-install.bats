@@ -100,6 +100,22 @@ PY
   [ ! -s "$SHIM_LOG/systemctl.argv" ]
 }
 
+@test "systemd and launchd fingerprint the same complete renderer asset list" {
+  run dashboard --install --dry-run
+  [ "$status" -eq 0 ]
+  systemd_digest="$(printf '%s\n' "$output" | sed -n 's/^asset_digest=//p')"
+  [[ "$systemd_digest" =~ ^[0-9a-f]{64}$ ]]
+
+  run launch_dashboard --install --dry-run --events-dir "$EVENTS_DIR"
+  [ "$status" -eq 0 ]
+  launchd_digest="$(printf '%s\n' "$output" | sed -n 's/^asset_digest=//p')"
+  [ "$launchd_digest" = "$systemd_digest" ]
+  for asset in index.html favicon.svg styles.css renderer.css app.js renderer.js; do
+    grep -Fq "root / \"dashboard\" / \"static\" / \"$asset\"," "$INSTALLER"
+  done
+  echo "renderer_assets=index.html,favicon.svg,styles.css,renderer.css,app.js,renderer.js digest=$systemd_digest"
+}
+
 @test "systemd install bakes loopback paths and is byte-stable at mode 0644" {
   run dashboard --install
   [ "$status" -eq 0 ]

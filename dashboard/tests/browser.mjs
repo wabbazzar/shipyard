@@ -175,7 +175,10 @@ async function launchBrowser(executable, profile, width, height) {
 
 async function evaluate(browser, expression) {
   const result = await browser.cdp.send("Runtime.evaluate", {expression, awaitPromise: true, returnByValue: true}, browser.sessionId);
-  if (result.exceptionDetails) throw new Error(`browser evaluation failed: ${result.exceptionDetails.text}`);
+  if (result.exceptionDetails) {
+    const detail = result.exceptionDetails.exception?.description || result.exceptionDetails.exception?.value || result.exceptionDetails.text;
+    throw new Error(`browser evaluation failed: ${detail}`);
+  }
   return result.result.value;
 }
 
@@ -368,6 +371,12 @@ async function main() {
   };
   sentinel.operator.graphs = browserGraphs();
   sentinel.unavailable.graphs = browserGraphs();
+  sentinel.refreshFailed = structuredClone(sentinel.operator);
+  sentinel.refreshFailed.metadata = {
+    ...sentinel.refreshFailed.metadata,
+    inspection_state: "stale",
+    limitations: ["event_index_refresh_failed"],
+  };
   const seed = JSON.parse(await readFile(join(here, "fixtures", "browser-seed.json"), "utf8"));
   const rows = seed.map(({seconds_ago: secondsAgo, ...event}) => ({
     ts: new Date(Date.now() - secondsAgo * 1000).toISOString(),
@@ -414,6 +423,7 @@ async function main() {
   const requestOrigins = new Set();
   const requestPaths = [];
   const responseStatuses = [];
+  const requestUrls = new Map();
   const pageErrors = [];
   const consoleErrors = [];
   const requestErrors = [];
@@ -421,6 +431,7 @@ async function main() {
   let unavailableResponses = 0;
   let recoveredResponses = 0;
   let allowRecovery = false;
+  let serveRefreshFailed = false;
   let pausedApi = true;
   const paused = [];
   let screenshotPath = "";
@@ -444,7 +455,9 @@ async function main() {
       const url = new URL(params.request.url);
       if (url.pathname === "/api/operator") {
         operatorRequests += 1;
-        const document = allowRecovery ? sentinel.operator : sentinel.unavailable;
+        const document = allowRecovery
+          ? (serveRefreshFailed ? sentinel.refreshFailed : sentinel.operator)
+          : sentinel.unavailable;
         if (allowRecovery) recoveredResponses += 1;
         else unavailableResponses += 1;
         const body = Buffer.from(JSON.stringify(document)).toString("base64");
@@ -465,6 +478,7 @@ async function main() {
     browser.cdp.on("Network.requestWillBeSent", params => {
       if (/^https?:/.test(params.request.url)) {
         const url = new URL(params.request.url);
+        requestUrls.set(params.requestId, url.pathname);
         requestOrigins.add(url.origin);
         requestPaths.push(url.pathname + url.search);
       }
@@ -479,7 +493,7 @@ async function main() {
     browser.cdp.on("Runtime.consoleAPICalled", params => {
       if (params.type === "error") consoleErrors.push(params.args.map(arg => arg.value ?? arg.description ?? "console error").join(" "));
     });
-    browser.cdp.on("Network.loadingFailed", params => requestErrors.push(params.errorText));
+    browser.cdp.on("Network.loadingFailed", params => requestErrors.push(`${requestUrls.get(params.requestId) || "unknown"}:${params.errorText}`));
     browser.cdp.on("Fetch.requestPaused", params => {
       if (pausedApi) paused.push(params);
       else handlePaused(params).catch(error => pageErrors.push(error.message));
@@ -487,6 +501,7 @@ async function main() {
     await browser.cdp.send("Fetch.enable", {patterns: [{urlPattern: "*/api/*"}]}, browser.sessionId);
     await browser.cdp.send("Page.navigate", {url: origin}, browser.sessionId);
     await waitFor(browser, "document.readyState === 'interactive' || document.readyState === 'complete'", "DOM ready");
+    await waitFor(browser, "Boolean(document.getElementById('loading-state'))", "renderer mount shell");
 
     verify.equal(await evaluate(browser, "document.getElementById('loading-state').hidden"), false, "loading state vanished before operator response");
     verify.equal(requestPaths.some(path => path.startsWith("/api/events")), false, "raw events were fetched outside Evidence");
@@ -530,7 +545,7 @@ async function main() {
     await screenshot(browser, degradedScreenshotPath);
     verify.ok(unavailableResponses >= 1, "unavailable fixture was not held for inspection");
     await waitFor(browser, "document.getElementById('operator-state').textContent === 'Fleet inspection unavailable · automatic retries stopped'", "exhausted unavailable polling", 10000);
-    verify.equal(await evaluate(browser, "state.unavailablePolls"), 3, "unavailable polling did not stop at its bound");
+    verify.equal(await evaluate(browser, "document.getElementById('shipyard-renderer-root').dataset.shipyardRenderer"), "mounted", "renderer root was not mounted while polling");
     verify.equal(unavailableResponses, 4, "bounded polling did not use the initial response plus three retries");
     const exhaustedRequests = operatorRequests;
     await new Promise(resolvePromise => setTimeout(resolvePromise, 1200));
@@ -538,20 +553,18 @@ async function main() {
     exhaustedScreenshotPath = join(resolve(options.screenshotDir), `dashboard-exhausted-${options.width}x${options.height}.png`);
     await screenshot(browser, exhaustedScreenshotPath);
     allowRecovery = true;
-    await evaluate(browser, "refreshOperator({preserve: true})");
+    await evaluate(browser, "document.getElementById('window-select').dispatchEvent(new Event('change', {bubbles: true}))");
     await waitFor(browser, "document.getElementById('brief-takeaway').textContent === 'Repair observed Shipyard core job failure'", "bounded operator poll");
     verify.equal(recoveredResponses, 1, "fresh recovery did not use one explicit operator response");
     verify.equal(operatorRequests, unavailableResponses + recoveredResponses, "operator response accounting drifted");
     verify.match(await evaluate(browser, "document.getElementById('operator-state').textContent"), /^Updating fleet evidence · showing the last good snapshot from /, "refreshing snapshot was presented as current");
-    verify.match(await evaluate(browser, `(() => {
-      const original = state.document.metadata.limitations;
-      state.document.metadata.limitations = ["event_index_refresh_failed"];
-      renderOperatorState();
-      const copy = document.getElementById('operator-state').textContent;
-      state.document.metadata.limitations = original;
-      renderOperatorState();
-      return copy;
-    })()`), /^Fleet evidence update failed · showing the last good snapshot from /, "failed refresh was presented as current");
+    serveRefreshFailed = true;
+    await evaluate(browser, "document.getElementById('window-select').dispatchEvent(new Event('change', {bubbles: true}))");
+    await waitFor(browser, "document.getElementById('operator-state').textContent.startsWith('Fleet evidence update failed')", "failed refresh copy");
+    verify.match(await evaluate(browser, "document.getElementById('operator-state').textContent"), /^Fleet evidence update failed · showing the last good snapshot from /, "failed refresh was presented as current");
+    serveRefreshFailed = false;
+    await evaluate(browser, "document.getElementById('window-select').dispatchEvent(new Event('change', {bubbles: true}))");
+    await waitFor(browser, "document.getElementById('brief-takeaway').textContent === 'Repair observed Shipyard core job failure'", "restore fresh fixture");
     verify.equal(sha256(await readFile(eventFile)), fixtureBefore, "operator reads mutated raw evidence");
     verify.equal(await evaluate(browser, "document.getElementById('window-select').value"), "7d", "shared dashboard did not default to 7d");
     verify.equal(await evaluate(browser, "document.getElementById('brief-takeaway').textContent"), "Repair observed Shipyard core job failure", "core takeaway was not rendered verbatim");
@@ -582,13 +595,13 @@ async function main() {
     ], "outcome/KPI order or states drifted");
     verify.deepEqual(operatorOrder.brief, ["Repair observed Shipyard core job failure", "Repair 18 observed Shipyard job failures"]);
     const semanticTokens = await evaluate(browser, `Object.fromEntries(
-      ['complete','incomplete','running','available','measured','partial','observed','declared','fresh','stale','unavailable','future_state']
-        .map(value => [value, stateToken(value)]))`);
+      [...document.querySelectorAll('[data-source-state]')].map(item => [item.dataset.sourceState, item.dataset.state]))`);
     verify.deepEqual(semanticTokens, {
-      complete: "clear", incomplete: "waiting", running: "signal", available: "signal",
-      measured: "measured", partial: "partial", observed: "observed", declared: "declared",
-      fresh: "fresh", stale: "stale", unavailable: "unavailable", future_state: "unknown",
-    }, "core enum to semantic-token mapping is incomplete");
+      ...semanticTokens,
+      alarm: "alarm", available: "signal", declared: "declared",
+      incomplete: "waiting", measured: "measured", observed: "observed", partial: "partial",
+      unknown: "unknown", unverified: "unverified", verified: "verified", violated: "violated", waiting: "waiting",
+    }, "rendered core enum to semantic-token mapping is incomplete");
     verify.equal(await evaluate(browser, "document.querySelector('[data-metric-group=operator_load]').textContent.includes('73')"), true, "supplied operator load lost");
     verify.deepEqual(await evaluate(browser, `(() => {
       const card = document.querySelector('[data-metric-group=reliability]');
@@ -604,7 +617,7 @@ async function main() {
     await waitFor(browser, "document.querySelectorAll('#graph-edges > path').length === 3", "architecture paths");
     const topology = await evaluate(browser, `({
       nodes: [...document.querySelectorAll('.topology-node')].map(item => [item.dataset.nodeId, item.dataset.rank, item.querySelector('.node-card').dataset.sourceState]),
-      supplied: state.document.graphs[0].edges.map(edge => [edge.id, edge.from, edge.to]),
+      supplied: ${JSON.stringify(browserGraphs()[0].edges.map(edge => [edge.id, edge.from, edge.to]))},
       paths: [...document.querySelectorAll('#graph-edges > path')].map(path => [path.dataset.edgeId, path.dataset.from, path.dataset.to]),
       semantic: [...document.querySelectorAll('.route-card')].map(item => [item.dataset.edgeId, item.dataset.from, item.dataset.to]),
       options: [...document.getElementById('graph-select').options].map(option => option.value),
@@ -667,7 +680,7 @@ async function main() {
     })()`);
     await waitFor(browser, "document.querySelectorAll('#graph-edges > path').length === 8", "delivery graph paths");
     const deliveryGraph = await evaluate(browser, `({
-      supplied: state.document.graphs.find(graph => graph.id === 'graph:delivery:demo').edges.map(edge => [edge.id, edge.from, edge.to]),
+      supplied: ${JSON.stringify(browserGraphs().find(graph => graph.id === "graph:delivery:demo").edges.map(edge => [edge.id, edge.from, edge.to]))},
       paths: [...document.querySelectorAll('#graph-edges > path')].map(path => [path.dataset.edgeId, path.dataset.from, path.dataset.to]),
       semantic: [...document.querySelectorAll('.route-card')].map(row => [row.dataset.edgeId, row.dataset.from, row.dataset.to]),
       gaps: [...document.querySelectorAll('[data-node-id] .node-kind')].filter(node => node.textContent === 'missing_stage').length,
@@ -693,7 +706,7 @@ async function main() {
       converge: ["delivery:work:left>delivery:work:joined", "delivery:work:right>delivery:work:joined"],
       adjacentNonedge: false,
     }, "branch, convergence, or non-edge semantics drifted");
-    await evaluate(browser, "renderDocument()");
+    await evaluate(browser, "document.getElementById('window-select').dispatchEvent(new Event('change', {bubbles: true}))");
     await waitFor(browser, "document.querySelectorAll('#graph-edges > path').length === 8", "stable graph selection after refresh");
     verify.equal(await evaluate(browser, "document.getElementById('graph-select').value"), "graph:delivery:demo", "graph selection changed across refresh");
 
@@ -729,11 +742,12 @@ async function main() {
     verify.equal(await evaluate(browser, "document.querySelector('#story-card .story-heading').textContent"), "Alpha beat second", "story keyboard order drifted");
     const hostileStory = await evaluate(browser, `({
       state: document.getElementById('story-card').dataset.sourceState,
+      token: document.getElementById('story-card').dataset.state,
       executed: window.__hostile === 1,
       elements: Boolean(document.querySelector('#story-card img, #story-card script')),
       text: document.querySelector('#story-card .story-body').textContent.includes('<script>window.__hostile=1</script>')
     })`);
-    verify.deepEqual(hostileStory, {state: "clear", executed: false, elements: false, text: true}, "story copy/state was changed or executed");
+    verify.deepEqual(hostileStory, {state: "clear", token: "clear", executed: false, elements: false, text: true}, "story copy/state was changed or executed");
     verify.equal(await evaluate(browser, `(() => /\\b[0-9a-f]{16,}\\b/i.test(document.getElementById('mode-story').innerText))()`), false, "opaque evidence ID was visible in Story");
 
     await evaluate(browser, `(() => {
@@ -742,7 +756,7 @@ async function main() {
     await press(browser, "Tab", "Tab", 9);
     verify.equal(await evaluate(browser, "document.activeElement.classList.contains('skip-link')"), true, "skip link is not first keyboard stop");
     await press(browser, "Enter", "Enter", 13);
-    verify.equal(await evaluate(browser, "document.activeElement.id"), "main", "skip link did not focus main");
+    verify.equal(await evaluate(browser, "document.activeElement.id"), "shipyard-main", "skip link did not focus the renderer main");
 
     await evaluate(browser, "document.getElementById('tab-evidence').click()");
     await evaluate(browser, "document.querySelector('[data-evidence-id=\"ev:first\"]').click()");
@@ -784,7 +798,7 @@ async function main() {
     verify.equal(responsive.promiseChildrenContained, true, "promise content escaped its card");
 
     const contrast = await evaluate(browser, `(() => {
-      const root = getComputedStyle(document.documentElement);
+      const root = getComputedStyle(document.getElementById('shipyard-renderer-root'));
       const rgb = value => { const hex = root.getPropertyValue(value).trim().slice(1); return [0,2,4].map(i => parseInt(hex.slice(i,i+2),16)/255); };
       const lum = value => rgb(value).map(c => c <= .04045 ? c/12.92 : ((c+.055)/1.055)**2.4).reduce((n,c,i) => n + c*[.2126,.7152,.0722][i],0);
       const ratio = (a,b) => (Math.max(lum(a),lum(b))+.05)/(Math.min(lum(a),lum(b))+.05);
@@ -800,6 +814,97 @@ async function main() {
     verify.deepEqual(requestErrors, [], `request errors: ${requestErrors.join(" | ")}`);
     verify.deepEqual(consoleErrors, [], `console errors: ${consoleErrors.join(" | ")}`);
     verify.deepEqual(pageErrors, [], `page errors: ${pageErrors.join(" | ")}`);
+
+    await evaluate(browser, `(() => {
+      const root = document.getElementById('shipyard-renderer-root');
+      const sentinel = document.createElement('button');
+      sentinel.id = 'host-sentinel';
+      sentinel.hidden = true;
+      sentinel.textContent = 'Host navigation sentinel';
+      sentinel.style.color = 'rgb(1, 2, 3)';
+      let sentinelClicks = 0;
+      sentinel.addEventListener('click', () => { sentinelClicks += 1; });
+      root.before(sentinel);
+      document.body.style.setProperty('--signal', '#123456');
+
+      const listenerRecords = [];
+      const add = root.addEventListener.bind(root);
+      const remove = root.removeEventListener.bind(root);
+      root.addEventListener = (type, listener, options) => {
+        listenerRecords.push({type, listener, options});
+        add(type, listener, options);
+      };
+      root.removeEventListener = (type, listener, options) => {
+        const index = listenerRecords.findIndex(record => record.type === type && record.listener === listener);
+        if (index >= 0) listenerRecords.splice(index, 1);
+        remove(type, listener, options);
+      };
+
+      const NativeEventSource = window.EventSource;
+      const NativeResizeObserver = window.ResizeObserver;
+      const counters = {sources: 0, sourceCreated: 0, sourceClosed: 0, observers: 0, observerCreated: 0, observerDisconnected: 0};
+      window.EventSource = class extends NativeEventSource {
+        constructor(...args) { super(...args); this.__active = true; counters.sources += 1; counters.sourceCreated += 1; }
+        close() {
+          if (this.__active) { this.__active = false; counters.sources -= 1; counters.sourceClosed += 1; }
+          return super.close();
+        }
+      };
+      window.ResizeObserver = class {
+        constructor(callback) { this.inner = new NativeResizeObserver(callback); this.active = true; counters.observers += 1; counters.observerCreated += 1; }
+        observe(...args) { return this.inner.observe(...args); }
+        unobserve(...args) { return this.inner.unobserve(...args); }
+        disconnect() {
+          if (this.active) { this.active = false; counters.observers -= 1; counters.observerDisconnected += 1; }
+          return this.inner.disconnect();
+        }
+      };
+      window.__mountProof = {root, sentinel, counters, listenerRecords, get sentinelClicks() { return sentinelClicks; }};
+    })()`);
+    await evaluate(browser, `(async () => {
+      const module = await import('/app.js');
+      window.__phase1Unmount = module.bootstrapStandaloneDashboard(window.__mountProof.root);
+    })()`);
+    await waitFor(browser, "document.getElementById('brief-takeaway').textContent === 'Repair observed Shipyard core job failure'", "first standalone remount");
+    await evaluate(browser, `(async () => {
+      const module = await import('/app.js');
+      window.__phase1Unmount = module.bootstrapStandaloneDashboard(window.__mountProof.root);
+    })()`);
+    await waitFor(browser, "document.getElementById('brief-takeaway').textContent === 'Repair observed Shipyard core job failure'", "second standalone remount");
+    verify.deepEqual(await evaluate(browser, `({
+      sources: __mountProof.counters.sources,
+      sourceCreated: __mountProof.counters.sourceCreated,
+      sourceClosed: __mountProof.counters.sourceClosed,
+      observers: __mountProof.counters.observers,
+      observerCreated: __mountProof.counters.observerCreated,
+      observerDisconnected: __mountProof.counters.observerDisconnected,
+      rootListeners: __mountProof.listenerRecords.map(record => record.type).sort(),
+      hostText: __mountProof.sentinel.textContent,
+      hostColor: getComputedStyle(__mountProof.sentinel).color,
+      rendererSignal: getComputedStyle(__mountProof.root).getPropertyValue('--signal').trim(),
+    })`), {
+      sources: 1, sourceCreated: 2, sourceClosed: 1,
+      observers: 1, observerCreated: 2, observerDisconnected: 1,
+      rootListeners: ["change", "click", "keydown"],
+      hostText: "Host navigation sentinel", hostColor: "rgb(1, 2, 3)", rendererSignal: "#ff9247",
+    }, "remount leaked renderer resources or changed the host sentinel/theme");
+    await evaluate(browser, "__mountProof.sentinel.click(); __mountProof.sentinel.click(); window.__phase1Unmount()");
+    verify.deepEqual(await evaluate(browser, `({
+      sources: __mountProof.counters.sources,
+      observers: __mountProof.counters.observers,
+      rootListeners: __mountProof.listenerRecords.length,
+      rootChildren: __mountProof.root.childElementCount,
+      rootMarked: __mountProof.root.hasAttribute('data-shipyard-renderer'),
+      sentinelClicks: __mountProof.sentinelClicks,
+    })`), {sources: 0, observers: 0, rootListeners: 0, rootChildren: 0, rootMarked: false, sentinelClicks: 2}, "explicit teardown left resources, renderer DOM, or duplicate host listeners");
+    await evaluate(browser, `(async () => {
+      const module = await import('/app.js');
+      window.__phase1Unmount = module.bootstrapStandaloneDashboard(window.__mountProof.root);
+    })()`);
+    await waitFor(browser, "document.getElementById('brief-takeaway').textContent === 'Repair observed Shipyard core job failure'", "post-teardown remount");
+    verify.deepEqual(requestErrors, Array.from({length: 3}, () => "/api/stream:net::ERR_ABORTED"), `unexpected request errors after remount: ${requestErrors.join(" | ")}`);
+    verify.deepEqual(consoleErrors, [], `console errors after remount: ${consoleErrors.join(" | ")}`);
+    verify.deepEqual(pageErrors, [], `page errors after remount: ${pageErrors.join(" | ")}`);
 
     await evaluate(browser, "document.getElementById('tab-crew').focus(); document.getElementById('tab-crew').click()");
     screenshotPath = join(resolve(options.screenshotDir), `dashboard-${options.width}x${options.height}.png`);
@@ -818,6 +923,7 @@ async function main() {
     console.log(`reduced_motion=static_activity_mark contrast=${JSON.stringify(contrast)}`);
     console.log(`hostile_text_inert=true mutation_controls=0 request_origins=${[...requestOrigins].join(",")}`);
     console.log(`network=operator:200,events:200 raw_only_in_evidence=true`);
+    console.log(`mount=non_body teardown=true remounts=3 active_subscription=1 active_observer=1 root_listeners=3 host_isolated=true`);
     console.log(`sse=20_raw_events operator_selection_preserved=true raw_selection_preserved=true window_scroll=${scrollBefore}:${scrollAfter} raw_scroll=${rawScrollBefore}:${rawScrollAfter}`);
     console.log(`fixture_read_checksum=${fixtureBefore} unchanged_before_authorized_append=true`);
     console.log(`degraded_screenshot=${degradedScreenshotPath}`);
