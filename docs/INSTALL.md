@@ -273,20 +273,24 @@ install.sh --doctor --project <project_dir>
 
 It rebuilds the expected manifest from the project's own config (the same
 inputs install uses) and checks it against reality, one `DOCTOR <class>:
-<detail>` line per finding (exit 0 clean, 1 on any drift):
+<detail>` line per finding (exit 0 clean, 1 on any drift). `<class>` is a
+word prefix, not a letter — the prefixes actually emitted are:
 
 | class | catches |
 |-------|---------|
-| a | an expected role's scheduler job missing, disabled, or pointing outside `$QUARTET_DIR` |
-| b | a stale duplicate — more than one job running the same role runner |
-| c | Linux only: a foreign `<crew-unit>.service.d/` drop-in — flagged, never removed |
-| d | retired config keys/sections (USD-era budget decimals, retired vocabulary) |
-| e | a shared-skill symlink missing or not resolving into `$QUARTET_DIR/skills` |
-| f | a `.claude/settings.json` hook command naming a script that does not exist (dead wiring) |
-| g | legacy per-project launcher scripts / crontab lines |
-| h | (hub only) a dispatch decision in `data/news/decisions.jsonl` not mirrored into the target project's `data/decisions.jsonl` |
-| i | (opt-in only — flagged only once a project has enabled shoulder mode) the capture hook not wired into the authoring harness's native config, or `.agents/shoulder.env` missing; fix with `install.sh --wire-shoulder` |
-| identity | (opt-in only) tracked name, repository-local name/email policy, or `core.hooksPath=.githooks` missing or mismatched |
+| `prompt` | an expected `.agents/<role>.md` project prompt is missing |
+| `unit` | an expected role's scheduler job missing, disabled, or pointing outside `$QUARTET_DIR` |
+| `stale` | a stale duplicate — more than one job running the same role runner |
+| `dropin` | Linux only: a foreign `<crew-unit>.service.d/` drop-in — flagged, never removed |
+| `config` | retired config keys/sections (USD-era budget decimals, retired vocabulary) |
+| `identity` | (opt-in only) tracked name, repository-local name/email policy, or `core.hooksPath=.githooks` missing or mismatched |
+| `skill` | a shared-skill symlink missing or not resolving into `$QUARTET_DIR/skills` |
+| `skill bridge` | the root `AGENTS.md` bridge is missing |
+| `hook` | a `.claude/settings.json` hook command naming a script that does not exist (dead wiring) |
+| `launcher` / `cron` | legacy per-project launcher scripts / crontab lines |
+| `ledger` | (hub only) a dispatch decision in `data/news/decisions.jsonl` not mirrored into the target project's `data/decisions.jsonl` |
+| `shoulder` | (opt-in only — flagged only once a project has enabled shoulder mode) the capture hook not wired into the authoring harness's native config, the delivery env or watcher unit/plist missing or stale; fix with `install.sh --wire-shoulder` |
+| `lifecycle` | a ticket sitting in a folder its own `Status:` line contradicts — delegated to `scripts/ticket-lifecycle.sh --check` (a flat project with no lifecycle layout is not a finding) |
 
 It is strictly read-only (no writes or scheduler mutation) and finishes in
 well under a second, so it runs as a `[[medic.checks]]` entry every scan —
@@ -295,7 +299,7 @@ surfacing weeks later.
 
 ## Repair (relink)
 
-Doctor is read-only, so a missing skill symlink (class `e`) otherwise waits for
+Doctor is read-only, so a missing skill symlink (class `skill`) otherwise waits for
 a manual reinstall. Recreating a symlink is a deterministic, reversible
 filesystem op — not a code change — so `--relink` repairs exactly that drift
 class and nothing else:
