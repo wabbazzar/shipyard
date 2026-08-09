@@ -33,11 +33,13 @@ agents/<role>/runner.sh   the entry point each scheduler job calls
 agents/<role>/role.md     generic prompt; project appends .agents/<role>.md
 agents/lib/               load-config.sh naming.sh post-run.sh log_event.sh
                           revert-merge.sh detect-trunk.sh mentat-proposal.sh
+                          spawn.sh outcome-lineage.sh release-verdict.sh
+                          shoulder-wire.sh toml-python.sh
 agents/release/critic-*   shoulder mode (queue → watch → cold critique)
 skills/                   eight shared skills + install skill + gates template
 install.sh                per-project installer / --doctor / --uninstall
 scripts/                  leak-check, deck generator + freshness/render gates
-tests/                    bats suite (676 tests, ~80s)
+tests/                    bats suite (808 tests, ~80s)
 docs/                     INSTALL.md, ADAPTING.md, shoulder-mode.md, the deck
 ```
 
@@ -47,12 +49,13 @@ docs/                     INSTALL.md, ADAPTING.md, shoulder-mode.md, the deck
 bats tests/                      # full suite, ~80s, no network/LLM (PATH shims)
 bash scripts/leak-check.sh       # no owner/machine-specific data (also a pre-commit hook)
 bash scripts/check-deck-fresh.sh # docs/shipyard-data.json regenerates byte-identical
-bash -n install.sh agents/lib/*.sh agents/*/runner.sh   # syntax
+bash -n install.sh agents/lib/*.sh agents/*/runner.sh .githooks/pre-commit scripts/*.sh   # syntax
 node scripts/check-deck-render.mjs   # optional; exit 3 = playwright absent, not a failure
 ```
 
-CI (`.github/workflows/checks.yml`) runs leak-check, `bash -n` + `py_compile`,
-deck-fresh, and bats on push to main and every PR. `core.hooksPath=.githooks`
+CI (`.github/workflows/checks.yml`) runs git-identity, leak-check, `bash -n` +
+`py_compile`, deck-fresh (+ deck-complete), ticket-lifecycle, and bats on push
+to main and every PR. `core.hooksPath=.githooks`
 is set locally, so leak-check blocks commits with a home path, private email,
 or key-shaped string. If you need a literal example of a forbidden pattern, end
 the line with the `leak-allow` marker rather than weakening the regex.
