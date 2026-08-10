@@ -484,6 +484,14 @@ not permission to treat CI as green.
   it publishes those on the dedicated bugfix branch above and retains the
   human-only merge stop. No rebase, force-push, duplicate feature PR, or remote
   rewrite is permitted.
+- 2026-08-10 — publication opened: `builder: inline (remote publication the
+  orchestrator must perform)`. Exact verified head `0407abb` was pushed without
+  switching local `main` and opened as PR
+  `https://github.com/wabbazzar/shipyard/pull/20` against base `cc5fae5`.
+  GitHub reports the PR open, non-draft, mergeable, and initially unstable while
+  required checks run. This Ledger commit is the final intended head; push it to
+  the same branch, wait for all required checks, alert once if green, and do not
+  merge.
 
 ---
 
