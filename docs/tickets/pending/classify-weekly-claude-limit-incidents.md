@@ -215,16 +215,19 @@ git diff --check
 find .. -path '*/.claude/skills/*' -type l -lname '*worktrees*' -print | wc -l  # must print 0
 ```
 
-After those pass, push the exact local head without switching this checkout:
+After those pass, keep this acceptance evidence in its own commits. The
+separately approved proctor-battery ticket is serialized immediately afterward
+on the same canonical local `main`; publish the exact cumulative head for both
+tickets without switching this checkout:
 
 ```bash
 git fetch origin main
 git status --short --branch
 git log --oneline origin/main..HEAD
-git push origin HEAD:refs/heads/feature/medic-weekly-limit-classification
+git push origin HEAD:refs/heads/feature/dispatch-release-medic-hardening
 gh pr create --repo wabbazzar/shipyard --base main \
-  --head feature/medic-weekly-limit-classification \
-  --title "Classify weekly Claude-limit incidents without escalation" \
+  --head feature/dispatch-release-medic-hardening \
+  --title "Harden medic rate limits and proctor battery ownership" \
   --body-file <prepared-body>
 gh pr checks <number> --repo wabbazzar/shipyard --watch --interval 10
 ```
@@ -325,6 +328,31 @@ are success, and no worktree-linked skill symlink exists.
   specialist manifests. Exact RED/GREEN surfaces, bounded delegation briefs,
   fleet-live discipline, and PR-only publication are locked. No runtime code,
   model, notification, service, or remote state changed while polishing.
+- 2026-08-10 — execution baseline: `builder: inline (gate commands the
+  orchestrator must read itself)`. Full Bats passed 808/808; syntax, Python
+  compile, leak, deck freshness/completeness/render, lifecycle, delegation,
+  diff, and worktree-link checks passed. Phase 1 plan: `builder: subagent (1
+  agent)` owns only the helper, medic runner/role, and focused fixture; it must
+  preserve the exact RED before implementing. The orchestrator retains all
+  verification, Ledger edits, staging, and commit authority. No live service,
+  model, notification, or remote action is part of Phase 1.
+- 2026-08-10 — publication route updated: `builder: inline (single-file edit
+  in an already-read ticket)`. This ticket and approved item
+  `mentat:shipyard:9db7c9ba` retain separate commits and acceptance Ledgers but
+  share one cumulative PR from canonical local `main`; no local branch,
+  worktree, rebase, or stacked-PR ancestry is introduced.
+- 2026-08-10 — Phase 1 implementation: `builder: subagent (1 agent)`. The
+  pre-change focused fixture failed 1/1 after recording
+  `class=infra action=freeze:infra notify=2 cooldown=infra`; its expected
+  `rate_limit` assertion failed. The builder then added the bounded helper,
+  config-gated pre-dispatch override, persisted result rewrite, explicit
+  side-effect-free action arm, generic role contract, and five-case fixture.
+  Root independently verified syntax; new focused Bats 5/5; regression reroute
+  1/1; token-cap/no-result compatibility 2/2; leak, diff, and delegation gates
+  all exit 0. The two real wording variants now agree across persisted result,
+  classified/detail telemetry, and action ledger, with zero notification,
+  cooldown/freeze, escalation increment, proposal/build, retry/sleep, or
+  restart; generic, false, and unset paths retain standard escalation.
 
 ---
 

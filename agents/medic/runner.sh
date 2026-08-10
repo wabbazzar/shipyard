@@ -63,6 +63,9 @@ source "${MEDIC_REVERT_LIB:-$QUARTET_DIR/agents/lib/revert-merge.sh}"
 # Shared design-loop proposal writer (D-L15 incident-repair reroute).
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/mentat-proposal.sh"
+# Deterministic incident classification overrides.
+# shellcheck disable=SC1091
+source "$QUARTET_DIR/agents/lib/incident-classification.sh"
 
 # ---------- --self-test: merge → post-merge-fail → revert, both shapes ------
 medic_self_test() {
@@ -183,6 +186,8 @@ TRUNK_BRANCH="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")" || exit 2
 DEV_PORT="$(echo "$CFG_JSON" | jq -r '.dev_port // empty')"
 DAILY_CAP="$(echo "$CFG_JSON" | jq -r '.medic.daily_escalation_cap // 5')"
 POLL_INTERVAL="$(echo "$CFG_JSON" | jq -r '.medic.poll_interval_sec // 600')"
+WEEKLY_LIMIT_CLASSIFICATION="$(echo "$CFG_JSON" | jq -r \
+  '.medic.weekly_limit_classification // false')"
 RESTART_SYSTEMD="$(echo "$CFG_JSON" | jq -r '
   if .medic.restart_systemd == null then true else .medic.restart_systemd end
 ')"
@@ -982,6 +987,28 @@ emit_incident_detail() {
 i=0
 while [ "$i" -lt "$N_CLASS" ]; do
   inc="$(jq -c ".incidents_classified[$i]" "$RESULT_FILE")"
+
+  # A known Claude weekly-limit incident is an external, self-resolving
+  # condition. When the project opts in, deterministically override the model
+  # before telemetry or dispatch. Only the classifier's bounded summary and
+  # hypothesis are inspected; incident identity and all other fields remain.
+  if [ "$WEEKLY_LIMIT_CLASSIFICATION" = "true" ]; then
+    bounded_classification_text="$(jq -r \
+      '[.incident_summary // "", .hypothesis // ""] | join("\n")' <<<"$inc")"
+    if incident_is_weekly_claude_limit "$bounded_classification_text"; then
+      inc="$(jq -c '.class = "rate_limit" | .action = "skip"' <<<"$inc")"
+      classified_tmp="$(mktemp "$RESULT_DIR/.medic-classified.XXXXXX")"
+      if jq --argjson idx "$i" --argjson inc "$inc" \
+          '.incidents_classified[$idx] = $inc' "$RESULT_FILE" >"$classified_tmp"; then
+        mv "$classified_tmp" "$RESULT_FILE"
+      else
+        rm -f "$classified_tmp"
+        echo "[medic] FATAL: could not persist rate_limit classification" >>"$LOG_FILE"
+        exit 1
+      fi
+    fi
+  fi
+
   iid="$(jq -r '.incident_id' <<<"$inc")"
   cls="$(jq -r '.class' <<<"$inc")"
   act="$(jq -r '.action' <<<"$inc")"
@@ -1016,6 +1043,11 @@ while [ "$i" -lt "$N_CLASS" ]; do
   fi
 
   case "$cls" in
+    rate_limit)
+      push_action "$(jq -n --arg iid "$iid" \
+        '{incident_id:$iid, action:"skip", outcome:"rate_limit"}')"
+      ;;
+
     duplicate)
       push_action "$(jq -n --arg iid "$iid" '{incident_id:$iid, action:"skip", outcome:"duplicate"}')"
       ;;

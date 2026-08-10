@@ -65,16 +65,20 @@ configuration.
 1. **forbidden** — failure originates inside a path listed in
    `config.build.forbidden_paths` (auth, chat rendering, agents/ itself).
    Never escalate. Notify hard.
-2. **infra** — disk full, DB corrupt, container OOM, or the same external
+2. **rate_limit** — when `config.medic.weekly_limit_classification` is true
+   and the bounded incident summary or hypothesis explicitly names a Claude
+   weekly limit. Action = skip; the runner verifies this signature
+   deterministically and records it without standard escalation.
+3. **infra** — disk full, DB corrupt, container OOM, or the same external
    service has errored ≥3 times in the cooldown window (check
    `state.cooldowns`). Notify hard, freeze the surface for 24h. No auto-fix.
-3. **transient** — single instance of: network blip, lock contention,
+4. **transient** — single instance of: network blip, lock contention,
    signal-cli down, retry-able SDK error (HTTP 5xx without a code-side
    trigger). Action = retry-once; runner waits 30s and re-checks the unit.
-4. **restart** — a user systemd unit is `state == failed` and the unit name
+5. **restart** — a user systemd unit is `state == failed` and the unit name
    is in the project's whitelist (config), or a stale cron whose last log
    shows clean state and just needs a kick. Action = restart.
-5. **regression** — anything else fixable: test failure, type error, audit
+6. **regression** — anything else fixable: test failure, type error, audit
    failure, MCP `tool_result.is_error` from a project-owned tool, or chat
    `result.is_error` with a non-API-side cause. Action = an incident-repair
    proposal written into the design loop (subject to the daily cap): a human
@@ -143,10 +147,10 @@ The runner expects `tmp/medic-result.json` with this shape:
   "incidents_classified": [
     {
       "incident_id": "...",
-      "class": "forbidden | infra | transient | restart | regression | cap_hit | duplicate",
+      "class": "forbidden | rate_limit | infra | transient | restart | regression | cap_hit | duplicate",
       "surface": "runners | chats",
       "source": "release | build | cron | systemd | chat | probe | freshness | check",
-      "action": "notify | freeze | retry | restart | propose_repair",
+      "action": "skip | notify | freeze | retry | restart | propose_repair",
       "hypothesis": "Concise one-paragraph theory of the failure. Reference specific commits / files / error strings if visible in the evidence. Honest 'unclear' is better than confident bullshit. The build agent reads this — it shapes the fix attempt.",
       "incident_summary": "One short line for the Signal notification."
     }
