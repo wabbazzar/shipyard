@@ -353,6 +353,28 @@ are success, and no worktree-linked skill symlink exists.
   classified/detail telemetry, and action ledger, with zero notification,
   cooldown/freeze, escalation increment, proposal/build, retry/sleep, or
   restart; generic, false, and unset paths retain standard escalation.
+- 2026-08-10 — Phase 2 plan: `builder: subagent (1 agent)`. A cold reviewer
+  owns only Shipyard's explicit `[medic]` opt-in and the existing README
+  medic/notification contract. Root retains the full canonical gate battery,
+  artifact inspection, Ledger, staging, commit, publication, CI, notification,
+  and merge-stop authority.
+- 2026-08-10 — Phase 2 implementation: `builder: subagent (1 agent)`. Cold
+  review found no Phase 1 drift across the persisted result, telemetry, action,
+  and zero-side-effect boundary. Shipyard's machine-local ignored
+  `.agents/config.toml` now explicitly opts in with a parsed boolean `true`;
+  because project install state is intentionally ignored, that live opt-in is
+  not staged or represented as a PR diff. The tracked README documents the
+  bounded grammar, default-false boundary, `rate_limit`/`skip` outcome, and
+  excluded effects in the existing medic and safety-control sections. Builder
+  checks passed syntax, focused Bats 5/5, leak, deck freshness, and diff. Root
+  retains the complete canonical battery and commit below.
+- 2026-08-10 — Phase 2 verification: `builder: inline (gate commands the
+  orchestrator must read itself)`. Root passed the complete 813/813 Bats suite,
+  full shell syntax and Python compile, leak, deck freshness/completeness/render,
+  lifecycle, delegation, diff, and worktree-link checks; the local opt-in parsed
+  as boolean true. A concurrent non-overlapping scribe runner/test edit appeared
+  after the battery; it is preserved, excluded from this ticket's staging, and
+  not attributed to this work.
 
 ---
 

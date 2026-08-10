@@ -83,6 +83,16 @@ events, deduped, capped daily) and the repair waits for the same human stamp
 as any other work. The old medic→build auto-merge side-door is retired:
 `build --mode incident` emits nothing and exits 3.
 
+Weekly Claude usage-limit incidents have an explicit opt-in exception. With
+`[medic].weekly_limit_classification = true`, medic normalizes punctuation and
+case in only the bounded incident summary and hypothesis, then requires all
+three whole tokens `claude`, `weekly`, and `limit`. A match is recorded as
+`rate_limit` with action `skip`; it sends no notification, creates no
+freeze/cooldown, does not consume the daily escalation cap, and creates no
+proposal or build invocation. It also performs no retry, restart, or change to
+the provider's rate-limit behavior. False or unset preserves the existing
+classification and action path exactly.
+
 **Docs (scribe).** Daily: refresh the configured content paths, optionally
 auto-commit/push (`[scribe] auto_commit` / `auto_push`). Scribe failures
 notify only — they never escalate to medic.
@@ -208,6 +218,7 @@ configuration, and it is YOUR job:
 | self-merge | `[medic] can_merge` | **false** |
 | zero-CI merges | `[build] allow_no_ci` — a repo with no CI checks cannot pass the merge gate vacuously | **false** |
 | forbidden paths | `[build] forbidden_paths` — any edit inside one is refused (`forbidden_path:<path>`); medic never escalates failures there | `[]` |
+| weekly Claude-limit classification | `[medic].weekly_limit_classification` — bounded `claude` + `weekly` + `limit` incidents become recorded `rate_limit` / `skip` outcomes with no notification, freeze, proposal/build, retry, or restart | **false/unset** (existing incident path) |
 | spend / scope caps | six independently enforced daily consumers: `design_runner`, `build_runner`, `release_runner`, `release_shoulder_critic`, `medic_runner`, and `scribe_runner`. Inspect reports current-UTC-day attributed use and the gate operand each consumer actually enforces; release runner and shoulder critic remain separate consumers. Per-invocation `wall_clock_sec`, `[design] max_open_proposals`, and `[medic] daily_escalation_cap` are additional guards. | 1M tokens/consumer/day |
 | stall self-heal | `[release] stall_retries` — a mid-stream model stall (no `result.json` written) is retried in-process before the job fails, so a one-off stall self-heals instead of forcing a medic retry. A written verdict (pass **or** fail) is never retried. Each retry is one extra model run. | **0** (off) |
 | false-green guard | `[release] verify_gate` — in hook/daily mode the proctor *self-reports* its verdict; with this set the runner re-runs the real `typecheck` + `test_cmd` and overrides a claimed `pass` to **fail** if either really fails, so a hallucinated green can't reach medic or the dispatch. Costs one real gate run. post-merge already runs the gate deterministically. | **false** (trust the model) |
