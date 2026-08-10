@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-10
 - **Owner:** wabbazzar
-- **Status:** Pending
+- **Status:** Pending — polished; no open decisions
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 5 (two phases: 3 · 2)
@@ -60,6 +60,55 @@ the resulting classified incident.
 There are no open product decisions. Wesley's approved acceptance requires
 both the distinct category and the standard-escalation bypass.
 
+### Open decisions with defaults
+
+None.
+
+### User-decision class
+
+None. The tracked Shipyard opt-in changes a live automation route, but Wesley
+explicitly approved this exact category-plus-bypass behavior through Daily
+Dispatch on 2026-08-10. Publication still stops at a green PR because
+`[medic].can_merge=false`; the builder may not merge it.
+
+**Auto-gate: PROCEED.**
+
+## Orchestration protocol
+
+The builder is the orchestrator. Delegate each implementation/review slice,
+keep every return at or below 40 lines, and personally rerun every named gate
+before every commit. Work only in this canonical checkout on local `main`, in
+small verified commits; do not create or switch to a local branch/worktree.
+Before each edit and commit, run `git status --short --branch` and
+`git log --oneline -3`. If another session changed the head or overlapping
+files, stop staging and reconcile without reset, rebase, force-push, or lost
+history. Scope every `git add` to this ticket's files; never use `git add -A`.
+
+Because `agents/lib/**` and `agents/medic/runner.sh` are fleet-live from this
+checkout, no phase may leave syntax or focused behavior red between commits.
+Do not start `shipyard-suk.service` as a feature gate: that would invoke the
+real classifier and could notify. Prove the action boundary hermetically; after
+publication, the next ordinary timer run loads the merged source.
+
+For every delegated slice:
+
+> Converge honestly or report the precise blocker with the actual evidence —
+> NEVER fake green, weaken a check, or hand-wave "should work". Run the real
+> command, read the real file, curl the real port, and report exact output
+> (exit codes, JSONL lines, HTTP codes), not adjectives.
+
+## Verified polishing baseline — 2026-08-10 CDT
+
+| Surface | Evidence | Consequence |
+|---|---|---|
+| Repository | Draft commit `b0146ca` is the only local commit above clean `origin/main` `73163de`; no unrelated worktree dirt was present before drafting. | Continue on canonical local `main`; push the final exact head to a remote PR branch without switching locally. |
+| Real incidents | Fleet JSONL lines from 2026-07-28 contain the two phrases “Claude weekly-limit outage” and “weekly Claude usage limit”; punctuation/order differs but all three bounded tokens are present. | The RED/GREEN fixture needs both variants and must not use a single literal sentence matcher. |
+| Current action path | `agents/medic/runner.sh:1005-1033` emits classification, then notifies/freezes `infra`/`cap_hit`; `agents/medic/role.md:143-151` has no `rate_limit`/`skip`. | Override and persist the class before event/action dispatch; add a side-effect-free case arm. |
+| Toolchain | `bats --version` → `Bats 1.10.0`; `bats --count tests/` → 808; the pre-change regression-reroute guard passed 1/1. Syntax, Python compile, leak, deck freshness/completeness, and diff checks passed. | Exact focused/full commands below exist on this host. Preserve the pre-change guard as proof non-matching escalation remains real. |
+| Live timer | `shipyard-suk.timer` runs every ten minutes and its service executes `/bin/bash …/agents/medic/runner.sh --project …/shipyard --mode scan` directly from this checkout. | A committed source edit is fleet-live on the next run; keep every phase green and never manually trigger a billable classifier for verification. |
+| Specialists | `find .agents/specialists -name '*.toml'` returned no manifests. | No specialist review applies. |
+| Capability | `.agents/config.toml:52-68` permits PR proposals but keeps `allow_no_ci=false` and `can_merge=false`. | Open a PR only after local gates; require green CI and stop for the human merge stamp. |
+
 ## Technical requirements
 
 - Add one deterministic, sourceable helper under `agents/lib/` for normalized
@@ -99,9 +148,35 @@ both the distinct category and the standard-escalation bypass.
   token accounting, retry, timeout, or backoff.
 - Verification class: focused Bats, shell syntax, public-repo hygiene, diff.
 
-Delegation: subagent — own the helper, runner, role contract, and focused medic
-fixtures; return failing-first output, exact side-effect counts, and focused
-gate results in no more than 40 lines.
+Delegation: subagent — starting from this polished ticket and `b0146ca`, own
+only `agents/lib/incident-classification.sh`, `agents/medic/runner.sh`,
+`agents/medic/role.md`, and the focused medic Bats file. First add the named
+fixture and run it against unchanged runtime code to record the real RED. Then
+implement the helper/override/case arm and compatibility matrix. Do not edit
+config/docs, run a real model, invoke systemd, or notify. Return ≤40 lines:
+files changed; RED and GREEN commands with exit codes/test counts; exact
+result/event/action/notify/cooldown/proposal/build assertions; blockers. Apply
+the anti-cheating clause in the Orchestration protocol verbatim.
+
+**Phase 1 verification surface:**
+
+```bash
+git status --short --branch
+git log --oneline -3
+bash -n agents/lib/incident-classification.sh agents/medic/runner.sh
+bats --filter 'weekly Claude limit' tests/medic-rate-limit-classification.bats
+bats --filter 'reroute: regression-class incident -> proposal' tests/incident-reroute.bats
+bats --filter 'medic gate: over-cap own-svc tokens|an unrelated no-result failure retains normal medic escalation' tests/token-caps.bats tests/release-stall-retry.bats
+git add -N tests/medic-rate-limit-classification.bats agents/lib/incident-classification.sh
+bash scripts/leak-check.sh
+git diff --check
+python3 scripts/delegation-report.py
+```
+
+Observable Phase 1 DoD: the RED ledger names the pre-change notify/freeze or
+proposal side effect; GREEN reports both match variants as persisted/evented
+`rate_limit` + `skip`, zero outward/stateful effects, and unchanged explicit-
+false/unset plus non-match paths.
 
 ### Phase 2 — project opt-in and canonical documentation (2 pts)
 
@@ -114,8 +189,54 @@ gate results in no more than 40 lines.
 - Verification class: full Bats, syntax, leak, deck freshness/completeness,
   ticket lifecycle, delegation report, and clean Git state.
 
-Delegation: subagent — review the opt-in/docs/test delta against the ticket and
-return only drift findings plus exact gate evidence in no more than 40 lines.
+Delegation: subagent — cold-review the complete Phase 1 diff, then own only
+`.agents/config.toml` and `README.md`. Confirm the opt-in is under `[medic]`,
+the README edits the existing medic/notification contract, and no unit/env,
+retry/backoff, or unrelated class behavior changed. Return ≤40 lines: files
+changed; review findings; exact commands/exit codes/test counts; the config and
+README lines proving the boundary; blockers. Apply the anti-cheating clause in
+the Orchestration protocol verbatim.
+
+**Phase 2 verification surface:**
+
+```bash
+git status --short --branch
+git log --oneline -3
+bash -n install.sh agents/lib/*.sh agents/*/runner.sh agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit
+python3 -m py_compile scripts/gen-deck-data.py
+bats tests/
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bash scripts/check-deck-complete.sh
+node scripts/check-deck-render.mjs  # exit 0, or documented exit 3 only when Playwright is absent
+bash scripts/ticket-lifecycle.sh --project . --check
+python3 scripts/delegation-report.py
+git diff --check
+find .. -path '*/.claude/skills/*' -type l -lname '*worktrees*' -print | wc -l  # must print 0
+```
+
+After those pass, push the exact local head without switching this checkout:
+
+```bash
+git fetch origin main
+git status --short --branch
+git log --oneline origin/main..HEAD
+git push origin HEAD:refs/heads/feature/medic-weekly-limit-classification
+gh pr create --repo wabbazzar/shipyard --base main \
+  --head feature/medic-weekly-limit-classification \
+  --title "Classify weekly Claude-limit incidents without escalation" \
+  --body-file <prepared-body>
+gh pr checks <number> --repo wabbazzar/shipyard --watch --interval 10
+```
+
+Do not merge. When all required checks are green, send exactly one PR-ready
+owner alert through the configured `$QUARTET_NOTIFY_CMD`, record its result,
+and stop for the human merge stamp. If GitHub is unavailable, record the exact
+external state and leave the phase pending; never treat missing CI as green.
+
+Observable Phase 2 DoD: 808-or-later full Bats count is green, all canonical
+gates pass, the PR exact head matches local HEAD, all required CI conclusions
+are success, and no worktree-linked skill symlink exists.
 
 ## Testing strategy
 
@@ -144,6 +265,7 @@ return only drift findings plus exact gate evidence in no more than 40 lines.
 - [ ] Unset and explicit-false configuration preserve today's result/event/action behavior.
 - [ ] The generic medic role and existing README document the class, action, config key, and scope boundary.
 - [ ] Focused tests, full Bats, shell syntax, leak, deck freshness/completeness, lifecycle, delegation, and diff gates pass.
+- [ ] Each phase is a small verified commit on canonical local `main`; the final exact head is published through a green PR without a local branch/worktree or self-merge.
 
 ## Boundaries
 
@@ -198,7 +320,12 @@ return only drift findings plus exact gate evidence in no more than 40 lines.
   variants, the absent class, current escalation arms, no duplicate ticket,
   and clean `main` at `73163de`. No runtime code, service, model, notification,
   or network state changed during intake.
+- 2026-08-10 — polished against current config/gates, canonical source, the
+  808-case Bats inventory, live timer wiring, capability settings, and absent
+  specialist manifests. Exact RED/GREEN surfaces, bounded delegation briefs,
+  fleet-live discipline, and PR-only publication are locked. No runtime code,
+  model, notification, service, or remote state changed while polishing.
 
 ---
 
-Draft ready for `polish-ticket`.
+Run `execute-ticket` on this decision-complete ticket.
