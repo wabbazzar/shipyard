@@ -334,14 +334,14 @@ not permission to treat CI as green.
 
 ## Definition of Done
 
-- [ ] A failing-first local config assertion records that Shipyard lacked a configured runner-owned daily Bats gate before this fix.
-- [ ] Shipyard `--check-config` reports `command="bats tests/"`, `timeout_sec=900`, `modes=["daily"]`, and `result_key="batsGate"` while retaining its existing `test_cmd` and `typecheck`.
-- [ ] The project prompt no longer assigns daily Bats execution/background monitoring to the model and preserves post-merge behavior.
-- [ ] Generic configured/absent/malformed blocking-gate behavior and no-result fail-close behavior remain green.
-- [ ] One controlled proctor run waits for the foreground battery, produces a valid result with completed `batsGate`, and makes JSON, event, systemd, and process status agree.
-- [ ] Exit zero is observed only with a nonempty valid result and successful completed `batsGate`; a failed/timeout gate retains its nonzero code.
-- [ ] No retry/backoff, timeout policy outside the blocking-gate table, model/provider, notification, or core runner behavior changes.
-- [ ] Focused tests, full Bats, shell syntax, leak, deck freshness/completeness/render, lifecycle, delegation, and diff gates pass.
+- [x] A failing-first local config assertion records that Shipyard lacked a configured runner-owned daily Bats gate before this fix.
+- [x] Shipyard `--check-config` reports `command="bats tests/"`, `timeout_sec=900`, `modes=["daily"]`, and `result_key="batsGate"` while retaining its existing `test_cmd` and `typecheck`.
+- [x] The project prompt no longer assigns daily Bats execution/background monitoring to the model and preserves post-merge behavior.
+- [x] Generic configured/absent/malformed blocking-gate behavior and no-result fail-close behavior remain green.
+- [x] One controlled proctor run waits for the foreground battery, produces a valid result with completed `batsGate`, and makes JSON, event, systemd, and process status agree.
+- [x] Exit zero is observed only with a nonempty valid result and successful completed `batsGate`; a failed/timeout gate retains its nonzero code.
+- [x] No retry/backoff, timeout policy outside the blocking-gate table, model/provider, notification, or core runner behavior changes.
+- [x] Focused tests, full Bats, shell syntax, leak, deck freshness/completeness/render, lifecycle, delegation, and diff gates pass.
 - [ ] The exact verified head is published through a green PR; the builder does not merge it.
 
 ## Boundaries
@@ -448,6 +448,33 @@ not permission to treat CI as green.
   Phase 1 config/prompt/README evidence and the single controlled live-run
   artifacts. Root alone owns the live start, full gates, artifact capture,
   Ledger, staging, publication-status audit, notification, and merge stop.
+- 2026-08-10 — Phase 2 hermetic/live verification: `builder: inline (gate
+  commands and the single controlled service start the orchestrator must read
+  itself)`. From clean committed head `2b8a971`, root passed syntax, Python
+  compile, full Bats 817/817, leak, deck freshness/completeness/render,
+  lifecycle, delegation, diff, and worktree-link gates. The pre-run public
+  result was 538 bytes at checksum
+  `da06a3e55a151d70e0ea8ae4ac49f5f5012eba2fe0a50cbab2291ca59a5c735d`,
+  passed, and had no
+  `batsGate`. The one and only `systemctl --user start` began at
+  `2026-08-10T14:18:44Z`, blocked until `14:22:38Z`, and returned 0. The new
+  532-byte result checksum
+  `e43a1854e1a6fc285ed5e7445da59236a8b09e02207767369338ea015c84e11c`
+  is valid JSON with top-level
+  `pass:true`, no errors, and exact
+  `batsGate={status:"completed",pass:true,exitCode:0}`. Log lines 3–4 and
+  822–824 order blocking-gate start, TAP `1..817`, case 817, gate end exit 0,
+  and done pass true/exit 0. Systemd reports `Result=success`,
+  `ExecMainStatus=0`; events 689 and 699 record matching start/end with
+  `status=ok`, `duration_s=234`, and `exit_code=0` (the routine notification
+  decision at line 698 was correctly policy-suppressed). No rerun occurred.
+- 2026-08-10 — Phase 2 cold review: `builder: subagent (1 agent)`. The reviewer
+  found no drift: one TAP plan, 817 `ok`, zero `not ok`; exact config/prompt and
+  result assertions; one start/end event pair; systemd success/exit 0; and no
+  second start. `git diff origin/main..HEAD` contains only README and ticket
+  delivery changes—no core runner, unit, tests, retry/backoff, installer,
+  scripts, or hooks. The only remaining DoD item is publication of this
+  root-owned final Ledger through green CI; the builder may not merge it.
 
 ---
 
