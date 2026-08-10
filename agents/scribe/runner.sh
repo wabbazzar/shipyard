@@ -84,6 +84,7 @@ COMMIT_PREFIX="$(jq_from_json "$CFG_JSON" -r '.scribe.commit_message_prefix // "
 AUTO_COMMIT="$(jq_from_json "$CFG_JSON" -r '.scribe.auto_commit // true')"
 AUTO_PUSH="$(jq_from_json "$CFG_JSON" -r '.scribe.auto_push // false')"
 CONTENT_PATHS_JSON="$(jq_from_json "$CFG_JSON" -c '.scribe.content_paths // []')"
+LIFECYCLE_DIRS="$(jq_from_json "$CFG_JSON" -r '(.write_ticket.lifecycle_dirs // false) | tostring')"
 
 # ---------- --check-config: print effective gates, then stop ----------------
 # STRICTLY read-only: no result files, no events, no claude, no network.
@@ -212,6 +213,27 @@ if [ "$PASS" = "true" ]; then JOB_STATUS="ok"; else JOB_STATUS="fail"; fi
 # A nonzero claude exit with a usable result is a PARTIAL run — never ok.
 [ "$JOB_STATUS" = "ok" ] && [ "$EXIT" -ne 0 ] && JOB_STATUS="partial"
 
+# Reconcile lifecycle folders before counting, committing, or pushing model
+# changes. Flat-layout projects and dry-run mode preserve their prior behavior.
+LIFECYCLE_GATE="true"
+LIFECYCLE_EVENT_ARGS=()
+if [ "$MODE" = "daily" ] && [ "$LIFECYCLE_DIRS" = "true" ]; then
+  LIFECYCLE_SCRIPT="$QUARTET_DIR/scripts/ticket-lifecycle.sh"
+  echo "[$SVC] lifecycle: sort --apply" >> "$LOG_FILE"
+  bash "$LIFECYCLE_SCRIPT" --project "$PROJECT_DIR" --sort --apply >> "$LOG_FILE" 2>&1
+  LIFECYCLE_SORT_RC=$?
+  echo "[$SVC] lifecycle: sort rc=$LIFECYCLE_SORT_RC" >> "$LOG_FILE"
+  echo "[$SVC] lifecycle: check" >> "$LOG_FILE"
+  bash "$LIFECYCLE_SCRIPT" --project "$PROJECT_DIR" --check >> "$LOG_FILE" 2>&1
+  LIFECYCLE_CHECK_RC=$?
+  echo "[$SVC] lifecycle: check rc=$LIFECYCLE_CHECK_RC" >> "$LOG_FILE"
+  if [ "$LIFECYCLE_SORT_RC" -ne 0 ] || [ "$LIFECYCLE_CHECK_RC" -ne 0 ]; then
+    LIFECYCLE_GATE="false"
+    JOB_STATUS="fail"
+  fi
+  LIFECYCLE_EVENT_ARGS=(lifecycle_gate="$LIFECYCLE_GATE")
+fi
+
 # Count diffed files inside content_paths only — no commits to anything else.
 CHANGED=0
 if [ "$(jq 'length' <<<"$CONTENT_PATHS_JSON")" -gt 0 ]; then
@@ -231,7 +253,8 @@ echo "[$SVC] changed_files=$CHANGED in content_paths" >> "$LOG_FILE"
 # commit, even if the worktree has other staged changes. This protects
 # against scribe accidentally vacuuming up an in-progress edit.
 COMMIT_OUTCOME="skipped"
-if [ "$MODE" = "daily" ] && [ "$AUTO_COMMIT" = "true" ] && [ "$CHANGED" -gt 0 ]; then
+if [ "$MODE" = "daily" ] && [ "$AUTO_COMMIT" = "true" ] && \
+   [ "$CHANGED" -gt 0 ] && [ "$LIFECYCLE_GATE" = "true" ]; then
   git add -- "${PATHSPECS[@]}" >> "$LOG_FILE" 2>&1 || true
   # `-m` MUST precede the `--` pathspec separator; otherwise `-m` and the
   # message are parsed as pathnames and git rejects them with "pathspec
@@ -270,7 +293,8 @@ JOB_DUR=$(( $(date +%s) - JOB_START ))
 agent_finish "$SVC" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
   --episode "$RUN_EPISODE" --no-escalate \
   mode="$MODE" exit_code="$EXIT" tokens="$TOKENS" changed="$CHANGED" \
-  commit_outcome="$COMMIT_OUTCOME" >> "$LOG_FILE" 2>&1
+  "${LIFECYCLE_EVENT_ARGS[@]}" commit_outcome="$COMMIT_OUTCOME" \
+  >> "$LOG_FILE" 2>&1
 
 echo "[$SVC] done status=$JOB_STATUS changed=$CHANGED commit=$COMMIT_OUTCOME" >> "$LOG_FILE"
 exit 0
