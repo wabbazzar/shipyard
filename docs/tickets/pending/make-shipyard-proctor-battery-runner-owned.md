@@ -305,10 +305,10 @@ head without switching the checkout:
 git fetch origin main
 git status --short --branch
 git log --oneline origin/main..HEAD
-git push origin HEAD:refs/heads/feature/dispatch-release-medic-hardening
+git push origin HEAD:refs/heads/bugfix/shipyard-proctor-runner-owned-battery
 gh pr create --repo wabbazzar/shipyard --base main \
-  --head feature/dispatch-release-medic-hardening \
-  --title "Harden medic rate limits and proctor battery ownership" \
+  --head bugfix/shipyard-proctor-runner-owned-battery \
+  --title "Make Shipyard proctor battery runner-owned" \
   --body-file <prepared-body>
 gh pr checks <number> --repo wabbazzar/shipyard --watch --interval 10
 ```
@@ -475,6 +475,15 @@ not permission to treat CI as green.
   delivery changes—no core runner, unit, tests, retry/backoff, installer,
   scripts, or hooks. The only remaining DoD item is publication of this
   root-owned final Ledger through green CI; the builder may not merge it.
+- 2026-08-10 — publication route reconciled: `builder: inline (single-file
+  edit in an already-read ticket)`. While execution was active, the concurrent
+  session pushed cumulative head `cc5fae5` directly to `origin/main`; GitHub
+  run `31396789550` passed git identity, lifecycle, deck, Bats, leak, and shell.
+  That main already contains the medic feature and incoming scribe fix. This
+  executor's remaining exact diff is only the proctor README/ticket commits, so
+  it publishes those on the dedicated bugfix branch above and retains the
+  human-only merge stop. No rebase, force-push, duplicate feature PR, or remote
+  rewrite is permitted.
 
 ---
 
