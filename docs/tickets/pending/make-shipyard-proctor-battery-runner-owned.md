@@ -222,12 +222,12 @@ git log --oneline -3
 bash -n agents/release/runner.sh
 bats tests/release-blocking-gate.bats tests/release-stall-retry.bats
 agents/release/runner.sh --project . --check-config | jq -e '
-  .release.test_cmd == "bats tests/" and
-  (.release.typecheck | test("bash -n install.sh")) and
-  .release.blocking_gate.command == "bats tests/" and
-  .release.blocking_gate.timeout_sec == 900 and
-  .release.blocking_gate.modes == ["daily"] and
-  .release.blocking_gate.result_key == "batsGate"'
+  .test_cmd == "bats tests/" and
+  (.typecheck | test("bash -n install.sh")) and
+  .blocking_gate.command == "bats tests/" and
+  .blocking_gate.timeout_sec == 900 and
+  .blocking_gate.modes == ["daily"] and
+  .blocking_gate.result_key == "batsGate"'
 grep -F 'Daily Bats is runner-owned' .agents/release.md
 grep -F '[release.blocking_gate]' README.md
 bash scripts/leak-check.sh
@@ -424,6 +424,30 @@ not permission to treat CI as green.
   commit, controlled live start, publication, notification, and merge-stop
   authority. The concurrent scribe runner/test drop is out of scope and must be
   preserved untouched.
+- 2026-08-10 — Phase 1 spec correction: `builder: inline (single-file edit in
+  an already-read ticket)`. The builder correctly found that `--check-config`
+  exposes `test_cmd`, `typecheck`, and `blocking_gate` at the JSON top level;
+  the ticket's nested `.release.*` predicate could never pass. The verification
+  command now targets the existing public output contract. No implementation,
+  gate strength, or acceptance behavior changed.
+- 2026-08-10 — Phase 1 implementation: `builder: subagent (1 agent)`. RED
+  recorded a valid flat `--check-config` response with `blocking_gate:null`.
+  Shipyard's ignored config now retains the approved medic opt-in and adds the
+  exact daily `batsGate` table; the ignored release prompt makes Daily Bats
+  runner-owned, forbids model invoke/background/poll, and preserves hook and
+  post-merge paths. README adds the portable default-unset config contract.
+  Root independently passed the corrected exact config predicate, prompt and
+  README assertions, syntax, the 23/23 generic blocking/stall matrix, TOML
+  semantic assertions, leak, deck freshness, diff, and delegation gates. No
+  core runner, generic role, unit, retry/backoff, medic, or project-specific
+  test changed. While this phase ran, the separately owned scribe fix committed
+  as `cc5fae5` and the concurrent session advanced `origin/main` through that
+  exact cumulative head; no history was rewritten or remote action taken by
+  this executor.
+- 2026-08-10 — Phase 2 plan: `builder: subagent (1 agent)` will cold-review the
+  Phase 1 config/prompt/README evidence and the single controlled live-run
+  artifacts. Root alone owns the live start, full gates, artifact capture,
+  Ledger, staging, publication-status audit, notification, and merge stop.
 
 ---
 
