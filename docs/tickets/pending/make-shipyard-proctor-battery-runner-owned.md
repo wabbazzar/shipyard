@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-10
 - **Owner:** wabbazzar
-- **Status:** Pending
+- **Status:** Pending — polished; no open decisions
 - **Priority:** high
 - **Type:** bugfix
 - **Estimated Points:** 5 (two phases: 3 · 2)
@@ -116,6 +116,43 @@ None. The single controlled live proctor invocation is part of the explicitly
 approved acceptance. Publication remains PR-only and merge remains human-only
 under `can_merge=false`.
 
+**Auto-gate: PROCEED.**
+
+## Orchestration protocol
+
+The builder is the orchestrator. Delegate each implementation/review slice,
+keep every return at or below 40 lines, and personally rerun every named gate
+before every commit. Work only in this canonical checkout on local `main`, in
+small verified commits; do not create or switch to a local branch/worktree.
+Before each edit and commit, run `git status --short --branch` and
+`git log --oneline -3`. If another session changed the head or overlapping
+files, stop staging and reconcile without reset, rebase, force-push, or lost
+history. Scope every `git add` to this ticket's files; never use `git add -A`.
+
+This ticket and the separately approved weekly-limit medic ticket are already
+serialized on the same canonical local `main`. Publish their exact cumulative
+head through one delivery branch and one PR; retain separate tickets, commits,
+acceptance evidence, and Ledger rows. The builder may not merge the PR because
+`[medic].can_merge=false`.
+
+For every delegated slice:
+
+> Converge honestly or report the precise blocker with the actual evidence —
+> NEVER fake green, weaken a check, or hand-wave "should work". Run the real
+> command, read the real file, curl the real port, and report exact output
+> (exit codes, JSONL lines, HTTP codes), not adjectives.
+
+## Verified polishing baseline — 2026-08-10 CDT
+
+| Surface | Evidence | Consequence |
+|---|---|---|
+| Reproduction | The Aug 8 transcript records the 120-second tool ceiling moving Bats to the background and the model ending its one-shot turn without a verdict. The runner synthesized a negative result and emitted outer exit 1. | Repair ownership/completion; preserve the working fail-close invariant and describe transport exit 0 accurately. |
+| Current config | `agents/release/runner.sh --project . --check-config` reports the expected `test_cmd` and `typecheck`, but `blocking_gate:null`. | Activate the already-shipped project opt-in; no core runner edit is justified. |
+| Focused guards | `bats tests/release-blocking-gate.bats tests/release-stall-retry.bats` passed 23/23. | Preserve generic configured/unset/malformed behavior and outer no-result failure while adding a Shipyard adoption guard. |
+| Full baseline | The pre-implementation canonical suite passed 808/808; syntax, Python compile, leak, deck freshness/completeness/render, lifecycle, delegation, and diff gates passed. | Any regression belongs to this delivery unless independently evidenced. |
+| Live unit | `shipyard-proctor.service` is inactive, executes the canonical checkout's release runner, and has a 1h5m start timeout. | After a clean committed hermetic baseline, one foreground `systemctl --user start` is the real completion proof; never start it twice to chase green. |
+| Capability | Shipyard keeps `allow_no_ci=false` and `can_merge=false`. | Require green CI on the cumulative delivery PR and stop for the human stamp. |
+
 ## Technical requirements
 
 - Add this exact table beneath the existing `[release]` config without changing
@@ -159,8 +196,36 @@ under `can_merge=false`.
 - Run the focused generic gate/stall tests plus syntax, leak, and diff gates.
 
 Delegation: subagent — own `.agents/config.toml`, `.agents/release.md`, and the
-focused project-adoption fixture; return the exact RED, GREEN result JSON, and
-focused gate counts in no more than 40 lines.
+focused project-adoption fixture. First add the fixture and run it against the
+unchanged tracked config/prompt to capture the real RED. Do not edit the core
+release runner, generic role, service units, retry/backoff, medic files, or
+remote state. Return no more than 40 lines: files changed; exact RED and GREEN
+commands with exit codes/counts; `--check-config` JSON; prompt ownership phrase;
+blockers. Apply the anti-cheating clause in the Orchestration protocol verbatim.
+
+**Phase 1 verification surface:**
+
+```bash
+git status --short --branch
+git log --oneline -3
+bash -n agents/release/runner.sh
+bats tests/release-blocking-gate.bats tests/release-stall-retry.bats tests/shipyard-proctor-blocking-gate.bats
+agents/release/runner.sh --project . --check-config | jq -e '
+  .release.test_cmd == "bats tests/" and
+  .release.blocking_gate.command == "bats tests/" and
+  .release.blocking_gate.timeout_sec == 900 and
+  .release.blocking_gate.modes == ["daily"] and
+  .release.blocking_gate.result_key == "batsGate"'
+git add -N tests/shipyard-proctor-blocking-gate.bats
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+git diff --check
+python3 scripts/delegation-report.py
+```
+
+Observable Phase 1 DoD: the Ledger records the pre-change
+`blocking_gate:null`/prompt-ownership RED, then the exact configured JSON and a
+focused green matrix; no core runner or service-unit diff exists.
 
 ### Phase 2 — full and controlled live proof (2 pts)
 
@@ -179,7 +244,64 @@ focused gate counts in no more than 40 lines.
 Delegation: subagent — cold-review the Phase 1 diff and the captured live
 artifacts; return drift findings and exact result/journal/event evidence in no
 more than 40 lines. The orchestrator retains the one live start, full gates,
-notification, publication, and commit authority.
+notification, publication, and commit authority. Apply the anti-cheating clause
+in the Orchestration protocol verbatim.
+
+**Phase 2 verification surface before the one live start:**
+
+```bash
+git status --short --branch
+git log --oneline -3
+bash -n install.sh agents/lib/*.sh agents/*/runner.sh agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit
+python3 -m py_compile scripts/gen-deck-data.py
+bats tests/
+bash scripts/leak-check.sh
+bash scripts/check-deck-fresh.sh
+bash scripts/check-deck-complete.sh
+node scripts/check-deck-render.mjs  # exit 0, or documented exit 3 only when Playwright is absent
+bash scripts/ticket-lifecycle.sh --project . --check
+python3 scripts/delegation-report.py
+git diff --check
+find ../* -path '*/.claude/skills/*' -type l -lname '*worktrees*' -print 2>/dev/null | wc -l  # must print 0
+```
+
+Commit the hermetic Phase 1 result and make the worktree clean before the live
+proof. The orchestrator records the old result file's existence, byte count,
+mtime, and checksum without deleting or truncating it; records the unit state;
+then invokes exactly once:
+
+```bash
+systemctl --user start shipyard-proctor.service
+```
+
+That foreground command must be allowed to block. After it returns, record its
+actual exit; `systemctl --user show shipyard-proctor.service` result/status;
+the bounded journal from the captured start timestamp; the new public result's
+valid JSON, nonzero bytes, mtime/checksum, top-level `pass`, and
+`.batsGate == {"status":"completed","pass":true,"exitCode":0}`; and the
+matching terminal `job.end` event from the configured event directory. A real
+failure is written to the Ledger and stops publication until the failure is
+routed; it does not authorize another live start.
+
+After all local acceptance evidence is green, publish the exact cumulative
+head without switching the checkout:
+
+```bash
+git fetch origin main
+git status --short --branch
+git log --oneline origin/main..HEAD
+git push origin HEAD:refs/heads/feature/dispatch-release-medic-hardening
+gh pr create --repo wabbazzar/shipyard --base main \
+  --head feature/dispatch-release-medic-hardening \
+  --title "Harden medic rate limits and proctor battery ownership" \
+  --body-file <prepared-body>
+gh pr checks <number> --repo wabbazzar/shipyard --watch --interval 10
+```
+
+Do not merge. When every required check is green, send exactly one PR-ready
+owner alert through the configured `$QUARTET_NOTIFY_CMD`, record its outcome,
+and stop for the human merge stamp. GitHub unavailability is an external block,
+not permission to treat CI as green.
 
 ## Testing strategy
 
@@ -266,7 +388,14 @@ notification, publication, and commit authority.
   outer fail-close; they ruled in absent Shipyard blocking-gate adoption. No
   runtime code, config, service, model, notification, or remote state changed
   during intake.
+- 2026-08-10 — polished against the real transcript/event distinction, current
+  config and release prompt, existing runner-owned gate implementation, 23/23
+  focused guards, 808/808 full-suite baseline, live service wiring, and
+  project gates/capabilities. Exact RED/GREEN and controlled-live surfaces,
+  bounded delegation briefs, cumulative PR publication, and the one-start rule
+  are locked. No runtime code, config, service, model, notification, or remote
+  state changed while polishing.
 
 ---
 
-Draft ready for `polish-ticket`.
+Run `execute-ticket` on this decision-complete ticket.
