@@ -147,7 +147,7 @@ For every delegated slice:
 | Surface | Evidence | Consequence |
 |---|---|---|
 | Reproduction | The Aug 8 transcript records the 120-second tool ceiling moving Bats to the background and the model ending its one-shot turn without a verdict. The runner synthesized a negative result and emitted outer exit 1. | Repair ownership/completion; preserve the working fail-close invariant and describe transport exit 0 accurately. |
-| Current config | `agents/release/runner.sh --project . --check-config` reports the expected `test_cmd` and `typecheck`, but `blocking_gate:null`. | Activate the already-shipped project opt-in; no core runner edit is justified. |
+| Current config | `agents/release/runner.sh --project . --check-config` reports the expected `test_cmd` and `typecheck`, but `blocking_gate:null`. Shipyard's `.agents/` install state is intentionally ignored. | Activate and prove the machine-local project opt-in; no core runner edit or claim of a tracked config diff is justified. |
 | Focused guards | `bats tests/release-blocking-gate.bats tests/release-stall-retry.bats` passed 23/23. | Preserve generic configured/unset/malformed behavior and outer no-result failure while adding a Shipyard adoption guard. |
 | Full baseline | The pre-implementation canonical suite passed 808/808; syntax, Python compile, leak, deck freshness/completeness/render, lifecycle, delegation, and diff gates passed. | Any regression belongs to this delivery unless independently evidenced. |
 | Live unit | `shipyard-proctor.service` is inactive, executes the canonical checkout's release runner, and has a 1h5m start timeout. | After a clean committed hermetic baseline, one foreground `systemctl --user start` is the real completion proof; never start it twice to chase green. |
@@ -173,35 +173,46 @@ For every delegated slice:
 - Update the project result-field section: `bats` is legacy/model-owned only
   when no matching runner gate exists; `batsGate` is runner-owned and the model
   must omit it. Do not change the generic result schema or core runner.
-- Add a failing-first repository guard in a narrowly named Bats file or
-  `tests/release-blocking-gate.bats` that proves current Shipyard
-  `--check-config` reports a daily blocking gate with the exact command,
-  timeout, and non-colliding key while retaining `test_cmd` for post-merge.
-- The guard must also pin one single-line project-prompt phrase stating Bats is
-  runner-owned in daily mode. Avoid a regex that crosses Markdown wrapping.
+- Capture a failing-first local adoption assertion against the current
+  `--check-config` output: before the config edit it must fail specifically
+  because `blocking_gate:null`; after the edit it must prove the exact command,
+  timeout, mode, result key, and retained `test_cmd`/`typecheck`.
+- Pin one single-line project-prompt phrase stating Bats is runner-owned in
+  daily mode. `.agents/config.toml` and `.agents/release.md` are intentionally
+  ignored project install state, so neither may be represented as a tracked PR
+  diff or a fresh-clone CI guard. Existing tracked generic Bats tests remain the
+  portable regression coverage; the controlled live run is the project-
+  adoption proof.
+- Add the existing README safety/config table's missing
+  `[release.blocking_gate]` row so operators can route long deterministic gates
+  to the synchronous runner-owned mechanism without implying it is universal.
 - Keep all existing generic blocking-gate, stall, incomplete, harness, and
   post-merge tests green. Do not change runner retry/backoff, model invocation,
   service timeout, or notification behavior.
 
 ## Implementation plan
 
-### Phase 1 — activate and guard the runner-owned battery (3 pts)
+### Phase 1 — activate and prove the runner-owned battery config (3 pts)
 
-- Add the project-adoption Bats guard and show it RED against pre-change
-  tracked config/prompt.
+- Run the exact `jq -e` adoption assertion first and show it RED against the
+  pre-change local config (`blocking_gate:null`).
 - Add the blocking-gate table and rewrite only the project-specific Bats/prompt
   contract.
+- Add the generic README safety/config row; do not present the local Shipyard
+  opt-in as a tracked project file.
 - Prove `--check-config` is read-only and reports both the exact blocking gate
   and unchanged `test_cmd`/`typecheck`.
 - Run the focused generic gate/stall tests plus syntax, leak, and diff gates.
 
 Delegation: subagent — own `.agents/config.toml`, `.agents/release.md`, and the
-focused project-adoption fixture. First add the fixture and run it against the
-unchanged tracked config/prompt to capture the real RED. Do not edit the core
-release runner, generic role, service units, retry/backoff, medic files, or
-remote state. Return no more than 40 lines: files changed; exact RED and GREEN
-commands with exit codes/counts; `--check-config` JSON; prompt ownership phrase;
-blockers. Apply the anti-cheating clause in the Orchestration protocol verbatim.
+existing README safety/config table. First run the named local `jq -e`
+assertion against unchanged config to capture the real RED. Do not add a
+project-adoption Bats fixture that would depend on ignored install state; do not
+edit the core release runner, generic role, service units, retry/backoff, medic
+files, or remote state. Return no more than 40 lines: files changed; exact RED
+and GREEN commands with exit codes/counts; `--check-config` JSON; prompt and
+README phrases; ignored/tracked scope; blockers. Apply the anti-cheating clause
+in the Orchestration protocol verbatim.
 
 **Phase 1 verification surface:**
 
@@ -209,14 +220,16 @@ blockers. Apply the anti-cheating clause in the Orchestration protocol verbatim.
 git status --short --branch
 git log --oneline -3
 bash -n agents/release/runner.sh
-bats tests/release-blocking-gate.bats tests/release-stall-retry.bats tests/shipyard-proctor-blocking-gate.bats
+bats tests/release-blocking-gate.bats tests/release-stall-retry.bats
 agents/release/runner.sh --project . --check-config | jq -e '
   .release.test_cmd == "bats tests/" and
+  (.release.typecheck | test("bash -n install.sh")) and
   .release.blocking_gate.command == "bats tests/" and
   .release.blocking_gate.timeout_sec == 900 and
   .release.blocking_gate.modes == ["daily"] and
   .release.blocking_gate.result_key == "batsGate"'
-git add -N tests/shipyard-proctor-blocking-gate.bats
+grep -F 'Daily Bats is runner-owned' .agents/release.md
+grep -F '[release.blocking_gate]' README.md
 bash scripts/leak-check.sh
 bash scripts/check-deck-fresh.sh
 git diff --check
@@ -224,8 +237,10 @@ python3 scripts/delegation-report.py
 ```
 
 Observable Phase 1 DoD: the Ledger records the pre-change
-`blocking_gate:null`/prompt-ownership RED, then the exact configured JSON and a
-focused green matrix; no core runner or service-unit diff exists.
+`blocking_gate:null` assertion RED, then the exact configured JSON and a focused
+23-case green matrix; no core runner, service-unit, or new project-specific
+test diff exists. Git status shows only the README/ticket as tracked delivery
+changes; the local config/prompt remain installed but ignored.
 
 ### Phase 2 — full and controlled live proof (2 pts)
 
@@ -305,9 +320,8 @@ not permission to treat CI as green.
 
 ## Testing strategy
 
-- Capture RED with the new project-adoption guard before editing config/prompt;
-  the expected pre-change failure is `blocking_gate:null` and absent
-  runner-owned daily wording.
+- Capture RED with the exact local `jq -e` adoption assertion before editing
+  config/prompt; the expected pre-change failure is `blocking_gate:null`.
 - Use the existing hermetic generic matrix in
   `tests/release-blocking-gate.bats` and no-result/exit matrix in
   `tests/release-stall-retry.bats`; no fixture may invoke a real model,
@@ -320,7 +334,7 @@ not permission to treat CI as green.
 
 ## Definition of Done
 
-- [ ] A failing-first Bats guard proves Shipyard lacked a configured runner-owned daily Bats gate before this fix.
+- [ ] A failing-first local config assertion records that Shipyard lacked a configured runner-owned daily Bats gate before this fix.
 - [ ] Shipyard `--check-config` reports `command="bats tests/"`, `timeout_sec=900`, `modes=["daily"]`, and `result_key="batsGate"` while retaining its existing `test_cmd` and `typecheck`.
 - [ ] The project prompt no longer assigns daily Bats execution/background monitoring to the model and preserves post-merge behavior.
 - [ ] Generic configured/absent/malformed blocking-gate behavior and no-result fail-close behavior remain green.
@@ -395,6 +409,21 @@ not permission to treat CI as green.
   bounded delegation briefs, cumulative PR publication, and the one-start rule
   are locked. No runtime code, config, service, model, notification, or remote
   state changed while polishing.
+- 2026-08-10 — execution routing correction: `builder: inline (single-file
+  edit in an already-read ticket)`. Shipyard's `.agents/` project state is
+  intentionally ignored, so a tracked project-adoption Bats guard would fail
+  in a fresh CI clone and misroute a project gate into portable core. The
+  failing-first evidence is therefore the exact local `--check-config`
+  assertion; existing 23-case generic Bats coverage remains portable, the
+  controlled service run proves local adoption, and README gains the portable
+  operator-facing config contract. No runtime, service, model, notification,
+  or remote action occurred during this correction.
+- 2026-08-10 — Phase 1 plan: `builder: subagent (1 agent)`. The builder owns
+  only the installed Shipyard release config/prompt and the tracked README
+  config row; root retains all focused/full verification, Ledger, staging,
+  commit, controlled live start, publication, notification, and merge-stop
+  authority. The concurrent scribe runner/test drop is out of scope and must be
+  preserved untouched.
 
 ---
 
