@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-11
 - **Owner:** wabbazzar
-- **Status:** POLISHED — executable; no open owner decision
+- **Status:** COMPLETE — built and verified live 2026-08-11 CDT
 - **Priority:** urgent
 - **Type:** bugfix
 - **Estimated Points:** 3 (two phases)
@@ -187,15 +187,15 @@ git diff --check
 
 ## Definition of Done
 
-- [ ] The captured prompt-order regression fails before implementation and
+- [x] The captured prompt-order regression fails before implementation and
       passes after it.
-- [ ] The assembled critic prompt ends with the immutable response grammar
+- [x] The assembled critic prompt ends with the immutable response grammar
       after every project-controlled evidence block.
-- [ ] Parser strictness and malformed-response exhaustion tests remain green.
-- [ ] Full Shipyard gates pass before both phase commits on `main`.
-- [ ] Aurora's installed watcher runs Claude and delivers a normally parsed
+- [x] Parser strictness and malformed-response exhaustion tests remain green.
+- [x] Full Shipyard gates pass before both phase commits on `main`.
+- [x] Aurora's installed watcher runs Claude and delivers a normally parsed
       Ticket 050 review into the Codex session without manual normalization.
-- [ ] The retained Aurora queue is consumed only after valid persistence and
+- [x] The retained Aurora queue is consumed only after valid persistence and
       delivery; any substantive finding is handled before Ticket 050 commits.
 
 ## Dependencies
@@ -246,7 +246,21 @@ git diff --check
   and diff gates passed. No classifier, retry, budget, delivery, model, or
   provider behavior changed. `builder: ticket050_rival_visual (bounded
   implementation); verifier: root`.
+- 2026-08-11 — Phase 2 complete: Aurora was reinstalled with author Codex and
+  critic Claude. A temporary one-shot of the installed watcher visibly spawned
+  `claude -p`; Claude returned a strictly parseable 0-block/1-warn/3-note
+  review using 5,126 tokens. The watcher persisted the finding, emitted the
+  `release.critique` event, deposited a private mode-0600 pending item for this
+  Codex session, consumed the exact queue, and restarted the normal service.
+  The warning is routed into Aurora Ticket 050 and its phase remains
+  uncommitted until remediated. `builder: root (live service/queue proof)`.
+- 2026-08-11 — Codex's installed runtime wrapper was exercised with this exact
+  project/session after reinstall; the install doctor is clean. It drained the
+  session backlog in order and emitted the new critique
+  `1c81c04e…ad33e0` as the tenth item, proving Claude persistence and actual
+  Codex consumption rather than mailbox deposit alone. `builder: root (native
+  hook and ordered-delivery proof)`.
 
 ---
 
-Polished and ready for `execute-ticket`.
+Built, verified, and ready for deterministic graduation.
