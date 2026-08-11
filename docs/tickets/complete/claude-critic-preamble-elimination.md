@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-11
 - **Owner:** wabbazzar
-- **Status:** POLISHED — executable; no open owner decision
+- **Status:** COMPLETE — built and verified live 2026-08-11 CDT
 - **Priority:** urgent
 - **Type:** bugfix
 - **Estimated Points:** 2 (two phases)
@@ -102,12 +102,12 @@ the complete Phase 1 command matrix before graduation and the lifecycle commit.
 
 ## Definition of Done
 
-- [ ] Prompt regression fails before and passes after the suffix edit.
-- [ ] Terminal contract names concrete valid first bytes and bans preambles,
+- [x] Prompt regression fails before and passes after the suffix edit.
+- [x] Terminal contract names concrete valid first bytes and bans preambles,
       literal `SEVERITY`, text after the sentinel, Markdown, and prose.
-- [ ] Strict malformed-response behavior remains unchanged and green.
-- [ ] Full Shipyard gates pass before both commits.
-- [ ] Aurora's installed Claude critic returns a normally parsed Ticket 050
+- [x] Strict malformed-response behavior remains unchanged and green.
+- [x] Full Shipyard gates pass before both commits.
+- [x] Aurora's installed Claude critic returns a normally parsed Ticket 050
       review and Codex consumes it through the native runtime wrapper.
 
 ## Out of scope
@@ -132,7 +132,13 @@ Aurora application changes; acceptance of any rejected response.
   prompt/malformed tests passed 4/4; full Bats passed 818/818; syntax, leak,
   deck, lifecycle, and diff gates passed. Parser/retry/budget/model/delivery
   code is unchanged. `builder: ticket050_rival_visual; verifier: root`.
+- 2026-08-11 — Phase 2 complete: Aurora was reinstalled and the same four-file
+  Ticket 050 diff that previously exhausted parsed on Claude's first attempt:
+  0 block / 0 warn / 4 note / 5,110 tokens. The queue was consumed after
+  persistence, the native Codex wrapper emitted critique `33ee3f00…861c0`, the
+  normal watcher restarted active, and the install doctor is clean. `builder:
+  root (live service/queue/native-delivery verification)`.
 
 ---
 
-Polished and ready for `execute-ticket`.
+Built, verified, and ready for deterministic graduation.
