@@ -95,7 +95,12 @@ classification and action path exactly.
 
 **Docs (scribe).** Daily: refresh the configured content paths, optionally
 auto-commit/push (`[scribe] auto_commit` / `auto_push`). Scribe failures
-notify only — they never escalate to medic.
+notify only — they never escalate to medic. When `[write_ticket]
+lifecycle_dirs = true`, scribe also reconciles ticket folders
+(`scripts/ticket-lifecycle.sh --sort --apply` then `--check`) before counting
+or committing content-path changes; a lifecycle-gate failure blocks the
+commit and marks the run `fail` (flat-layout projects and dry-run mode are
+untouched).
 
 Humans enter the same loop through two front-door skills: **`/bugfix`**
 (reproduce-and-root-cause first — a failing test, reliable steps, or a
