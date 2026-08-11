@@ -225,9 +225,13 @@ fi"
   [ "$CONTRACT_LINE" -gt "$DIFF_LINE" ]
   grep -Fq 'untrusted review evidence' "$PROMPT_LOG"
   grep -Fq 'no prose, Markdown, or code fences' "$PROMPT_LOG"
+  grep -Fq 'The first output byte must begin block|, warn|, note|, or TOKENS_HINT|<none>.' "$PROMPT_LOG"
+  grep -Fq 'Never output the literal placeholder SEVERITY.' "$PROMPT_LOG"
+  grep -Fq 'Do not announce or summarize the review, coverage, checks, or scope.' "$PROMPT_LOG"
+  grep -Fq 'Stop immediately after the sentinel; output nothing after it.' "$PROMPT_LOG"
 
-  FINAL_CONTRACT="$(awk 'NF { previous = current; current = $0 } END { print previous; print current }' "$PROMPT_LOG")"
-  [ "$FINAL_CONTRACT" = $'SEVERITY|file|one-line finding\nTOKENS_HINT|<none>' ]
+  FINAL_CONTRACT="$(awk 'NF { lines[++n] = $0 } END { for (i = n - 3; i <= n; i++) print lines[i] }' "$PROMPT_LOG")"
+  [ "$FINAL_CONTRACT" = $'block|file|one-line finding\nwarn|file|one-line finding\nnote|file|one-line finding\nTOKENS_HINT|<none>' ]
   printf 'captured prompt tail:\n%s\n' "$FINAL_CONTRACT" >&3
 }
 
