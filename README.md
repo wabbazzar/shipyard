@@ -299,7 +299,8 @@ The installer auto-detects the host OS, bakes the `[names]` theme block into
 the config, and writes either systemd units under
 `~/.config/systemd/user/` or LaunchAgent plists under
 `~/Library/LaunchAgents/`. It then enables the selected jobs, symlinks the
-eight shared skills into `<project>/.claude/skills/`,
+eight shared skills into `<project>/.agents/skills/` (Codex) and
+`<project>/.claude/skills/` (Claude/Hermes),
 writes a root `AGENTS.md` skill bridge for Codex and Hermes when absent, drops
 `skills/gates.md.template` into `.agents/gates.md` (never clobbering an
 existing gate file), removes legacy cron launchers that would race the timers
