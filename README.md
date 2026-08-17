@@ -358,9 +358,14 @@ Exit 0 clean; exit 1 with one `DOCTOR <class>: <detail>` line per finding.
 It checks the manifest install writes — configured or enabled jobs present,
 enabled, pointed at `$QUARTET_DIR`, and backed by the required project prompt;
 no stale duplicate role jobs; no foreign `.service.d` drop-ins on systemd; no
-retired config keys; skill symlinks resolving into `$QUARTET_DIR/skills`; no
-dead `.claude/settings.json` hooks; no legacy launchers/cron; and exact local
-Git identity/hook keys for opted-in projects. Disabled roles absent from
+retired config keys; skill symlinks resolving into `$QUARTET_DIR/skills`; the
+root `AGENTS.md` skill bridge present; no dead `.claude/settings.json` hooks;
+no legacy launchers/cron; exact local Git identity/hook keys for opted-in
+projects; (hub only) mentat dispatch decisions mirrored into the target
+project's `data/decisions.jsonl`; (opt-in only) shoulder-mode wiring — capture
+hook, delivery env, watcher unit/plist; and tickets sitting in a folder their
+own `Status:` line contradicts. See [docs/INSTALL.md](docs/INSTALL.md) for the
+full `DOCTOR <class>` table. Disabled roles absent from
 `[install.timers]` are intentional, not Doctor drift. The audit finishes in
 well under a second, so a `[[medic.checks]]` entry can run it every scan. It
 never writes or touches the scheduler.
