@@ -436,6 +436,7 @@ install.sh does not manage at all) must set it by hand:
 | var | effect |
 |---|---|
 | `QUARTET_NOTIFY_CMD` | notification command taking `(title, body)` — Signal wrapper, `ntfy`, email, or `scripts/notify-macos.sh` for Notification Center; unset = silent (events still log) |
+| | Signal note: signal-cli `styled` mode treats a single `~` as strikethrough (and `*`/`_`/`` ` ``/`||` as bold/italic/mono/spoiler). Role prose that lands in a notification (`incident_summary`, build narratives, critiques) must not contain bare tildes — write "about 30s", not "~30s". A Signal wrapper should escape `~` as `\~` defensively. |
 | `QUARTET_EVENTS_DIR` | where the JSONL event stream lands (default `data/events/` in this repo) |
 | `QUARTET_OPS_JSON` | optional systemd/cron state snapshot for medic's scan |
 | `SHIPYARD_DASHBOARD_PORT` | private loopback dashboard port used by its separate installer/service (default `8765`) |
