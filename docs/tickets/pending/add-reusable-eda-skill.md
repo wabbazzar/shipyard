@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-24
 - **Owner:** wabbazzar
-- **Status:** Draft — ready for polish-ticket
+- **Status:** POLISHED — no open decision; auto-gate to execute-ticket
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 8 (two phases: 5 · 3)
@@ -132,12 +132,29 @@ notification, public endpoint, destructive action, or data transfer.
    and preserve all existing skills byte-for-byte.
 10. Update the canonical README/deck claim and regenerate the generated deck
     data as required by `.agents/config.toml:118-129` and `.agents/gates.md`.
-11. Validate the skill structurally with Skill Creator's validator and
-    behaviorally with an independent, synthetic EDA request in an isolated
-    temporary project; no test may reach a model, network, GitHub, or client
-    data.
+11. Validate the skill structurally with project-aware contract tests and
+    Shipyard's real frontmatter/deck parser, then behaviorally with an
+    independent synthetic EDA planning fixture. The generic Skill Creator
+    `quick_validate.py` is not a valid gate for the tracked file: it rejects
+    Shipyard's required `roles`, `disposition`, and `kind` keys, while
+    `scripts/gen-deck-data.py:52-82` requires them. No test may reach a model,
+    network, GitHub, or client data.
 
 ## Implementation plan
+
+### Orchestration protocol
+
+The builder is the orchestrator: delegate each implementation slice, keep only
+bounded return evidence in the parent context, and personally rerun every gate
+before the phase commit. No specialist manifests are installed, so use generic
+subagents and do not invent a named specialist.
+
+Every delegation brief includes this contract verbatim:
+
+> Converge honestly or report the precise blocker with the actual evidence —
+> NEVER fake green, weaken a check, or hand-wave "should work". Run the real
+> command, read the real file, curl the real port, and report exact output
+> (exit codes, JSONL lines, HTTP codes), not adjectives.
 
 ### Phase 1 — skill contract and independent forward test (5 points)
 
@@ -148,12 +165,53 @@ in an isolated location, reviewing whether the resulting plan exposes the
 backing evidence, unavailable states, modeling boundary, and visual proof
 without domain leakage or free-form conclusions.
 
-**Delegation:** subagent — create the skill contract and supporting reference,
-run structural validation, and return the synthetic forward-test artifacts and
-specific shortcomings for revision.
+**Delegation: subagent —** Work only in `skills/eda/` and
+`tests/eda-contract.bats`. Inputs: this ticket, `skills/ui-design/SKILL.md` as
+the shared-skill/frontmatter precedent, and the generic Skill Creator guidance.
+Create the smallest complete skill and at most one focused reference; add
+failing-first structural/behavioral fixture tests. Do not edit the installer,
+deck, public docs, or commit. Return no more than 40 lines: files changed;
+commands and exit codes; pre-change failing test evidence; final focused test
+count; synthetic-fixture findings; blockers. Converge honestly or report the
+precise blocker with the actual evidence — NEVER fake green, weaken a check, or
+hand-wave "should work". Run the real command, read the real file, curl the real
+port, and report exact output (exit codes, JSONL lines, HTTP codes), not
+adjectives.
 
-High-level proof: Skill Creator validation, focused skill tests, leak firewall,
-and an independent behavioral critique all pass.
+**Applied gate classes:** Bats, deck coupling, public-repo hygiene, delegation
+contract. Config additivity, model caps, systemd, event/notify, served-app, and
+live-system gates do not apply: this phase adds passive guidance and hermetic
+tests only.
+
+**Verification surface before the Phase 1 commit:**
+
+1. Record `git status --short --branch` and `git log --oneline -3`; work only
+   in the canonical checkout. The new Bats cases must fail against the
+   pre-change tree because `skills/eda/SKILL.md` is absent, while any guard for
+   existing skill discovery must pass before the change.
+2. Run `bats tests/eda-contract.bats`; it must cover required Shipyard
+   frontmatter, absence of scaffold text, neutral vocabulary, reproducibility
+   contract, explicit unavailable states, evidence-backed feature/model/test
+   guidance, UI visual proof, and the synthetic mixed-type request. Its
+   synthetic fixture must make at least one KDE/model/test unavailable and
+   assert that the plan reports why; it must not call a model, network, GitHub,
+   or use client data.
+3. Run `python3 scripts/gen-deck-data.py --check --root .`. Before Phase 2 adds
+   `eda` to `GENERIC_SKILLS`, this proves the new frontmatter is parseable and
+   reports the expected deck gap rather than a YAML/frontmatter parse failure;
+   record the exact nonzero output as a known intermediate state. Do not weaken
+   the deck checker.
+4. Stage intent for every new file with `git add -N skills/eda
+   tests/eda-contract.bats`, then run `bash scripts/leak-check.sh` and
+   `git diff --check`; both exit 0. The generic Skill Creator
+   `quick_validate.py` is informational only because its allowed-key list
+   rejects Shipyard-required frontmatter; it is not a tracked-file gate.
+5. Run the full `bats tests/`, syntax sweep from `.agents/gates.md`,
+   `bash scripts/check-deck-fresh.sh`, and
+   `bash scripts/ticket-lifecycle.sh --project . --check`. Except for the
+   explicitly recorded completeness gap caused by a not-yet-installed skill,
+   every command exits 0. Personally inspect the skill and synthetic fixture,
+   then commit this independently useful source contract and tests.
 
 ### Phase 2 — installer, fleet discovery, and public deck (3 points)
 
@@ -165,18 +223,74 @@ matrix, reinstall from the canonical checkout into Maydown and Aurora, and
 verify both links resolve directly to canonical `skills/eda` with no worktree
 targets.
 
-**Delegation:** subagent — implement the installer/tests/deck slice from the
-verified Phase 1 contract and return exact install/link/deck evidence; the
-orchestrator retains live fleet relink and final full-gate responsibility.
+**Delegation: subagent —** Starting from the verified Phase 1 commit, work only
+in `install.sh`, installer/deck Bats tests, `README.md`, `docs/INSTALL.md`,
+`docs/deck-editorial.json`, and generated `docs/shipyard-data.json`. Add `eda`
+to the canonical generic list; pin both discovery roots, idempotence, collision
+preservation, all prior skills, nine-skill deck coverage, and authored deck
+cards/graph coverage. Regenerate rather than hand-edit generated JSON. Do not
+touch live project links or commit. Return no more than 40 lines: files
+changed; commands and exit codes; failing-first evidence; focused test counts;
+generated/deck evidence; blockers. Converge honestly or report the precise
+blocker with the actual evidence — NEVER fake green, weaken a check, or
+hand-wave "should work". Run the real command, read the real file, curl the real
+port, and report exact output (exit codes, JSONL lines, HTTP codes), not
+adjectives.
 
-High-level proof: installer hermetic tests, syntax, full Bats, leak, deck
-freshness/completeness/render, canonical-checkout symlink audit, and read-only
-doctor checks pass.
+**Applied gate classes:** shell, Bats, deck coupling, public-repo hygiene,
+delegation contract, and canonical live-install verification. Config additivity
+does not require a new toggle because `GENERIC_SKILLS` is the established
+additive install registry and the user explicitly selected fleet-wide install.
+Systemd unit generation, model caps, event/notify, and served-app gates do not
+apply because no unit, runner, model, event, or service is changed.
+
+**Verification surface before the Phase 2 commit:**
+
+1. Show the new installer/deck cases failing against the Phase 1 commit before
+   the product edit. Then run
+   `bats tests/eda-contract.bats tests/install-skills.bats tests/harness-install.bats tests/relink.bats tests/doctor.bats tests/uninstall.bats tests/deck-complete.bats`;
+   all cases exit 0. Existing owner-directory collision fixtures must remain
+   untouched and every former generic skill must still resolve byte-for-byte.
+2. Run `bash -n install.sh agents/lib/*.sh agents/*/runner.sh
+   agents/release/critic-*.sh scripts/*.sh .githooks/pre-commit` and
+   `python3 -m py_compile scripts/gen-deck-data.py`; exit 0. Exercise the real
+   installer with hermetic project fixtures in Bats, not a network or model.
+3. Run `python3 scripts/gen-deck-data.py`,
+   `python3 scripts/gen-deck-data.py --check --root .`,
+   `bash scripts/check-deck-fresh.sh`, and
+   `bash scripts/check-deck-complete.sh`; the last reports nine installed
+   skills complete. Run `node scripts/check-deck-render.mjs`; exit 0 is pass and
+   exit 3 is a recorded Playwright SKIP, not a failure disguised as green.
+4. Stage intent for new files, then run `bash scripts/leak-check.sh`,
+   `git diff --check`, full `bats tests/`,
+   `bash scripts/ticket-lifecycle.sh --project . --check`, and
+   `python3 scripts/delegation-report.py --all`; record exact exit codes and
+   counts. Commit only after the orchestrator personally reads all output.
+5. From the canonical checkout, run `bash scripts/reconcile-skills.sh --all`
+   and the installer relink for the Maydown and Aurora project directories
+   resolved from their user-unit `WorkingDirectory` values. For each project,
+   run `bash install.sh --relink --project "$project_dir"`, assert
+   `.agents/skills/eda` and `.claude/skills/eda` are symlinks whose
+   `readlink -f` equals this checkout's `skills/eda`, and assert the count of
+   resolved link targets containing `/.worktrees/` is zero. Run
+   `bash install.sh --doctor --project "$project_dir"`; pre-existing unrelated
+   shoulder findings may remain, but output must contain no missing/broken
+   `eda` finding. Re-run each relink as a dry/idempotent proof and record its
+   repaired/already-current counts.
+6. Graduate this ticket with
+   `bash scripts/ticket-lifecycle.sh --project . --graduate
+   docs/tickets/pending/add-reusable-eda-skill.md`, set status `COMPLETE`, rerun
+   lifecycle/leak/diff/full gates, and include the move in the final phase
+   commit. Publish the exact verified head through a review branch/PR. Because
+   `.agents/config.toml` fixes `can_merge = false` and `allow_no_ci = false`,
+   wait for required CI and never self-merge.
 
 ## Testing strategy
 
-- Skill structure: Skill Creator quick validation and a focused test rejecting
-  missing/invalid frontmatter or placeholder scaffolding.
+- Skill structure: project-aware frontmatter/parser validation and a focused
+  test rejecting missing/invalid frontmatter or placeholder scaffolding. The
+  generic Skill Creator validator's incompatible key allow-list is recorded,
+  not treated as a false failure or weakened.
 - Skill behavior: independent synthetic mixed-type request; inspect its actual
   analysis plan and outputs for reproducibility, type handling, unavailable
   states, and non-causal language.
@@ -205,6 +319,28 @@ doctor checks pass.
 
 - Confirmed owner scope for the Maydown rebuild and fleet-wide skill: satisfied.
 - Consumed by Maydown Ticket 003 after this skill is installed.
+
+## Polishing baseline — 2026-08-24
+
+| Surface | Command / observed result |
+|---|---|
+| Canonical branch | `git status --short --branch` → `main`, one ticket commit ahead of `origin/main`; no worktree checkout. |
+| Full suite | `bats tests/` → 819/819 pass in 251.14 s. |
+| Focused installer | `bats tests/install-skills.bats` → 5/5 pass. |
+| Existing deck | freshness, completeness (8 installed skills), leak, lifecycle, diff, and render gates pass. |
+| Toolchain | Bats 1.10, Python 3.12.3, Node 24.12, npm 9.2, GitHub CLI 2.83. |
+| Fleet links | Maydown/Aurora have canonical `ui-design` links and no `eda` links before this change; relink dry-runs report no baseline repair. |
+| Doctor | existing Maydown/Aurora shoulder findings are unrelated; neither currently has an `eda` finding because the skill is not yet installed. |
+| Specialists | no `.agents/specialists/*.toml` manifests installed; generic delegation applies. |
+
+## Ledger
+
+| Phase | Status | Builder | Evidence |
+|---|---|---|---|
+| Ticket intake | complete | builder: orchestrator | User locked fleet-wide `eda`; Maydown consumes it; no open decision. |
+| Polish | complete | builder: orchestrator | Gate menu/config/toolchain read; 819-test baseline and focused installer baseline green; validator incompatibility pinned. |
+| Phase 1 | pending | builder: delegated subagent; orchestrator verifies | Record commit, failing-first case, focused/full counts, leak/syntax/lifecycle, and synthetic forward-test evidence here. |
+| Phase 2 | pending | builder: delegated subagent; orchestrator verifies | Record commit, focused/full counts, deck result, canonical fleet links, doctors, PR/CI here. |
 
 ## Risks and mitigations
 
