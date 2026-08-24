@@ -283,7 +283,7 @@ collect_signals() {
         note:  ([.[] | select(.event=="release.critique") | (.note  // 0)] | add // 0)
       },
       examples: [.[] | select(.event | test("job.end|medic.|release.critique"))
-                     | {ts, svc, event, status: (.status // null)}] | (sort_by(.ts) | reverse | .[0:5])
+                     | {ts, svc, event, status: (.status // null), reason: (.reason // null)}] | (sort_by(.ts) | reverse | .[0:5])
     }' 2>/dev/null || echo '{}')"
 
   # --- (3) fyi-requests.jsonl -----------------------------------------------
