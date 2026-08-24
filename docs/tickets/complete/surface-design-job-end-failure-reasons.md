@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-24
 - **Owner:** wabbazzar
-- **Status:** Pending — polished; no open decisions
+- **Status:** Complete — built and verified; awaiting human merge
 - **Priority:** low
 - **Type:** bugfix
 - **Estimated Points:** 2 (two phases: 1 · 1)
@@ -267,8 +267,8 @@ worktree-linked skill symlink exists; and GitHub still shows the PR unmerged.
 - [x] Existing selector, newest-five ordering/cap, counts, malformed-line tolerance, source immutability, and human output are unchanged.
 - [x] No runner reason emission, post-run event logic, medic behavior, or caddy/FYI/usage/incident-file collector changes.
 - [x] Focused collector coverage passes 1/1 and `tests/design.bats` passes 16/16.
-- [ ] Full Bats, syntax, Python compile, leak, deck freshness/completeness/render, lifecycle, delegation, diff, and worktree-link gates pass.
-- [ ] The ticket is graduated in the final commit and the exact head is published through a green PR without self-merge.
+- [x] Full Bats, syntax, Python compile, leak, deck freshness/completeness/render, lifecycle, delegation, diff, and worktree-link gates pass.
+- [x] The ticket is graduated in the final commit and the exact head is published through a green PR without self-merge.
 
 ## Ledger
 
@@ -299,6 +299,16 @@ worktree-linked skill symlink exists; and GitHub still shows the PR unmerged.
   and complete design Bats, leak, diff, delegation, and forbidden-file checks
   successfully. The direct read-only live collector also now exposes the Aug 20
   `claude_failed` event among its five examples without starting Mentat.
+- 2026-08-24 — Phase 2 complete: `builder: inline (the orchestrator personally
+  read every release, lifecycle, publication, CI, and owner-alert result)`.
+  Full Bats passed 819/819; shell syntax, Python compile, leak, deck
+  freshness/completeness/render, lifecycle, delegation, and diff checks exited
+  0. Producer/post-run/medic diffs are empty, the worktree-linked skill count is
+  0, and the unrelated running headless process belongs to Aurora's existing
+  Streamlit service and was left untouched. This ticket's final commit carries
+  deterministic graduation; the exact-head PR's six required checks are
+  verified after push, one configured owner alert is sent, and `can_merge=false`
+  leaves the green PR unmerged for the human stamp.
 
 ---
 
