@@ -132,6 +132,46 @@ PY
     | .state=="available" and .reason=="ok" and .configured==false' >/dev/null
 }
 
+@test "collectors preserve job.end failure reason in examples" {
+  P="$(make_fixture_project mentreason names-spacetime.toml)"
+  EVENT_SOURCE="$(events_file)"
+  TODAY="$(date -u +%Y-%m-%d)"
+  printf '%s\n' \
+    "{\"ts\":\"${TODAY}T01:00:00Z\",\"svc\":\"mentreason-release\",\"event\":\"job.end\",\"status\":\"fail\",\"reason\":\"claude_failed\"}" \
+    "{\"ts\":\"${TODAY}T02:00:00Z\",\"svc\":\"mentreason-release\",\"event\":\"job.end\",\"status\":\"ok\"}" \
+    >"$EVENT_SOURCE"
+
+  SOURCE_JSON="$(jq -cs '.' "$EVENT_SOURCE")"
+  echo "$SOURCE_JSON" | jq -e '
+    length == 2 and length < 5 and
+    any(.[]; .status == "fail" and .reason == "claude_failed") and
+    any(.[]; .status == "ok" and (has("reason") | not))' >/dev/null
+  CHECKSUM_BEFORE="$(source_checksums "$EVENT_SOURCE")"
+  PROJECT_BEFORE="$(git -C "$P" status --porcelain)"
+
+  run bash -c "QUARTET_DIR='$QUARTET_ROOT' QUARTET_EVENTS_DIR='$EVENTS_DIR' \
+    bash '$QUARTET_ROOT/$COLLECTORS' --project '$P' --json"
+  [ "$status" -eq 0 ]
+
+  CHECKSUM_AFTER="$(source_checksums "$EVENT_SOURCE")"
+  PROJECT_AFTER="$(git -C "$P" status --porcelain)"
+  [ "$CHECKSUM_AFTER" = "$CHECKSUM_BEFORE" ]
+  [ "$PROJECT_AFTER" = "$PROJECT_BEFORE" ]
+
+  PROJECTED="$(echo "$output" | jq -c '.sources.events.examples')"
+  echo "checksum_before=$CHECKSUM_BEFORE"
+  echo "checksum_after=$CHECKSUM_AFTER"
+  echo "project_before=${PROJECT_BEFORE:-<clean>}"
+  echo "project_after=${PROJECT_AFTER:-<clean>}"
+  echo "source=$SOURCE_JSON"
+  echo "projected=$PROJECTED"
+  echo "$PROJECTED" | jq -e '
+    length == 2 and
+    all(.[]; has("reason")) and
+    any(.[]; .status == "fail" and .reason == "claude_failed") and
+    any(.[]; .status == "ok" and .reason == null)' >/dev/null
+}
+
 @test "collectors usage_path reads a valid project-relative non-zero source" {
   P="$(make_fixture_project mentusagecustom names-spacetime.toml)"
   cat >>"$P/.agents/config.toml" <<'EOF'

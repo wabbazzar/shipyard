@@ -261,12 +261,12 @@ worktree-linked skill symlink exists; and GitHub still shows the PR unmerged.
 
 ## Definition of Done
 
-- [ ] A failing-first hermetic test proves a source `job.end` reason is dropped by the pre-change examples projection.
-- [ ] A failed `job.end` example preserves `reason:"claude_failed"` exactly.
-- [ ] Every projected example has a `reason` key; absent/null source reasons become JSON null.
-- [ ] Existing selector, newest-five ordering/cap, counts, malformed-line tolerance, source immutability, and human output are unchanged.
-- [ ] No runner reason emission, post-run event logic, medic behavior, or caddy/FYI/usage/incident-file collector changes.
-- [ ] Focused collector coverage passes 1/1 and `tests/design.bats` passes 16/16.
+- [x] A failing-first hermetic test proves a source `job.end` reason is dropped by the pre-change examples projection.
+- [x] A failed `job.end` example preserves `reason:"claude_failed"` exactly.
+- [x] Every projected example has a `reason` key; absent/null source reasons become JSON null.
+- [x] Existing selector, newest-five ordering/cap, counts, malformed-line tolerance, source immutability, and human output are unchanged.
+- [x] No runner reason emission, post-run event logic, medic behavior, or caddy/FYI/usage/incident-file collector changes.
+- [x] Focused collector coverage passes 1/1 and `tests/design.bats` passes 16/16.
 - [ ] Full Bats, syntax, Python compile, leak, deck freshness/completeness/render, lifecycle, delegation, diff, and worktree-link gates pass.
 - [ ] The ticket is graduated in the final commit and the exact head is published through a green PR without self-merge.
 
@@ -280,6 +280,25 @@ worktree-linked skill symlink exists; and GitHub still shows the PR unmerged.
   recent ticket convention, absent specialists, and green main CI. The approved
   scope has no open decision. No product code, config, service, model,
   notification, or remote state changed during polish.
+- 2026-08-24 — Phase 1 plan: `builder: subagent (1 agent)` owns only the
+  collector projection and canonical design test. It must capture the isolated
+  failing-first assertion before the one-field edit, preserve the fixture
+  checksum/read-only contract, and return bounded evidence. Root retains all
+  independent gates, Ledger edits, staging, and commit authority. Phase 2 is
+  `builder: inline (gate, lifecycle, publication, CI, and owner-alert commands
+  the orchestrator must read itself)`.
+- 2026-08-24 — Phase 1 RED/GREEN: the delegated builder added the isolated
+  two-event fixture while `agents/design/collectors.sh` still matched committed
+  SHA-256 `0e36d14f...f6de48`. The focused test failed 0/1: its source retained
+  `reason:"claude_failed"`, while both projected examples omitted `reason`;
+  source checksum `6c677610...c8280b` and the fixture project's clean status
+  were unchanged. Adding only `reason: (.reason // null)` made focused coverage
+  pass 1/1 and `tests/design.bats` pass 16/16; the failed example retained
+  `claude_failed`, the reason-less example became `null`, and both acquired the
+  key. `builder: inline (independent gate commands)` reran shell syntax, focused
+  and complete design Bats, leak, diff, delegation, and forbidden-file checks
+  successfully. The direct read-only live collector also now exposes the Aug 20
+  `claude_failed` event among its five examples without starting Mentat.
 
 ---
 
