@@ -71,12 +71,18 @@ grades against. Asked for at install time; never inferred.
 `<project>/.claude/skills/` for Claude/Hermes (both symlink into
 `<harness>/skills/`), plus the root `AGENTS.md` bridge.
 **What:** `write-ticket`, `bugfix`, `feature`, `polish-ticket`, `execute-ticket`,
-`coverage-audit`, `shipyard`, `ui-design` — **the same files agents load
+`coverage-audit`, `shipyard`, `ui-design`, `eda` — **the same files agents load
 headless and humans invoke in-session.** The installer creates `AGENTS.md` when absent and never
 changes a project-owned one; a core upgrade therefore reaches both discovery
 roots without an agent-only fork. Shipyard guarantees repository-local
 discovery, not registration or labeling in a host-managed/global skill-picker
 UI.
+
+`eda` keeps exploratory analysis evidence-first and reproducible: typed column
+profiles, distributions and relationships, feature recommendations,
+interpretable baselines, statistical tests, explicit unavailable states, and
+rendered verification all remain tied to named backing data rather than
+free-form conclusions.
 
 The first three are the **front doors** into the design loop. `bugfix`
 (reproduce-and-root-cause first) and `feature` (clarify and set a Definition of
@@ -111,7 +117,7 @@ recon  →  interview  →  write L2–L5  →  bake units  →  verify
    on Linux or LaunchAgent plists on macOS with L1 env baked in, symlinks the
    L5 skills, enables the timers, and removes legacy cron launchers.
 5. **Verify.** `medic --mode scan --dry-run` loads clean, the release gates
-   are green now, the scheduler reports each job loaded, and the eight skill
+   are green now, the scheduler reports each job loaded, and the nine skill
    symlinks resolve.
 
 ## Private local operations dashboard

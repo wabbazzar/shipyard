@@ -66,6 +66,8 @@ _install() {
   grep -q '.agents/skills/execute-ticket/SKILL.md' "$p/AGENTS.md"
   grep -q '.agents/skills/write-ticket/SKILL.md'   "$p/AGENTS.md"
   grep -q '.agents/skills/ui-design/SKILL.md'      "$p/AGENTS.md"
+  [ -L "$p/.agents/skills/eda" ]
+  [ -L "$p/.claude/skills/eda" ]
   # CWD guarantee: the unit runs with WorkingDirectory at the project root, so
   # the root AGENTS.md is auto-injected by codex/hermes.
   grep -Fxq "WorkingDirectory=$p" "$HOME/.config/systemd/user/abridge-build.service"
@@ -78,6 +80,8 @@ _install() {
   grep -q '.agents/skills/execute-ticket/SKILL.md' "$p/AGENTS.md"
   grep -q '.agents/skills/write-ticket/SKILL.md'   "$p/AGENTS.md"
   grep -q '.agents/skills/ui-design/SKILL.md'      "$p/AGENTS.md"
+  [ -L "$p/.agents/skills/eda" ]
+  [ -L "$p/.claude/skills/eda" ]
 }
 
 @test "install: an existing AGENTS.md is never clobbered" {

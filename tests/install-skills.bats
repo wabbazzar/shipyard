@@ -5,7 +5,7 @@
 # discovers repository skills from .agents/skills.
 #
 # Asserts:
-#   * --dry-run announces it WOULD symlink the eight installed skills and WOULD
+#   * --dry-run announces it WOULD symlink the nine installed skills and WOULD
 #     drop gates.md, and writes NOTHING;
 #   * a real run creates every shared skill link in both discovery locations
 #     and writes .agents/gates.md;
@@ -37,7 +37,7 @@ run_install() {
 @test "dry-run announces Claude/Hermes and Codex skill links + gates.md drop, writes nothing" {
   run run_install --dry-run
   [ "$status" -eq 0 ]
-  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard ui-design; do
+  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard ui-design eda; do
     echo "$output" | grep -q "would symlink: $PROJ/.claude/skills/$s"
     echo "$output" | grep -q "would symlink: $PROJ/.agents/skills/$s"
   done
@@ -45,14 +45,16 @@ run_install() {
   # Nothing actually written.
   [ ! -e "$PROJ/.claude/skills/polish-ticket" ]
   [ ! -e "$PROJ/.claude/skills/write-ticket" ]
+  [ ! -e "$PROJ/.claude/skills/eda" ]
   [ ! -e "$PROJ/.agents/skills/polish-ticket" ]
+  [ ! -e "$PROJ/.agents/skills/eda" ]
   [ ! -e "$PROJ/.agents/gates.md" ]
 }
 
 @test "real run symlinks every skill into both discovery roots and drops gates.md" {
   run run_install
   [ "$status" -eq 0 ]
-  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard ui-design; do
+  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard ui-design eda; do
     [ -L "$PROJ/.claude/skills/$s" ]
     [ "$(readlink -f "$PROJ/.claude/skills/$s")" = "$(readlink -f "$QUARTET_ROOT/skills/$s")" ]
     [ -f "$PROJ/.claude/skills/$s/SKILL.md" ]   # resolves to a real skill
@@ -82,6 +84,8 @@ run_install() {
   run run_install
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "unchanged: $PROJ/.claude/skills/polish-ticket"
+  echo "$output" | grep -q "unchanged: $PROJ/.claude/skills/eda"
+  echo "$output" | grep -q "unchanged: $PROJ/.agents/skills/eda"
   echo "$output" | grep -q "gates.md: exists — leaving as-is"
   grep -q "OPERATOR EDIT" "$PROJ/.agents/gates.md"   # not clobbered
 }
@@ -99,4 +103,19 @@ run_install() {
   [ ! -L "$PROJ/.claude/skills/ui-design" ]
   [ ! -L "$PROJ/.agents/skills/ui-design" ]
   [ -L "$PROJ/.claude/skills/execute-ticket" ]
+}
+
+@test "existing real eda dirs in both discovery roots are not clobbered" {
+  mkdir -p "$PROJ/.claude/skills/eda" "$PROJ/.agents/skills/eda"
+  echo "claude owner analysis" > "$PROJ/.claude/skills/eda/keep.txt"
+  echo "codex owner analysis" > "$PROJ/.agents/skills/eda/keep.txt"
+  run run_install
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "SKIP.*$PROJ/.claude/skills/eda"
+  echo "$output" | grep -q "SKIP.*$PROJ/.agents/skills/eda"
+  grep -Fxq "claude owner analysis" "$PROJ/.claude/skills/eda/keep.txt"
+  grep -Fxq "codex owner analysis" "$PROJ/.agents/skills/eda/keep.txt"
+  [ ! -L "$PROJ/.claude/skills/eda" ]
+  [ ! -L "$PROJ/.agents/skills/eda" ]
+  [ -L "$PROJ/.claude/skills/ui-design" ]
 }

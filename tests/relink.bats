@@ -52,6 +52,17 @@ run_install() {
   [ "$(readlink -f "$PROJ/.agents/skills/ui-design")" = "$(readlink -f "$QUARTET_ROOT/skills/ui-design")" ]
 }
 
+@test "--relink repairs eda in both discovery roots" {
+  run_install
+  rm -f "$PROJ/.claude/skills/eda" "$PROJ/.agents/skills/eda"
+  run run_install --relink
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "relinked: $PROJ/.claude/skills/eda"
+  echo "$output" | grep -q "relinked: $PROJ/.agents/skills/eda"
+  [ "$(readlink -f "$PROJ/.claude/skills/eda")" = "$(readlink -f "$QUARTET_ROOT/skills/eda")" ]
+  [ "$(readlink -f "$PROJ/.agents/skills/eda")" = "$(readlink -f "$QUARTET_ROOT/skills/eda")" ]
+}
+
 @test "--relink repairs a BROKEN symlink (points nowhere)" {
   run_install
   ln -sfn /nonexistent/gone "$PROJ/.claude/skills/write-ticket"
@@ -107,6 +118,20 @@ run_install() {
   grep -Fxq "codex owner content" "$PROJ/.agents/skills/ui-design/local.md"
 }
 
+@test "--relink never clobbers real eda dirs in either root" {
+  run_install
+  rm -f "$PROJ/.claude/skills/eda" "$PROJ/.agents/skills/eda"
+  mkdir -p "$PROJ/.claude/skills/eda" "$PROJ/.agents/skills/eda"
+  echo "claude owner analysis" >"$PROJ/.claude/skills/eda/local.md"
+  echo "codex owner analysis" >"$PROJ/.agents/skills/eda/local.md"
+  run run_install --relink
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "kept.*$PROJ/.claude/skills/eda"
+  echo "$output" | grep -q "kept.*$PROJ/.agents/skills/eda"
+  grep -Fxq "claude owner analysis" "$PROJ/.claude/skills/eda/local.md"
+  grep -Fxq "codex owner analysis" "$PROJ/.agents/skills/eda/local.md"
+}
+
 @test "--relink restores a missing AGENTS.md skill bridge" {
   run_install
   rm -f "$PROJ/AGENTS.md"
@@ -134,7 +159,7 @@ run_install() {
   run_install
   run run_install --relink
   [ "$status" -eq 0 ]
-  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard ui-design; do
+  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard ui-design eda; do
     [ -L "$PROJ/.claude/skills/$s" ]
     [ -L "$PROJ/.agents/skills/$s" ]
     echo "$output" | grep -q "ok: $s"

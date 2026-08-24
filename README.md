@@ -128,9 +128,9 @@ actually happening.
 
 ## Skills-parity
 
-The installer links all eight shared skills — `write-ticket`, `bugfix`,
-`feature`, `polish-ticket`, `execute-ticket`, `coverage-audit`, `shipyard`, and
-`ui-design` — into
+The installer links all nine shared skills — `write-ticket`, `bugfix`,
+`feature`, `polish-ticket`, `execute-ticket`, `coverage-audit`, `shipyard`,
+`ui-design`, and `eda` (reproducible exploratory analysis) — into
 `<project>/.agents/skills/` for Codex and `<project>/.claude/skills/` for
 Claude/Hermes; both roots resolve to the same source files. It also creates a
 root `AGENTS.md` bridge when absent, but never changes a project-owned one.
@@ -299,7 +299,7 @@ The installer auto-detects the host OS, bakes the `[names]` theme block into
 the config, and writes either systemd units under
 `~/.config/systemd/user/` or LaunchAgent plists under
 `~/Library/LaunchAgents/`. It then enables the selected jobs, symlinks the
-eight shared skills into `<project>/.agents/skills/` (Codex) and
+nine shared skills into `<project>/.agents/skills/` (Codex) and
 `<project>/.claude/skills/` (Claude/Hermes),
 writes a root `AGENTS.md` skill bridge for Codex and Hermes when absent, drops
 `skills/gates.md.template` into `.agents/gates.md` (never clobbering an
@@ -662,7 +662,7 @@ agents/
 ├── medic/      role.md + runner.sh + check-examples/      [spacetime: suk]
 ├── scribe/     role.md + runner.sh                        [spacetime: chronicler]
 └── lib/        load-config.sh, naming.sh, post-run.sh, log_event.sh, revert-merge.sh
-skills/         the eight shared skills + install + gates.md.template
+skills/         the nine shared skills + install + gates.md.template
 install.sh      per-project installer (idempotent; --theme names)
 docs/           INSTALL.md, ADAPTING.md, shoulder-mode.md, deck data
 pack.toml       BopBop pack manifest

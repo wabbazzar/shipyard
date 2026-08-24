@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-24
 - **Owner:** wabbazzar
-- **Status:** POLISHED — no open decision; auto-gate to execute-ticket
+- **Status:** COMPLETE
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 8 (two phases: 5 · 3)
@@ -339,8 +339,8 @@ apply because no unit, runner, model, event, or service is changed.
 |---|---|---|---|
 | Ticket intake | complete | builder: orchestrator | User locked fleet-wide `eda`; Maydown consumes it; no open decision. |
 | Polish | complete | builder: orchestrator | Gate menu/config/toolchain read; 819-test baseline and focused installer baseline green; validator incompatibility pinned. |
-| Phase 1 | pending | builder: delegated subagent; orchestrator verifies | Record commit, failing-first case, focused/full counts, leak/syntax/lifecycle, and synthetic forward-test evidence here. |
-| Phase 2 | pending | builder: delegated subagent; orchestrator verifies | Record commit, focused/full counts, deck result, canonical fleet links, doctors, PR/CI here. |
+| Phase 1 | verified; commit coupled to Phase 2 | builder: subagent (1 agent); orchestrator verifies | RED: 1/12 guard passed and 11/12 failed while `skills/eda/SKILL.md` was absent. GREEN: 12/12 focused pass; leak/diff/syntax/Python/deck-fresh/lifecycle exit 0. Synthetic 4-row fixture makes KDE/model/test unavailable with reasons. The unmodified completeness gate correctly reports `GAP eda: missing from GENERIC_SKILLS`, so no knowingly red intermediate commit; source and registration land atomically in the final phase. |
+| Phase 2 | complete | builder: subagent (1 agent); orchestrator verifies | RED: 68-case pre-registration matrix had 13 expected failures. GREEN: focused matrix 80/80 and full suite 836/836; syntax, Python compile, leak, diff, deck freshness/completeness (9 skills), and browser render pass. Canonical relink installed both roots fleet-wide; Maydown/Aurora each report 0 repaired and 19 current, both doctors have zero EDA findings, and resolved worktree-target count is 0. Existing unrelated shoulder findings remain unchanged. Final commit and review PR are recorded in Git history. |
 
 ## Risks and mitigations
 

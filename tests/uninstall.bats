@@ -46,12 +46,14 @@ agents_digest() { find "$P/.agents" -type f -exec md5sum {} \; | sort; }
   [ -L "$P/.claude/skills/execute-ticket" ]
   [ -L "$P/.claude/skills/ui-design" ]
   [ -L "$P/.agents/skills/ui-design" ]
+  [ -L "$P/.claude/skills/eda" ]
+  [ -L "$P/.agents/skills/eda" ]
 
   run_uninstall
   echo "$output"
   [ "$status" -eq 0 ]
   [ -z "$(unit_set)" ]                                  # every crew unit gone
-  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard ui-design; do
+  for s in polish-ticket execute-ticket coverage-audit write-ticket bugfix feature shipyard ui-design eda; do
     [ ! -L "$P/.claude/skills/$s" ]
     [ ! -L "$P/.agents/skills/$s" ]
   done
@@ -89,6 +91,8 @@ agents_digest() { find "$P/.agents" -type f -exec md5sum {} \; | sort; }
   [[ "$output" == *"DRY RUN"* ]]
   [ "$(unit_set)" = "$before_units" ]                  # units untouched
   [ -L "$P/.claude/skills/execute-ticket" ]            # symlink untouched
+  [ -L "$P/.claude/skills/eda" ]
+  [ -L "$P/.agents/skills/eda" ]
 }
 
 @test "uninstall calls disable --now per timer + a daemon-reload" {
@@ -125,6 +129,21 @@ agents_digest() { find "$P/.agents" -type f -exec md5sum {} \; | sort; }
   grep -Fxq "codex owner content" "$P/.agents/skills/ui-design/keep.txt"
   [[ "$output" == *"kept (real file/dir, not a symlink): $P/.claude/skills/ui-design"* ]]
   [[ "$output" == *"kept (real file/dir, not a symlink): $P/.agents/skills/ui-design"* ]]
+}
+
+@test "uninstall keeps real eda dirs in both discovery roots" {
+  do_install
+  rm -f "$P/.claude/skills/eda" "$P/.agents/skills/eda"
+  mkdir -p "$P/.claude/skills/eda" "$P/.agents/skills/eda"
+  echo "claude owner analysis" >"$P/.claude/skills/eda/keep.txt"
+  echo "codex owner analysis" >"$P/.agents/skills/eda/keep.txt"
+  run_uninstall
+  echo "$output"
+  [ "$status" -eq 0 ]
+  grep -Fxq "claude owner analysis" "$P/.claude/skills/eda/keep.txt"
+  grep -Fxq "codex owner analysis" "$P/.agents/skills/eda/keep.txt"
+  [[ "$output" == *"kept (real file/dir, not a symlink): $P/.claude/skills/eda"* ]]
+  [[ "$output" == *"kept (real file/dir, not a symlink): $P/.agents/skills/eda"* ]]
 }
 
 @test "uninstall keeps a skill symlink resolving OUTSIDE shipyard skills" {

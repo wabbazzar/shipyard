@@ -1,7 +1,7 @@
 {
   "meta": {
-    "updated": "2026-08-06",
-    "ticket": "citadel:docs/tickets/quartet-gaps-guardian-teeth.md",
+    "updated": "2026-08-24",
+    "ticket": "citadel:docs/tickets/complete/add-reusable-eda-skill.md",
     "repo": "https://github.com/wabbazzar/shipyard",
     "note": "The data behind this deck — the crews, the skills each inherits, and the decisions that shaped them. Generated from the skill files themselves, so it can't drift from the system it describes."
   },
@@ -86,6 +86,14 @@
           "detail": "Names the design thesis, palette and type roles, structural layout, signature element, responsive and accessibility floor, state copy, and critique loop before a UI ticket is handed to build."
         },
         {
+          "_file": "eda",
+          "name": "eda",
+          "disposition": "adapted · shared",
+          "source": "shipyard/skills/eda — evidence-first exploratory analysis contract",
+          "summary": "Plan reproducible analysis from typed data to bounded claims.",
+          "detail": "Declares the question, grain, slice, target, exclusions, privacy boundary, and reproducibility record before calculation. Requires typed profiles, explicit unavailable states, pair-counted relationships, leakage-aware feature evidence, and a verification plan without baking in a dataset or framework."
+        },
+        {
           "name": "telemetry collectors",
           "disposition": "new",
           "source": "agents/design/",
@@ -136,6 +144,14 @@
           "detail": "Carries the ticket's design thesis into layout, interaction states, keyboard and focus behavior, responsive recomposition, reduced motion, and rendered-viewport critique instead of accepting code-only proof."
         },
         {
+          "_file": "eda",
+          "name": "eda",
+          "disposition": "adapted · shared",
+          "source": "shipyard/skills/eda — reproducible analysis build contract",
+          "summary": "Build inspectable tables, plots, tests, and interpretable baselines.",
+          "detail": "Keeps every result tied to a named backing frame, slice, sample size, missing and excluded counts, method parameters, uncertainty, and limitations. Modeling and statistical tests are target- and type-appropriate; unsupported output stays unavailable instead of becoming invented evidence."
+        },
+        {
           "name": "feedback triage → PRs",
           "disposition": "kept + hardened",
           "source": "agents/build/runner.sh + role.md",
@@ -168,6 +184,14 @@
           "source": "shipyard/skills/ui-design — cold-context UI craft rubric",
           "summary": "Critique whether the shipped surface fulfills its design thesis.",
           "detail": "Checks hierarchy, palette and type roles, signature restraint, responsive behavior, accessibility, state copy, and the actual rendered surface without imposing generic visual taste."
+        },
+        {
+          "_file": "eda",
+          "name": "eda",
+          "disposition": "adapted · shared",
+          "source": "shipyard/skills/eda — analytical evidence review rubric",
+          "summary": "Audit whether analytical claims survive value-level and rendered checks.",
+          "detail": "Checks backing-value agreement, missing-data policy, leakage and collinearity handling, effect and uncertainty reporting, multiplicity, non-causal language, and honest unavailable states. UI-bearing analyses also require contrast, focus, scrolling, and responsive viewport proof."
         },
         {
           "name": "shoulder-mode critic",
@@ -493,6 +517,10 @@
     {
       "_file": "ui-design",
       "label": "ui-design"
+    },
+    {
+      "_file": "eda",
+      "label": "eda"
     },
     {
       "id": "collectors",

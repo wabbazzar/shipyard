@@ -135,7 +135,7 @@ JSON
 @test "thin wrapper runs the real repository check" {
   run bash "$BATS_TEST_DIRNAME/../scripts/check-deck-complete.sh"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"deck-complete: 8 installed skills complete"* ]]
+  [[ "$output" == *"deck-complete: 9 installed skills complete"* ]]
 }
 
 @test "real pre-commit hook blocks a fixture commit with an incomplete deck" {

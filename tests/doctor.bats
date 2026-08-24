@@ -276,6 +276,16 @@ EOF
   [[ "$output" == *"DOCTOR codex skill: ui-design symlink missing"* ]]
 }
 
+@test "doctor (e): missing eda links in both discovery roots are findings" {
+  doctor_install
+  rm -f "$P/.claude/skills/eda" "$P/.agents/skills/eda"
+  run_doctor
+  echo "$output"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"DOCTOR skill: eda symlink missing"* ]]
+  [[ "$output" == *"DOCTOR codex skill: eda symlink missing"* ]]
+}
+
 @test "doctor (e): a symlink resolving OUTSIDE shipyard skills -> finding" {
   doctor_install
   ln -sfn /etc/hostname "$P/.claude/skills/feature"
