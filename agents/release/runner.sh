@@ -84,6 +84,29 @@ TYPECHECK_CMD="$(jq_from_json "$CFG_JSON" -r '.release.typecheck // "npx tsc --n
 BUDGET_TOKENS="$(jq_from_json "$CFG_JSON" -r '.release.budget_tokens_daily // 1000000')"
 [[ "$BUDGET_TOKENS" =~ ^[0-9]+$ ]] || BUDGET_TOKENS=1000000
 WALL_CLOCK="$(jq_from_json "$CFG_JSON" -r '.release.wall_clock_sec // 3600')"
+[[ "$WALL_CLOCK" =~ ^[0-9]+$ ]] && [ "$WALL_CLOCK" -gt 0 ] || WALL_CLOCK=3600
+
+# ---------- hook wall clock -------------------------------------------------
+# hook mode is SYNCHRONOUS: a session (or a git hook) shells out to the runner
+# and BLOCKS on the verdict. A cap sized for the nightly timer strands a human
+# instead of guarding a robot, and `wall_clock_sec` only ever wrapped the model
+# spawn — the runner-owned blocking gate and verify_gate then spent their own
+# time on top of it (aurora ticket 059, 2026-08-25: a hook sat 15+ minutes on
+# `run-in-progress` until the operator killed the release agent to get moving).
+#
+# So hooks get their own, much shorter budget, and it is a DEADLINE for the
+# whole run: model spawn, blocking gate, and verify_gate re-runs all draw from
+# the same remaining seconds (see stage_budget). daily/post-merge are untouched.
+#
+# Precedence: an explicit hook_wall_clock_sec always wins — raise it if you
+# genuinely want a long hook. Otherwise the default applies, except that an
+# already-tighter wall_clock_sec is never loosened by it.
+HOOK_WALL_CLOCK_DEFAULT="${RELEASE_HOOK_WALL_CLOCK_DEFAULT:-600}"
+HOOK_WALL_CLOCK="$(jq_from_json "$CFG_JSON" -r '.release.hook_wall_clock_sec // empty')"
+if ! [[ "$HOOK_WALL_CLOCK" =~ ^[0-9]+$ ]] || [ "$HOOK_WALL_CLOCK" -le 0 ]; then
+  HOOK_WALL_CLOCK="$HOOK_WALL_CLOCK_DEFAULT"
+  [ "$WALL_CLOCK" -lt "$HOOK_WALL_CLOCK" ] && HOOK_WALL_CLOCK="$WALL_CLOCK"
+fi
 
 # ---------- optional runner-owned blocking gate -----------------------------
 # Validate the complete opt-in table before job.start, model invocation, or
@@ -127,6 +150,8 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
     --arg trunk "$TRUNK_BRANCH" \
     --arg test_cmd "$TEST_CMD" \
     --arg typecheck "$TYPECHECK_CMD" \
+    --argjson wall "$WALL_CLOCK" \
+    --argjson hookwall "$HOOK_WALL_CLOCK" \
     --argjson cfg "$CFG_JSON" \
     '{agent:$agent, role:$role, display:$display,
       project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
@@ -134,7 +159,8 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
       allow_no_ci:($cfg.build.allow_no_ci // false),
       test_cmd:$test_cmd, typecheck:$typecheck,
       blocking_gate:($cfg.release.blocking_gate // null),
-      budgets:{budget_tokens_daily:($cfg.release.budget_tokens_daily // 1000000)}}'
+      budgets:{budget_tokens_daily:($cfg.release.budget_tokens_daily // 1000000),
+               wall_clock_sec:$wall, hook_wall_clock_sec:$hookwall}}'
   exit 0
 fi
 
@@ -162,6 +188,43 @@ fi
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 JOB_START="$(date +%s)"
 cd "$PROJECT_DIR"
+
+# ---------- hook deadline ---------------------------------------------------
+# In hook mode every bounded stage draws from ONE budget that started ticking
+# at JOB_START, so the caller's total wait is HOOK_WALL_CLOCK no matter how the
+# work is distributed between the model, the blocking gate, and verify_gate.
+# HOOK_DEADLINE stays 0 in daily/post-merge, which makes stage_budget a no-op
+# and keeps those paths byte-for-byte what they are today.
+HOOK_DEADLINE=0
+HOOK_DEADLINE_HIT=0
+if [ "$MODE" = "hook" ]; then
+  HOOK_DEADLINE=$(( JOB_START + HOOK_WALL_CLOCK ))
+fi
+
+# stage_budget [fallback] — seconds this stage may run.
+#   hook mode : seconds left on the deadline, never more than <fallback>.
+#               0 means the budget is spent and the stage must be skipped.
+#   otherwise : <fallback>, unchanged.
+stage_budget() {
+  local fallback="${1:-}" left
+  if [ "$HOOK_DEADLINE" -eq 0 ]; then printf '%s\n' "$fallback"; return 0; fi
+  left=$(( HOOK_DEADLINE - $(date +%s) ))
+  [ "$left" -lt 0 ] && left=0
+  if [ -n "$fallback" ] && [ "$fallback" -lt "$left" ]; then left="$fallback"; fi
+  printf '%s\n' "$left"
+}
+
+# hook_deadline_trip <stage> — record that the cap ended the run. Idempotent:
+# only the FIRST stage to run out is reported, since everything after it is a
+# consequence, not a separate incident.
+hook_deadline_trip() {
+  local stage="$1"
+  [ "$HOOK_DEADLINE_HIT" -eq 1 ] && return 0
+  HOOK_DEADLINE_HIT=1
+  echo "[$SVC] hook wall-clock cap ${HOOK_WALL_CLOCK}s reached during $stage" >> "$LOG_FILE"
+  [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" release.hook.timeout \
+    mode="$MODE" stage="$stage" cap_sec="$HOOK_WALL_CLOCK" || true
+}
 
 # Capture the caller-visible checkout state before the model can touch it.
 # Only byte-for-byte unchanged, pre-existing dirt can later be classified as
@@ -241,6 +304,15 @@ MODEL="${RELEASE_MODEL:-sonnet}"
 HARNESS="${RELEASE_HARNESS:-claude}"
 PROVIDER="${RELEASE_PROVIDER:-}"
 
+# The budget the model is held to, handed to it in RUN CONTEXT so it can scope
+# its checks to fit instead of being killed mid-suite with no verdict at all
+# (agents/release/role.md § "Your time budget").
+if [ "$MODE" = "hook" ]; then
+  RUN_BUDGET_SEC="$(stage_budget "$WALL_CLOCK")"
+else
+  RUN_BUDGET_SEC="$WALL_CLOCK"
+fi
+
 RUNNER_OWNED_GATE="null"
 if [ "$BLOCKING_GATE_ACTIVE" -eq 1 ]; then
   RUNNER_OWNED_GATE="$(jq -c '. + {
@@ -259,9 +331,10 @@ if [ "$BLOCKING_GATE_ACTIVE" -eq 1 ]; then
     --argjson initial_worktree_dirty "$INITIAL_WORKTREE_DIRTY" \
     --arg initial_worktree_status "$INITIAL_WORKTREE_STATUS" \
     --argjson runner_owned_gate "$RUNNER_OWNED_GATE" \
+    --argjson budget_sec "$RUN_BUDGET_SEC" \
     --argjson cfg "$CFG_JSON" \
     '{mode:$mode, project_name:$name, project_dir:$dir, timestamp:$ts,
-      result_file:$result_file,
+      result_file:$result_file, wall_clock_budget_sec:$budget_sec,
       initial_worktree:{dirty:$initial_worktree_dirty,status:$initial_worktree_status},
       runner_owned_gate:$runner_owned_gate, config:$cfg}')"
 else
@@ -275,9 +348,10 @@ else
     --arg result_file "$RESULT_FILE" \
     --argjson initial_worktree_dirty "$INITIAL_WORKTREE_DIRTY" \
     --arg initial_worktree_status "$INITIAL_WORKTREE_STATUS" \
+    --argjson budget_sec "$RUN_BUDGET_SEC" \
     --argjson cfg "$CFG_JSON" \
     '{mode:$mode, project_name:$name, project_dir:$dir, timestamp:$ts,
-      result_file:$result_file,
+      result_file:$result_file, wall_clock_budget_sec:$budget_sec,
       initial_worktree:{dirty:$initial_worktree_dirty,status:$initial_worktree_status},
       config:$cfg}')"
 fi
@@ -311,14 +385,21 @@ while : ; do
   # timeout replaces the retired per-invocation dollar ceiling as the runaway
   # guard; the json envelope gives real token usage for the daily gate.
   spawn_model --harness "$HARNESS" --model "$MODEL" --provider "$PROVIDER" \
-    --prompt "$PROMPT" --log "$LOG_FILE" --timeout "$WALL_CLOCK" \
+    --prompt "$PROMPT" --log "$LOG_FILE" --timeout "$(stage_budget "$WALL_CLOCK")" \
     --skip-perms --json
   CLAUDE_OUT="$SPAWN_RAW"; EXIT="$SPAWN_RC"; TOKENS="$SPAWN_TOKENS"
+  # 124 = `timeout(1)` killed it. In hook mode that IS the cap firing.
+  if [ "$MODE" = "hook" ] && { [ "$EXIT" -eq 124 ] || [ "$(stage_budget "")" -le 0 ]; }; then
+    hook_deadline_trip model
+  fi
   # Keep the operator debug trail the text mode used to provide.
   jq -r '.result // empty' <<<"$CLAUDE_OUT" >> "$LOG_FILE" 2>/dev/null || true
 
-  # Break on a written verdict (real result) or once retries are exhausted.
-  if [ -s "$WORK_RESULT_FILE" ] || [ "$_stall_attempt" -ge "$STALL_RETRIES" ]; then
+  # Break on a written verdict (real result), once retries are exhausted, or as
+  # soon as the hook budget is gone — retrying a stall past the deadline just
+  # makes the caller wait longer for a verdict that can no longer arrive.
+  if [ -s "$WORK_RESULT_FILE" ] || [ "$_stall_attempt" -ge "$STALL_RETRIES" ] \
+     || [ "$HOOK_DEADLINE_HIT" -eq 1 ]; then
     break
   fi
   _stall_attempt=$(( _stall_attempt + 1 ))
@@ -346,7 +427,16 @@ done
 RELEASE_FINISH_OPTIONS=()
 if [ ! -s "$WORK_RESULT_FILE" ]; then
   USAGE_LIMIT_MSG="$(jq -r '.result // ""' <<<"$CLAUDE_OUT" 2>/dev/null || true)"
-  if grep -qEi "hit your (weekly|5-hour|daily) limit|usage limit (reached|exceeded)" <<<"$USAGE_LIMIT_MSG"; then
+  if [ "$HOOK_DEADLINE_HIT" -eq 1 ]; then
+    # The cap ended the run before the model reported. Say so plainly: the
+    # caller needs "this ran out of time", not a check failure it can't act on.
+    jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --argjson cap "$HOOK_WALL_CLOCK" --arg d "$DISPLAY" '{
+      pass: false, incomplete: true, mode: $mode, timestamp: $ts,
+      errors: ["\($d) hook hit its \($cap)s wall-clock cap before reporting a verdict; raise [release] hook_wall_clock_sec or run --mode daily for the long gate"]
+    }' > "$WORK_RESULT_FILE"
+    echo "[$SVC] hook cap reached before a verdict; marked incomplete, not a failure" >> "$LOG_FILE"
+    RELEASE_FINISH_OPTIONS+=(--no-escalate)
+  elif grep -qEi "hit your (weekly|5-hour|daily) limit|usage limit (reached|exceeded)" <<<"$USAGE_LIMIT_MSG"; then
     jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --arg msg "$USAGE_LIMIT_MSG" --arg d "$DISPLAY" '{
       pass: false, incomplete: true, mode: $mode, timestamp: $ts,
       errors: ["\($d) claude run hit an account usage cap, not a code issue: \($msg)"]
@@ -377,10 +467,21 @@ if [ "$BLOCKING_GATE_ACTIVE" -eq 1 ]; then
     }' >"$WORK_RESULT_FILE"
   fi
 
-  echo "[$SVC] blocking_gate start key=$BLOCKING_GATE_RESULT_KEY timeout_s=$BLOCKING_GATE_TIMEOUT" >>"$LOG_FILE"
-  timeout "$BLOCKING_GATE_TIMEOUT" bash -o pipefail -c "$BLOCKING_GATE_COMMAND" >>"$LOG_FILE" 2>&1
-  BLOCKING_GATE_EXIT=$?
-  echo "[$SVC] blocking_gate end key=$BLOCKING_GATE_RESULT_KEY exit=$BLOCKING_GATE_EXIT" >>"$LOG_FILE"
+  # In hook mode the gate gets what is LEFT of the deadline, never its own full
+  # timeout_sec on top of the time the model already spent. With nothing left,
+  # it does not start at all — running it would blow the cap by design.
+  BLOCKING_GATE_BUDGET="$(stage_budget "$BLOCKING_GATE_TIMEOUT")"
+  if [ "$BLOCKING_GATE_BUDGET" -le 0 ]; then
+    hook_deadline_trip blocking_gate
+    BLOCKING_GATE_EXIT=124
+    echo "[$SVC] blocking_gate skipped key=$BLOCKING_GATE_RESULT_KEY (hook budget exhausted)" >>"$LOG_FILE"
+  else
+    echo "[$SVC] blocking_gate start key=$BLOCKING_GATE_RESULT_KEY timeout_s=$BLOCKING_GATE_BUDGET" >>"$LOG_FILE"
+    timeout "$BLOCKING_GATE_BUDGET" bash -o pipefail -c "$BLOCKING_GATE_COMMAND" >>"$LOG_FILE" 2>&1
+    BLOCKING_GATE_EXIT=$?
+    echo "[$SVC] blocking_gate end key=$BLOCKING_GATE_RESULT_KEY exit=$BLOCKING_GATE_EXIT" >>"$LOG_FILE"
+    [ "$BLOCKING_GATE_EXIT" -eq 124 ] && [ "$MODE" = "hook" ] && hook_deadline_trip blocking_gate
+  fi
 
   _bg_tmp="$(mktemp "$RESULT_DIR/.$SVC-blocking-gate.XXXXXX")"
   if [ "$BLOCKING_GATE_EXIT" -eq 0 ]; then
@@ -488,7 +589,7 @@ if [ "$PASS" = "true" ]; then JOB_STATUS="ok"; else JOB_STATUS="fail"; fi
 # JOB_STATUS/escalation are deliberately unchanged — only the human alarm and
 # the dashboard's dispatch-item minting key off this flag (see release-verdict.sh).
 INCOMPLETE=0
-if [ "$PASS" != "true" ] && release_incomplete "$EXIT" "$WORK_RESULT_FILE"; then
+if [ "$PASS" != "true" ] && { [ "$HOOK_DEADLINE_HIT" -eq 1 ] || release_incomplete "$EXIT" "$WORK_RESULT_FILE"; }; then
   INCOMPLETE=1
   # Stamp the result so the hub's guardianItems skips minting a false
   # "proctor failed" dispatch item from an unfinished run.
@@ -513,9 +614,42 @@ fi
 VERIFY_GATE="$(jq_from_json "$CFG_JSON" -r '.release.verify_gate // false')"
 if [ "$VERIFY_GATE" = "true" ] && [ "$PASS" = "true" ] && [ "$INCOMPLETE" -eq 0 ] && [ "$MODE" != "post-merge" ]; then
   echo "[$SVC] verify_gate: reconciling model pass against the real gate" >> "$LOG_FILE"
-  eval "$TYPECHECK_CMD" >> "$LOG_FILE" 2>&1; VG_TC=$?
-  eval "$TEST_CMD"      >> "$LOG_FILE" 2>&1; VG_TS=$?
-  if [ "$VG_TC" -ne 0 ] || [ "$VG_TS" -ne 0 ]; then
+  # These re-run the project's REAL suites — on a big repo that is another
+  # 20 minutes, and it lands after the model has already spent the clock. In
+  # hook mode both draw from what is left of the deadline; with nothing left
+  # the reconciliation is skipped and the run is reported unfinished rather
+  # than shipping an unreconciled green. daily keeps the unbounded eval.
+  VG_SKIPPED=0
+  if [ "$HOOK_DEADLINE" -ne 0 ]; then
+    VG_BUDGET="$(stage_budget "")"
+    if [ "$VG_BUDGET" -le 0 ]; then
+      VG_SKIPPED=1; VG_TC=0; VG_TS=0
+      hook_deadline_trip verify_gate
+      echo "[$SVC] verify_gate skipped (hook budget exhausted); verdict left unreconciled" >> "$LOG_FILE"
+    else
+      timeout "$VG_BUDGET" bash -o pipefail -c "$TYPECHECK_CMD" >> "$LOG_FILE" 2>&1; VG_TC=$?
+      VG_BUDGET="$(stage_budget "")"
+      if [ "$VG_BUDGET" -le 0 ]; then
+        VG_TS=0; hook_deadline_trip verify_gate
+      else
+        timeout "$VG_BUDGET" bash -o pipefail -c "$TEST_CMD" >> "$LOG_FILE" 2>&1; VG_TS=$?
+      fi
+      { [ "$VG_TC" -eq 124 ] || [ "$VG_TS" -eq 124 ]; } && hook_deadline_trip verify_gate
+    fi
+  else
+    eval "$TYPECHECK_CMD" >> "$LOG_FILE" 2>&1; VG_TC=$?
+    eval "$TEST_CMD"      >> "$LOG_FILE" 2>&1; VG_TS=$?
+  fi
+  if [ "$HOOK_DEADLINE_HIT" -eq 1 ]; then
+    # Out of time, not a false green: don't call a timeout a failed check.
+    INCOMPLETE=1
+    _vg_tmp="$(mktemp "$RESULT_DIR/.$SVC-vg-incomplete.XXXXXX")"
+    if jq --argjson cap "$HOOK_WALL_CLOCK" \
+         '. + {pass:false, incomplete:true,
+               errors:((.errors // []) + ["verify_gate could not finish inside the \($cap)s hook cap; verdict unreconciled"])}' \
+         "$WORK_RESULT_FILE" > "$_vg_tmp" 2>/dev/null; then mv "$_vg_tmp" "$WORK_RESULT_FILE"; else rm -f "$_vg_tmp"; fi
+    PASS="false"; JOB_STATUS="fail"
+  elif [ "$VG_SKIPPED" -eq 0 ] && { [ "$VG_TC" -ne 0 ] || [ "$VG_TS" -ne 0 ]; }; then
     echo "[$SVC] FALSE GREEN caught: model reported pass but real gate failed (tsc=$VG_TC test=$VG_TS)" >> "$LOG_FILE"
     PASS="false"; JOB_STATUS="fail"
     _fg_tmp="$(mktemp "$RESULT_DIR/.$SVC-false-green.XXXXXX")"
@@ -553,6 +687,15 @@ if d.get("errors"): cats.append("error")
 print(",".join(cats) or ("ok" if d.get("pass") else "unknown"))
 PY
 )"
+
+# A hook that ran out of clock is not a regression for medic to repair — the
+# gate never rendered a verdict. Report it, don't escalate it.
+if [ "$HOOK_DEADLINE_HIT" -eq 1 ]; then
+  case " ${RELEASE_FINISH_OPTIONS[*]-} " in
+    *" --no-escalate "*) ;;
+    *) RELEASE_FINISH_OPTIONS+=(--no-escalate) ;;
+  esac
+fi
 
 # Notify the human (Signal) — kept human-readable; the dashboard reads
 # from the events stream, not from the notification body.

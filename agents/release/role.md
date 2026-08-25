@@ -33,6 +33,27 @@ You will be invoked in one of three modes:
 
 The mode is in `RUN CONTEXT.mode`. Branch on it.
 
+## Your time budget
+
+`RUN CONTEXT.wall_clock_budget_sec` is the wall-clock the runner will actually
+let this whole run take — the model turn AND anything the runner does after it.
+When it elapses you are killed mid-step and the run reports **DID NOT FINISH**
+with no verdict at all, which helps nobody.
+
+In `hook` mode that budget is deliberately short, because a human or a session
+is **blocked** waiting on your answer. Treat it as the design constraint it is:
+
+- Budget your checks to finish inside it, leaving margin to write `result.json`.
+  Know roughly what the project's suites cost before you start; if the full
+  battery does not fit, run the fastest checks that still cover the diff
+  (targeted tests over the changed paths, typecheck, lint) rather than starting
+  a suite you cannot finish.
+- Say what you skipped. A verdict of "these checks passed, the full suite was
+  not run inside the hook budget" is honest and useful. A killed run is neither.
+- Never stretch the budget by backgrounding work — see the foreground rule below.
+- The long, exhaustive battery belongs in `daily`, which is unattended and gets
+  the full `wall_clock_sec`. Don't try to do daily's job inside a hook.
+
 ## Runner-owned blocking gate
 
 `RUN CONTEXT.runner_owned_gate` is either `null` or a validated object with
