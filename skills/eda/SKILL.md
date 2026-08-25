@@ -26,6 +26,10 @@ Before calculating, record:
   prediction, or a causal study. Do not let one kind of claim stand in for
   another.
 
+Declare types from the source contract. Do not infer that a column is boolean
+only because its observed values happen to be `0` and `1`; name the allowed
+tokens and preserve invalid tokens as visible issues.
+
 If the target, observation unit, join grain, time order, or privacy boundary is
 ambiguous enough to change the result, resolve it before proceeding.
 
@@ -47,6 +51,12 @@ verification.
 Never invent, silently impute, or silently drop data. If a transformation,
 imputation, exclusion, weighting rule, or pairwise deletion is justified,
 label it and retain the before/after counts.
+
+For ordered state-change features, retain the level and the change. Declare the
+state grain and ordering key; compute `delta = current state - immediately
+prior state`; retain the prior-state key; and leave the first state or either
+missing operand unavailable, never zero. Do not cross groups or manufacture a
+batch/lot identity that the source cannot support.
 
 ## Profile columns by type
 
@@ -77,6 +87,12 @@ constant columns, inadequate pairs, nonlinear structure, and multiple scans
 must remain visible. Use plots appropriate to the types and density of points,
 and do not describe association as causal.
 
+Derive default relationship fields mechanically from a published ranked table
+on the visible population. State the association measure, target, pair counts,
+missingness, direction, tie-break, and number retained. Do not use covariance
+to rank defaults across unlike units; keep it available as a scale-dependent
+view.
+
 When detailed method selection is needed, read
 [references/methods.md](references/methods.md). It defines minimum evidence and
 failure states without prescribing a library or estimator.
@@ -102,6 +118,14 @@ baseline comparison, coefficients or effects, uncertainty where available,
 actual versus predicted evidence, residual or error diagnostics, and
 out-of-sample metrics with units. Check missingness, leakage, collinearity,
 support, and material assumption failures.
+
+When screening ordered candidates such as lags, horizons, or windows, separate
+`best tested` from `supported`. The lowest candidate error is supported only if
+it beats the declared same-fold baseline. An unsupported best-tested candidate
+may anchor explicitly exploratory analysis, but must not be called selected,
+causal, residence time, or an operating recommendation. If domain reasoning
+expects transitions to matter, review both state levels and declared
+state-change features with train-only inclusion/exclusion reasons.
 
 No particular estimator is universal. If the project omits a model family or
 the data cannot support a defensible fit, report the model as unavailable and
@@ -131,6 +155,28 @@ focus, visible scrolling and overflow behavior, reduced-motion handling where
 relevant, and agreement between plotted/table values and backing values.
 Capture the checked states and revise the largest mismatch before delivery.
 
+Use exactly one document-level vertical scroll owner and no custom duplicate
+rail. Keep its track and thumb persistently visible. Page-level horizontal
+overflow is a failure; bounded table overflow does not authorize another
+document scrollbar.
+
+Put each analytical selection control immediately before its result plot. In
+rendered QA, interact with every declared choice and assert that the actual
+control rectangle and full plot rectangle are both inside one viewport. A
+union-height-only check is insufficient because both boxes may still be partly
+off-screen.
+
+Bound nontrivial tables with stable pagination or a compact first page. Exercise
+default, last, and return-to-first pages; verify row boundaries and at least one
+displayed cell against the backing frame. Put wide or long backing detail in a
+collapsed local disclosure instead of expanding the whole document.
+
+For data-quality counts, provide a collapsed local issue inspector beside the
+summary. When opened, show only a stable row/source index, the problem field,
+offending value, reason, and minimal key context. Mark the offending value cell
+in accessible red and pair color with a textual reason. Keep raw values closed
+by default and use synthetic issue rows for rendered capture artifacts.
+
 ## Verify before handoff
 
 - Re-run from the declared inputs in a clean or controlled environment.
@@ -138,6 +184,13 @@ Capture the checked states and revise the largest mismatch before delivery.
   tables, plots, interpretations, and model/test results.
 - Exercise missing, constant, tiny-sample, invalid, and no-target paths.
 - Record which outputs are unavailable and why; do not present absence as zero.
+- Assert one document scroll owner, no page-level horizontal overflow, and
+  actual control/result co-visibility at every declared viewport.
+- Exercise table first/default/last pages and private-by-default local issue
+  disclosures with synthetic open-state evidence.
+- For ordered candidates, publish candidate error, baseline error, improvement,
+  spread from best tested, and support state; test supported and unsupported
+  paths.
 - Run the consuming project's data, unit, integration, privacy, and rendered-UI
   gates. Publishing, external data transfer, or a new dependency still needs
   the authorization required by that project.
