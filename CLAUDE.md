@@ -36,10 +36,10 @@ agents/lib/               load-config.sh naming.sh post-run.sh log_event.sh
                           spawn.sh outcome-lineage.sh release-verdict.sh
                           shoulder-wire.sh toml-python.sh
 agents/release/critic-*   shoulder mode (queue → watch → cold critique)
-skills/                   eight shared skills + install skill + gates template
+skills/                   nine shared skills + install skill + gates template
 install.sh                per-project installer / --doctor / --uninstall
 scripts/                  leak-check, deck generator + freshness/render gates
-tests/                    bats suite (818 tests, ~80s)
+tests/                    bats suite (836 tests, ~80s)
 docs/                     INSTALL.md, ADAPTING.md, shoulder-mode.md, the deck
 ```
 
