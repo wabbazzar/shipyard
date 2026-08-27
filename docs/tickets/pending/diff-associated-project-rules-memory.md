@@ -450,6 +450,20 @@ Every delegated phase carries this clause:
 
 ## Ledger
 
+- Phase 1 plan — `builder: subagent (1 agent)`. In the isolated remote-main clone, add the generic
+  standard-library ledger/config core, wire the exact `shipyard memory init|validate|status|query`
+  command family far enough for init/validate/status, and add failing-first hermetic CLI/schema tests.
+  The subagent owns only `agents/lib/rules-memory.py`, `skills/shipyard/shipyard.sh`, and
+  `tests/memory-cli.bats`; the orchestrator will independently rerun all focused and repository gates
+  before the commit.
+- Phase 1 verification — `builder: subagent (1 agent), independently reviewed and corrected before
+  commit`. The pre-change CLI fixture was red at 0/8 because `memory` was unknown. The final schema
+  suite is 13/13 and the adjacent status/add-specialist matrix is 17/17. Review found and closed
+  unhashable-enum crashes, non-integer schema acceptance, lone-surrogate canonicalization crashes,
+  ledger symlink/FIFO handling, safety-pattern drift, and the stat/open pathname race. Ledger reads
+  now use one no-follow/nonblocking descriptor through `fstat` and consumption. The orchestrator
+  independently reran all 30 focused cases, shell syntax, Python import, diff check, and leak check;
+  all exited 0. No network, model, installed-project, or live-fleet mutation occurred.
 - 2026-08-27 draft — architecture locked to Shipyard-owned mechanics and project-owned rules data.
   The design extends the current specialist/release contracts rather than adding a new service or
   lifecycle role. No implementation, project adoption, model call, network call, or runtime-state

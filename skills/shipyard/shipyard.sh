@@ -11,6 +11,7 @@
 #   inspect [--json] [--days N] fleet observation for this Shipyard core.
 #   add-specialist <subsystem> scaffold + wire the domain-specialist archetype.
 #   learn "<lesson>"           route a lesson through the ADAPTING.md taxonomy.
+#   memory <action>             initialize/validate/inspect project rules memory.
 #
 # Exit codes (load-bearing, per .agents/gates.md): 0 ok, 2 bad invocation/config,
 # 3 deliberate no-op (nothing installed). The skill is symlinked into a project's
@@ -30,6 +31,10 @@ OPT_JSON=0      # inspect: emit the schema-v1 source document
 OPT_DAYS="7"    # inspect: rolling UTC window in days
 OPT_INSPECT_PYTHON="" # inspect: embedding process's exact Python interpreter
 OPT_OPEN=0      # dashboard: open the loopback URL after reporting health
+OPT_MEMORY_SCOPE="" # memory query: bounded planning scope input
+OPT_MEMORY_DIFF=""  # memory query: exact diff input
+OPT_MEMORY_SCOPE_SET=0
+OPT_MEMORY_DIFF_SET=0
 OPT_PROJECT_SET=0
 OPT_TO_SET=0
 OPT_ROLE_SET=0
@@ -53,6 +58,12 @@ while [ $# -gt 0 ]; do
     --python-executable)
       [ $# -ge 2 ] || { echo "shipyard: --python-executable requires a value" >&2; exit 2; }
       OPT_INSPECT_PYTHON="$2"; OPT_INSPECT_PYTHON_SET=1; shift 2 ;;
+    --scope-file)
+      [ $# -ge 2 ] || { echo "shipyard: --scope-file requires a value" >&2; exit 2; }
+      OPT_MEMORY_SCOPE="$2"; OPT_MEMORY_SCOPE_SET=1; shift 2 ;;
+    --diff-file)
+      [ $# -ge 2 ] || { echo "shipyard: --diff-file requires a value" >&2; exit 2; }
+      OPT_MEMORY_DIFF="$2"; OPT_MEMORY_DIFF_SET=1; shift 2 ;;
     --json)    OPT_JSON=1; shift ;;
     --open)    OPT_OPEN=1; shift ;;
     -h|--help) SUBCMD="help"; shift ;;
@@ -75,6 +86,11 @@ if [ "$SUBCMD" != "dashboard" ] && [ "$OPT_OPEN" -eq 1 ]; then
 fi
 if [ "$SUBCMD" != "inspect" ] && [ "$OPT_INSPECT_PYTHON_SET" -eq 1 ]; then
   echo "shipyard $SUBCMD: --python-executable applies only to inspect" >&2
+  exit 2
+fi
+if [ "$SUBCMD" != "memory" ] \
+  && { [ "$OPT_MEMORY_SCOPE_SET" -eq 1 ] || [ "$OPT_MEMORY_DIFF_SET" -eq 1 ]; }; then
+  echo "shipyard $SUBCMD: --scope-file/--diff-file apply only to memory query" >&2
   exit 2
 fi
 
@@ -116,9 +132,28 @@ shipyard — inspect and extend an installed crew.
   shipyard learn "<lesson>"        route a lesson to the adaptation taxonomy
     [--to project|generic|install] explicit route (else keyword heuristic)
     [--role <role>]                 project route target (default release)
+  shipyard memory init|validate|status|query
+    [--scope-file PATH|--diff-file PATH]  one input is required for query
 
 Exit: 0 ok · 2 bad invocation · 3 nothing installed.
 EOF
+}
+
+# ---- project rules memory -------------------------------------------------
+cmd_memory() {
+  local action="${ARGS[0]:-}" cmd
+  [ "${#ARGS[@]}" -eq 1 ] || {
+    echo "usage: shipyard memory init|validate|status|query" >&2
+    return 2
+  }
+  case "$action" in
+    init|validate|status|query) ;;
+    *) echo "shipyard memory: unknown action '$action'" >&2; return 2 ;;
+  esac
+  cmd=(python3 "$QUARTET_DIR/agents/lib/rules-memory.py" "$action" --project "$PROJECT_DIR")
+  [ "$OPT_MEMORY_SCOPE_SET" -eq 1 ] && cmd+=(--scope-file "$OPT_MEMORY_SCOPE")
+  [ "$OPT_MEMORY_DIFF_SET" -eq 1 ] && cmd+=(--diff-file "$OPT_MEMORY_DIFF")
+  "${cmd[@]}"
 }
 
 # ---- dashboard -------------------------------------------------------------
@@ -659,6 +694,7 @@ case "$SUBCMD" in
   inspect) cmd_inspect; exit $? ;;
   add-specialist) cmd_add_specialist; exit $? ;;
   learn) cmd_learn; exit $? ;;
+  memory) cmd_memory; exit $? ;;
   *)
     echo "shipyard: unknown subcommand '$SUBCMD'" >&2
     usage >&2
