@@ -80,6 +80,11 @@ Read/inspect, keep only compact notes. Delegate wide sweeps to subagents.
    hardening delegation or external-repository phases. Apply the deterministic
    routing and verdict contract below; a Claude-only agent file is not an
    executable manifest.
+9. **Project rules memory**: inspect `.agents/config.toml` for a `[memory]`
+   table. The table's absence is authoritative opt-out; do not infer memory from
+   a ledger file, a specialist decision log, or the gates file. When configured,
+   leave validation, indexing, and retrieval to the installed Shipyard `memory`
+   command rather than reimplementing those mechanics in this skill.
 
 ## Specialist routing during polish
 
@@ -105,7 +110,7 @@ patterns. A literal match on `external_repository_triggers` also selects the
 manifest even when no local file matches. Invoke every match once, in manifest
 order; do not pick only the first specialist.
 
-When no specialist manifests are installed, perform no specialist invocation and preserve the existing polish flow unchanged.
+When no specialist manifests are installed, perform no specialist invocation and preserve the existing specialist flow unchanged. This specialist-only no-op does not suppress an independently configured project rules-memory query.
 
 ### Invocation and verdict
 
@@ -124,6 +129,94 @@ the exact claim it supports. Failed current-source retrieval remains
 Cite the specialist slug, verdict, finding, evidence location, and live-source retrieval record in the polished ticket.
 Put the citation beside the affected locked decision, open blocker, or phase
 gate so `execute-ticket` does not need invisible review context.
+
+## Planning-time project rules memory
+
+This is the first of two independent memory gates. It shapes the executable
+ticket from project-owned history; the release shoulder later repeats retrieval
+against the exact real diff. A planning result or receipt never satisfies,
+replaces, or seeds the exact-diff review.
+
+### Query ordering and legacy behavior
+
+When `.agents/config.toml` has no `[memory]` table, perform no memory query,
+create no memory scope or evidence, and start no memory reviewer. Preserve the
+legacy polish flow, bytes, and model/network-call count.
+
+When `[memory]` is present, create a temporary, untracked, bounded ticket-scope
+copy outside the project worktree. Include only the complete current ticket,
+explicitly named project-relative files and symbols, acceptance gates, failure
+signatures, and the minimum project-gate context needed to judge applicability;
+never include the author transcript, hidden reasoning, unrelated files, or
+customer/source-record content. Run `shipyard memory query --scope-file <bounded-ticket-copy>` from the project root before finalizing executable phases and before the Decisions auto-gate. Remove the temporary scope after the query.
+The deterministic query must finish and its schema-v1 JSON must be parsed before
+any memory reviewer starts. Treat a nonzero exit, malformed JSON, `valid` other
+than true, missing policy/query/limit fields, candidates beyond
+`max_fused_candidates`, a nonzero result without an index object, or a nonzero
+candidate without its ledger citation as a memory-stage failure; do not
+reconstruct or silently repair output.
+
+A successful query with zero candidates starts no memory reviewer and is not a
+degradation. Record a concise zero-match result only when memory is configured;
+an empty initialized ledger therefore adds no model call. Both configured
+zero-result shapes share this stable schema: version 1, command `query`,
+`state = "ready"`, `valid = true`, configured mode and ledger identity, bound
+query input, query features and limits, `candidate_count = 0`, `candidates = []`,
+and no errors. When `active_count = 0`, require `index = null`; when
+`active_count > 0` produced no match, require a complete index object. No
+per-candidate citation exists in either zero-result shape. A null index for a
+nonempty active ledger, an index object for an empty active ledger, or any other
+missing/inconsistent field is a memory-stage failure.
+
+### Fresh review and dispositions
+
+For a successful nonzero result, preserve the query's stable candidate order.
+The review set is exactly the first `max_prompt_records` candidates; record every
+remaining candidate ID, in order, as omitted from the bounded packet by the
+configured prompt limit. That omission is bounded out-of-packet coverage, not a
+reviewer disposition or memory-stage failure. If any ID is omitted, report
+coverage as `bounded`, never `full` or `clean`, in both `advisory` and `required`
+mode; required mode does not permit stronger coverage wording.
+Start one fresh, cold, read-only review subagent for the nonempty review set.
+Do not reuse the ticket author, an
+installed-specialist invocation, a prior memory reviewer, or any of their
+transcripts. Give it only the bounded ticket scope, project gates, the review-set
+records and citations, and this output contract. The reviewer may inspect
+explicitly named project files read-only; it cannot edit files, launch work,
+create a PR, or mutate local, cloud, or external state.
+
+Require exactly one disposition for every review-set ID and no other IDs:
+`applies`, `requires_evidence`, `falsified`, `informational`, or `superseded`.
+Every disposition must cite the original ledger ID and source plus the exact
+current project path, ticket contract, or gate evidence that supports it.
+Duplicate, missing, extra, omitted-candidate, unknown, or uncited dispositions
+are malformed reviewer output; similarity or model prose alone is never
+evidence.
+
+Materialize every `applies` rule as a cited ticket requirement and deterministic
+test. In `required` mode, materialize every `requires_evidence` rule as a cited
+blocking preflight/phase gate and keep it incomplete until the named evidence
+exists. In `advisory` mode, record it instead as an explicitly nonblocking
+degraded-evidence item beside the affected phase; it must not become an open
+Decision or stop gate and must not claim the evidence exists. Preserve
+`falsified`, `informational`, and `superseded` dispositions with their citations
+as nonblocking planning evidence. Record the query identity, ordered query
+candidate IDs, review-set IDs, ordered out-of-packet IDs, dispositions, and
+coverage/degradation state beside the affected Decisions or phases; never copy
+vectors or present generated reviewer prose as project fact.
+
+### Policy-mode result
+
+In `required` mode, any query failure, malformed retrieval output, unavailable
+fresh reviewer, malformed disposition set, or missing required evidence becomes
+an explicit memory blocker before the existing specialist and Decisions
+preconditions. It prevents `execute-ticket`, including when `autonomous = true`.
+In `advisory` mode, record the same failure or missing evidence loudly beside
+every affected phase, continue through the existing gate, and state that memory
+coverage is degraded; never emit or imply a clean/full-memory verdict.
+
+This planning query does not write an exact-diff receipt. The later release
+shoulder must independently run `shipyard memory query --diff-file <exact-full-diff>` and start another fresh, transcript-free reviewer for every eligible changed diff; neither query may reuse the other's review result.
 
 ### External Infrastructure/Platform escalation gate
 
@@ -278,17 +371,16 @@ clean), all gates green, live system healthy, background processes cleaned up.
   (`$QUARTET_EVENTS_DIR`); the served-app dev port (declared in the gate file).
   None of these are baked into this skill — it reads them from the project.
 - **Learning surface** (where lessons accumulate): the project's
-  `.agents/gates.md` **Traps** appendix. The precedent is this skill's own
-  history — its generic-traps list (§D) is accreted incident history (a stale
-  bundle that made shipped changes look absent; a runaway headless browser).
-  A burned session becomes a line in the gate file's Traps appendix, inherited
-  by every future caller of this skill on that project. Portable lessons that
-  apply to *every* project instead become an edit to §C/§D here, shipped as a
-  core PR.
+  tracked `.agents/rules-ledger.jsonl` for structured historical rules and the
+  `.agents/gates.md` **Traps** appendix for concise operational gotchas. Do not
+  scrape, migrate, or synthesize either surface during polish. Portable lessons
+  that apply to *every* project instead become an edit to §C/§D here, shipped as
+  a core PR.
 
 ## Output — hardened ticket, then the auto-gate
 
-Rewrite `docs/tickets/<name>.md` in place (or create it) as the hardened
+After any configured planning-memory review has been materialized, rewrite
+`docs/tickets/<name>.md` in place (or create it) as the hardened
 ticket: Goal → Context/pointers → Decisions → Phases (each: slice plan,
 verification surface with exact commands, observable DoD) → Ledger (empty) →
 a one-line pointer to run it with `execute-ticket`. Commit it (worktree
@@ -296,7 +388,20 @@ hygiene).
 
 Then **auto-gate** on the ticket's Decisions. The pipeline does NOT stop for a
 separate human stamp — the command invocation (or the already-approved dispatch
-proposal) IS the authorization. Decide from the Decisions section alone:
+proposal) IS the authorization. Apply the preconditions below in order, then
+decide user-decision-class items from the Decisions section:
+
+- **Required-memory precondition:** before specialist or Decisions handling, a
+  `required` planning-memory query has completed and every nonempty review set
+  has one valid, cited disposition per review-set ID, with candidates beyond
+  `max_prompt_records` recorded as ordered bounded-coverage IDs. Any required
+  memory blocker stops before `execute-ticket`. The autonomous-project exception
+  does not override this precondition.
+
+- **Advisory-memory handling:** attempt configured advisory query/review before
+  specialist handling, but completion and dispositions are not an auto-gate
+  precondition. A stage or reviewer failure records explicit degradation beside
+  affected phases and proceeds without claiming clean/full-memory coverage.
 
 - **Specialist precondition:** before applying the decision rules below, every
   selected specialist has an evidence-bearing specialist verdict cited in the
@@ -313,11 +418,12 @@ proposal) IS the authorization. Decide from the Decisions section alone:
   proceeds; only the user-decision class blocks.)
   - **Exception — autonomous projects.** If the project's `.agents/config.toml`
     declares `autonomous = true` (a private, disposable dogfood repo with no
-    human in the loop, e.g. caladan), the auto-gate NEVER stops — not even for a
+    human in the loop, e.g. caladan), Decisions handling never stops for a
     user-decision-class item. Apply each open decision's recorded default (or the
     safest available option), record what you auto-decided in the ticket Ledger,
-    and proceed to build. This flag is set only on throwaway private repos; never
-    assume it — read it.
+    and proceed to build only after the memory and specialist preconditions are
+    satisfied. This flag is set only on throwaway private repos; never assume it
+    — read it.
 - **No open decision → PROCEED automatically to `execute-ticket`.** Build every
   phase, run all gates, and commit/push/deploy per the project's flow. The
   project's capability config still bounds what "deploy" means — `[medic]

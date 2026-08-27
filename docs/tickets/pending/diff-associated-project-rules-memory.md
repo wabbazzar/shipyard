@@ -195,16 +195,28 @@ service.
 - Extend the ticket hardening path that already discovers project specialists to query project rules
   before implementation phases become executable. The review packet contains only the bounded ticket
   scope, relevant code references, retrieved ledger records, project gates, and output contract.
-- Start a fresh review-only invocation for the query. It returns one disposition per retrieved ID:
+- Preserve the stable fused-candidate order and define
+  `review_set = candidates[:max_prompt_records]`. Start a fresh review-only invocation only for a
+  nonempty review set. It returns exactly one disposition per review-set ID and no other IDs:
   `applies`, `requires_evidence`, `falsified`, `informational`, or `superseded`, each with the exact
   current path/contract evidence supporting that disposition.
+- Record candidate IDs beyond `max_prompt_records`, in order, as bounded out-of-packet coverage; they
+  receive no disposition. This configured bound is not itself a stage failure, but any omission makes
+  coverage `bounded`, never `full` or `clean`, in advisory and required mode alike. Required mode may
+  not claim stronger coverage.
 - Applicable rules become explicit requirements, tests, or preflight gates in the ticket. The ticket
-  records retrieved IDs and citations, not vectors or model prose presented as fact.
+  records ordered candidate IDs, review-set IDs, omitted IDs, dispositions, and citations, not vectors
+  or model prose presented as fact.
+- Validate both successful zero-candidate shapes without a model call. They share ready/valid query
+  identity, features/limits, `candidate_count = 0`, `candidates = []`, and no errors: an empty active
+  ledger has `index = null`, while a nonempty indexed ledger with no match has a complete index object.
+  Neither shape has candidate citations; any count/index inconsistency is invalid.
 - A clean planning receipt cannot satisfy the post-edit gate because it is not bound to real hunks.
 - `polish-ticket` calls the deterministic `shipyard memory query --scope-file <bounded-ticket-copy>`
   first, then delegates the returned records to a fresh review subagent. Missing or malformed query or
-  reviewer evidence is an explicit blocker before the existing Decisions auto-gate in required mode;
-  advisory mode records the degradation beside the affected phase and cannot claim memory coverage.
+  reviewer evidence is an explicit blocker before the existing Decisions auto-gate only in required
+  mode. Advisory mode attempts the stage, records query/reviewer degradation beside the affected phase,
+  proceeds without completion as an auto-gate precondition, and cannot claim clean/full-memory coverage.
 
 ### Exact-diff shoulder gate
 
@@ -288,7 +300,8 @@ invalidation, bounded resource use.
 - Wire retrieval and one fresh review-only invocation into applicable ticket polish/preflight.
 - Normalize per-record dispositions and materialize applicable historical rules as cited ticket
   requirements/gates.
-- Preserve the no-ledger and no-candidate paths, and make required/advisory degradation explicit.
+- Preserve the no-ledger and both no-candidate index shapes, enforce the bounded review-set/omission
+  contract, and make required/advisory degradation and gate behavior explicit.
 
 Delegation: subagent — own planning integration and tests; return no more than 40 lines with exact
 trigger/no-trigger cases, disposition normalization, ticket evidence, commands/exit codes, and
@@ -351,6 +364,11 @@ Every delegated phase carries this clause:
   digest only when the complete receipt remains valid, and no cross-project/worktree receipt reuse.
 - Exercise `required` and `advisory` modes independently. Required failures preserve the review queue
   and block; advisory failures deliver an explicit warning and never claim full-memory coverage.
+- Exercise `max_fused_candidates > max_prompt_records`: dispositions cover exactly the deterministic
+  review set, omitted IDs remain ordered and undispositioned, and neither mode claims full coverage.
+- Exercise both valid zero-result shapes (`active_count = 0` with null index and an indexed active
+  ledger with no match), plus the two inverse index/count mismatches. Required completion blocks before
+  specialist/Decisions; advisory query or reviewer failure records degradation and proceeds.
 - Run focused tests per phase and the repository gates from `CLAUDE.md:44-55`: `bats tests/`, leak
   check, deck freshness, shell/Python syntax, and optional deck render.
 
@@ -450,6 +468,14 @@ Every delegated phase carries this clause:
 
 ## Ledger
 
+- Phase 3 verification — `builder: subagent (1 agent), independently reviewed and corrected before
+  commit`. Planning-time memory now preserves the unconfigured legacy path, validates both empty-
+  ledger and indexed-no-match zero-result shapes without a reviewer, defines the bounded review set,
+  records ordered omitted IDs without overstating coverage, and separates required blockers from
+  advisory degradation before specialist/Decisions handling. Review found and closed contradictions
+  between fused/prompt limits, mode-specific `requires_evidence`, zero-result index shapes, and the
+  auto-gate precondition. The orchestrator independently reran the 13-case polish contract and diff
+  check; both exited 0.
 - Phase 2 verification — `builder: subagent (1 agent), independently reviewed and corrected before
   commit`. The hybrid query/cache suite is 10/10 and the combined Phase 1+2 memory matrix is 23/23.
   Independent review found and closed semantic-but-valid cache corruption, source-layout drift,
