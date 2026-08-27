@@ -186,8 +186,9 @@ PY
   S="$BATS_TEST_TMPDIR/scope.txt"; D="$BATS_TEST_TMPDIR/diff.txt"
   printf 'scope\n' >"$S"; printf 'diff\n' >"$D"
   run run_shipyard memory query --project "$P" --scope-file "$S"
-  [ "$status" -eq 2 ]
-  [[ "$output" == *'"code":"phase_2_not_implemented"'* ]]
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"candidate_count":0'* ]]
+  [[ "$output" == *'"state":"ready"'* ]]
   run run_shipyard memory query --project "$P" --scope-file "$S" --diff-file "$D"
   [ "$status" -eq 2 ]
   [[ "$output" == *'"code":"query_input_count"'* ]]

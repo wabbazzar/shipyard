@@ -450,6 +450,21 @@ Every delegated phase carries this clause:
 
 ## Ledger
 
+- Phase 2 verification — `builder: subagent (1 agent), independently reviewed and corrected before
+  commit`. The hybrid query/cache suite is 10/10 and the combined Phase 1+2 memory matrix is 23/23.
+  Independent review found and closed semantic-but-valid cache corruption, source-layout drift,
+  cross-digest pathname races, unsafe cache containment/modes, writable-ancestor replacement, and a
+  marked-cache subtree swap during repair. The final cache uses immutable digest-named indexes,
+  validates cached rows and FTS contents, retains the validated SQLite connection for querying,
+  accepts only root-owned system aliases/sticky ancestors, and descriptor-binds marked-root
+  privatization before revalidating device/inode/owner/mode. The orchestrator independently reran
+  the 23 focused cases, Python compilation, diff check, and leak check; all exited 0.
+- Phase 2 plan — `builder: subagent (1 agent)`. Extend the generic Python core with a worktree-keyed,
+  atomically published derived index; deterministic exact metadata, FTS5/pure-Python BM25, and
+  `stdlib-hash-ngram-v1` vector channels; stable rank fusion and per-candidate explanations; and a
+  bounded safe query-input contract. Add failing-first golden ranking, fallback, invalidation,
+  concurrency, and partial/corrupt-cache fixtures in `tests/memory-retrieval.bats`. The subagent owns
+  only the core helper and this new test file; root will independently review and rerun gates.
 - Phase 1 plan — `builder: subagent (1 agent)`. In the isolated remote-main clone, add the generic
   standard-library ledger/config core, wire the exact `shipyard memory init|validate|status|query`
   command family far enough for init/validate/status, and add failing-first hermetic CLI/schema tests.
