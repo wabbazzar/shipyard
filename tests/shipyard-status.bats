@@ -25,6 +25,13 @@ mark_installed() {
   printf '[Unit]\n' > "$HOME/.config/systemd/user/$name-release.timer"
 }
 
+enable_memory() {
+  local project="$1"
+  printf '\n[memory]\nmode = "advisory"\nledger = ".agents/rules-ledger.jsonl"\n' \
+    >>"$project/.agents/config.toml"
+  : >"$project/.agents/rules-ledger.jsonl"
+}
+
 @test "shipyard is registered in GENERIC_SKILLS" {
   run grep -E 'GENERIC_SKILLS="[^"]*\bshipyard\b' "$QUARTET_ROOT/install.sh"
   [ "$status" -eq 0 ]
@@ -46,7 +53,7 @@ mark_installed() {
   editorial="$QUARTET_ROOT/docs/deck-editorial.json"
 
   grep -Fq '"/shipyard inspect"' "$skill"
-  grep -Fq 'Five subcommands:' "$skill"
+  grep -Fq 'Six subcommands:' "$skill"
   grep -Fq 'matching current-user manifests into this Shipyard core' "$skill"
   grep -Fq 'strictly read-only' "$skill"
   grep -Fq 'does not certify fleet health' "$skill"
@@ -73,6 +80,48 @@ mark_installed() {
   run run_shipyard status --project "$P"
   [ "$status" -eq 3 ]
   echo "$output" | grep -qi "no crew installed"
+}
+
+@test "status preserves unconfigured output and reports configured memory even without crew units" {
+  P="$(make_fixture_project memory-console)"
+  run run_shipyard status --project "$P"
+  [ "$status" -eq 3 ]
+  [[ "$output" != *"memory:"* ]]
+
+  enable_memory "$P"
+  run run_shipyard status --project "$P"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"memory:"* ]]
+  [[ "$output" == *"policy: mode=advisory state=ready"* ]]
+  [[ "$output" == *"ledger: records=0 active=0 superseded=0 digest="* ]]
+  [[ "$output" == *"index: state=not_applicable"* ]]
+  [[ "$output" == *"receipt: state=absent"* ]]
+}
+
+@test "unconfigured status never invokes the memory helper" {
+  P="$(make_fixture_project memory-console-no-spawn)"
+  real_python="$(python3 -c 'import sys; print(sys.executable)')"
+  make_stub_script python3 "exec \"$real_python\" \"\$@\""
+
+  run run_shipyard status --project "$P"
+  [ "$status" -eq 3 ]
+  ! grep -Fq 'agents/lib/rules-memory.py status' "$SHIM_LOG/python3.argv"
+
+  enable_memory "$P"
+  run run_shipyard status --project "$P"
+  [ "$status" -eq 3 ]
+  grep -Fq 'agents/lib/rules-memory.py status' "$SHIM_LOG/python3.argv"
+}
+
+@test "installed status surfaces only bounded memory error codes" {
+  P="$(make_fixture_project memory-console-invalid)"
+  mark_installed "$P"; enable_memory "$P"
+  printf '{"summary":"PRIVATE-LEDGER-PROSE"}\n' >"$P/.agents/rules-ledger.jsonl"
+  run run_shipyard status --project "$P"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"memory:"* ]]
+  [[ "$output" == *"error: missing_key"* ]]
+  [[ "$output" != *"PRIVATE-LEDGER-PROSE"* ]]
 }
 
 @test "status exits 0 and lists timers on an installed project" {

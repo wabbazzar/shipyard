@@ -2,7 +2,7 @@
 
 - **Created:** 2026-08-27
 - **Owner:** wabbazzar
-- **Status:** POLISHED — ready for execution
+- **Status:** BUILT — locally verified; awaiting Ice-owned `main` integration
 - **Priority:** high
 - **Type:** feature
 - **Estimated Points:** 21 (5 phases, cap 5/phase)
@@ -374,29 +374,29 @@ Every delegated phase carries this clause:
 
 ## Definition of Done
 
-- [ ] A project can opt in with one tracked `.agents/rules-ledger.jsonl`; it contains data only and
+- [x] A project can opt in with one tracked `.agents/rules-ledger.jsonl`; it contains data only and
       requires no project-owned script, hook, schema, index, database, or generated vector file.
-- [ ] Shipyard validates, normalizes, indexes, queries, explains, and rebuilds the ledger using generic
+- [x] Shipyard validates, normalizes, indexes, queries, explains, and rebuilds the ledger using generic
       core mechanics, with derived state outside the project worktree.
-- [ ] Exact metadata, FTS, and vector channels participate in deterministic bounded retrieval and each
+- [x] Exact metadata, FTS, and vector channels participate in deterministic bounded retrieval and each
       returned rule names its channel evidence and original source citation.
-- [ ] Ticket polish queries the ledger before executable implementation scope is finalized and records
+- [x] Ticket polish queries the ledger before executable implementation scope is finalized and records
       applicable rule IDs as explicit requirements/gates.
-- [ ] Every eligible exact diff generation receives a fresh, transcript-free historical-risk review;
+- [x] Every eligible exact diff generation receives a fresh, transcript-free historical-risk review;
       a changed diff cannot reuse the previous verdict.
-- [ ] Similarity never becomes authority: findings cite project rule IDs plus current hunk evidence,
+- [x] Similarity never becomes authority: findings cite project rule IDs plus current hunk evidence,
       and reviewers can explicitly falsify irrelevant historical candidates.
-- [ ] Exact-diff receipts bind every specified input/version and are invalidated by code, ledger,
+- [x] Exact-diff receipts bind every specified input/version and are invalidated by code, ledger,
       policy, index, normalizer, model, or gate changes.
-- [ ] Required mode fails closed and advisory mode reports honest degradation for every specified
+- [x] Required mode fails closed and advisory mode reports honest degradation for every specified
       ledger/index/reviewer/receipt failure.
-- [ ] Unconfigured projects retain existing behavior byte-for-byte, with no new model/network call.
-- [ ] The synthetic held-out race replay retrieves earlier related failures for an unsafe diff,
+- [x] Unconfigured projects retain existing behavior byte-for-byte, with no new model/network call.
+- [x] The synthetic held-out race replay retrieves earlier related failures for an unsafe diff,
       requires atomicity plus a deterministic interleaving test, accepts cited prevention evidence,
       and ignores an unrelated prose diff.
-- [ ] Doctor exposes memory readiness/freshness without printing project ledger content, secrets, or
+- [x] Doctor exposes memory readiness/freshness without printing project ledger content, secrets, or
       customer data.
-- [ ] Focused tests and all repository gates are green, with any pre-existing failure reported
+- [x] Focused tests and all repository gates are green, with any pre-existing failure reported
       separately and never weakened.
 
 ## Boundaries
@@ -468,6 +468,29 @@ Every delegated phase carries this clause:
 
 ## Ledger
 
+- Phase 5 verification — `builder: inline after delegated design/review`. The synthetic held-out replay
+  retrieves two earlier atomicity failures for an unsafe read-check-write hunk, emits cited atomic-
+  guard/interleaving requirements, accepts a guarded hunk only with explicit falsification evidence,
+  and makes no memory-review call for unrelated prose. Status/doctor expose bounded readiness,
+  freshness, receipt, and degradation metadata without ledger prose. README, install, adaptation,
+  shoulder, skill, and generated deck material document project/Shipyard ownership, advisory-to-
+  required rollout, rebuild/disposal, receipts, and the hash-ngram recall boundary.
+- Phase 4 verification — `builder: inline, independently reviewed and corrected`. Exact-diff memory
+  now runs inside the existing release watcher after real-hunk assembly and generic review, uses the
+  existing fresh spawn/delivery/stop-gate path, and binds project, base, diff, config, gates, ledger,
+  index/backend, policy, reviewer, dispositions, findings, and delivery in a private atomic receipt.
+  Required failures retain the queue; advisory failures emit explicit degradation. Review found and
+  closed default-reviewer identity ambiguity, staged-base drift, live policy-promotion races, failed-
+  invocation token undercounting, post-review binding races, and delivery-finalization receipt loss.
+  The last correction preserves completed invocation/disposition evidence in a degraded delivered
+  receipt while rejecting impossible incomplete/completed hybrid receipts; the independent re-audit
+  reported no remaining concrete defect.
+- Final local verification — the combined exact-diff/review/status matrix is 36/36; the install and
+  lifecycle matrices are 24/24; syntax, Python compilation, `git diff --check`, and leak-check exit 0.
+  The complete 925-test Bats run has 917 non-failing outcomes (915 pass, 2 documented skips) and the
+  same eight pre-existing dashboard-helper startup failures as untouched `595471d`: tests 76 and
+  78–84. No feature-owned or newly introduced test failed. No network, hosted model, installed
+  project, active orchestrator, or runtime fleet was invoked or mutated during verification.
 - Phase 3 verification — `builder: subagent (1 agent), independently reviewed and corrected before
   commit`. Planning-time memory now preserves the unconfigured legacy path, validates both empty-
   ledger and indexed-no-match zero-result shapes without a reviewer, defines the bounded review set,

@@ -105,6 +105,36 @@ case "$REQUIRE_FEEDBACK" in
     echo "critic-watch: shoulder.require_feedback must be boolean" >&2
     exit 2 ;;
 esac
+MEMORY_CONFIGURED="$(jq_from_json "$CFG_JSON" -r '
+  if (.memory | type) == "object" then "true" else "false" end
+' 2>/dev/null || echo false)"
+MEMORY_MODE="$(jq_from_json "$CFG_JSON" -r '.memory.mode // empty' \
+  2>/dev/null || true)"
+if [ "$MEMORY_CONFIGURED" = true ]; then
+  case "$MEMORY_MODE" in
+    advisory) ;;
+    required) REQUIRE_FEEDBACK=true ;;
+    *)
+      echo "critic-watch: memory.mode must be advisory or required" >&2
+      exit 2 ;;
+  esac
+fi
+MEMORY_REVIEW_HARNESS="${CRITIC_HARNESS:-claude}"
+MEMORY_REVIEW_MODEL="${CRITIC_MODEL:-}"
+MEMORY_REVIEW_PROVIDER="${CRITIC_PROVIDER:-$MEMORY_REVIEW_HARNESS}"
+# The release role's locked default is Claude Sonnet. Make the memory-only
+# invocation explicit so its receipt binds the actual model instead of an
+# unresolved harness default. Foreign harnesses require an explicit model.
+if [ -z "$MEMORY_REVIEW_MODEL" ] && [ "$MEMORY_REVIEW_HARNESS" = claude ]; then
+  MEMORY_REVIEW_MODEL=sonnet
+fi
+REVIEW_TIMEOUT_SEC="${CRITIC_REVIEW_TIMEOUT_SEC:-900}"
+if [ "$MEMORY_CONFIGURED" = true ] &&
+   { ! [[ "$REVIEW_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ ]] ||
+     [ "$REVIEW_TIMEOUT_SEC" -gt 3600 ]; }; then
+  echo "critic-watch: CRITIC_REVIEW_TIMEOUT_SEC must be 1..3600" >&2
+  exit 2
+fi
 CRITIC_DIFF_MODE="${CRITIC_DIFF_MODE:-branch}"
 case "$CRITIC_DIFF_MODE" in
   branch|staged) ;;
@@ -123,6 +153,56 @@ SVC="$PROJECT_NAME-$(role_display "$ROLE" "$CFG_JSON")"
 EVENTS_DIR="${QUARTET_EVENTS_DIR:-$PROJECT_DIR/data/events}"
 
 log() { echo "[$SVC-critic] $*"; }
+
+refresh_runtime_policy() {
+  local refreshed_cfg refreshed_required refreshed_memory refreshed_mode
+  [ -f "$PROJECT_DIR/.agents/config.toml" ] || {
+    CFG_JSON="{}"
+    MEMORY_CONFIGURED=false
+    MEMORY_MODE=""
+    REQUIRE_FEEDBACK=false
+    return 0
+  }
+  if ! refreshed_cfg="$(load_config_json "$PROJECT_DIR/.agents/config.toml")"; then
+    # A newly malformed memory table must not demote an already-running
+    # watcher into the legacy path. Treat its policy as required until the
+    # project repairs the config; deterministic query will record the error.
+    if grep -Eq '^[[:space:]]*\[memory\][[:space:]]*$' \
+        "$PROJECT_DIR/.agents/config.toml" 2>/dev/null; then
+      MEMORY_CONFIGURED=true
+      MEMORY_MODE=required
+      REQUIRE_FEEDBACK=true
+    fi
+    return 1
+  fi
+  CFG_JSON="$refreshed_cfg"
+  refreshed_required="$(jq_from_json "$CFG_JSON" -cr '
+    if (.shoulder | type) == "object" and
+       (.shoulder | has("require_feedback"))
+    then .shoulder.require_feedback
+    else false
+    end
+  ' 2>/dev/null || echo false)"
+  case "$refreshed_required" in true|false) REQUIRE_FEEDBACK="$refreshed_required" ;;
+    *) REQUIRE_FEEDBACK=false ;;
+  esac
+  refreshed_memory="$(jq_from_json "$CFG_JSON" -r '
+    if (.memory | type) == "object" then "true" else "false" end
+  ' 2>/dev/null || echo false)"
+  MEMORY_CONFIGURED="$refreshed_memory"
+  if [ "$MEMORY_CONFIGURED" = true ]; then
+    refreshed_mode="$(jq_from_json "$CFG_JSON" -r '.memory.mode // empty' \
+      2>/dev/null || true)"
+    case "$refreshed_mode" in
+      advisory) MEMORY_MODE=advisory ;;
+      required) MEMORY_MODE=required; REQUIRE_FEEDBACK=true ;;
+      *) MEMORY_MODE=required; REQUIRE_FEEDBACK=true; return 1 ;;
+    esac
+  else
+    MEMORY_MODE=""
+  fi
+  return 0
+}
 
 checked_sha256() {
   local result hash rest
@@ -163,6 +243,39 @@ bounded_uint() {
     value="$maximum"
   fi
   printf '%s\n' "$value"
+}
+
+review_remaining() {
+  local now remaining
+  now="$(date +%s)"
+  remaining=$((REVIEW_DEADLINE - now))
+  [ "$remaining" -gt 0 ] || return 1
+  printf '%s\n' "$remaining"
+}
+
+memory_failure_billable() {
+  if [ "$MEMORY_MODE" = required ]; then printf '%s\n' "$1"
+  else printf '0\n'
+  fi
+}
+
+update_memory_delivery() {
+  local receipt="$1" status="$2"
+  [ -f "$receipt" ] || return 1
+  python3 "$QUARTET_DIR/agents/release/memory-review.py" delivery \
+    --receipt "$receipt" --status "$status" >/dev/null 2>&1
+}
+
+write_raw_memory_degradation() {
+  local code="$1" message="$2"
+  printf '%s' "$full_diff" | python3 "$memory_helper" degraded-raw \
+    --project "$PROJECT_DIR" --base "$memory_base" \
+    --diff-mode "$CRITIC_DIFF_MODE" \
+    --config "$PROJECT_DIR/.agents/config.toml" \
+    --gates "$PROJECT_DIR/.agents/gates.md" --mode "$MEMORY_MODE" \
+    --harness "$MEMORY_REVIEW_HARNESS" --model "$MEMORY_REVIEW_MODEL" \
+    --provider "$MEMORY_REVIEW_PROVIDER" --receipt "$memory_receipt" \
+    --code "$code" --message "$message"
 }
 
 # Classify only the generic critic response. Specialist output has a separate
@@ -391,8 +504,12 @@ tokens_used_today() {
   jq -R 'fromjson?' <"$f" 2>/dev/null | \
     jq -s '[.[] | select(.event=="release.critique" or
       .event=="release.critique.malformed_response" or
-      .event=="release.critique.malformed_response_exhausted") |
-      (.tokens // 0)] | add // 0' \
+      .event=="release.critique.malformed_response_exhausted" or
+      .event=="release.critique.spawn_attempt_failed" or
+      .event=="release.critique.spawn_failed" or
+      .event=="release.critique.specialist_failed" or
+      .event=="release.critique.memory_failed") |
+      (.billable_tokens // .tokens // 0)] | add // 0' \
     2>/dev/null || echo 0
 }
 
@@ -459,6 +576,7 @@ deliver_findings() {
   local supplied_id="${5:-}"
   local delivery_session="${6:-$session}"
   local author_harness="${7:-${CRITIC_NOTE_HARNESS:-claude}}"
+  local memory_delivery_receipt="${8:-}"
   local findings n_block n_warn n_note
   DELIVERY_STATUS=delivery
   findings="$(cat "$findings_file" 2>/dev/null || true)"
@@ -467,13 +585,24 @@ deliver_findings() {
   n_note="$(grep -c '^note|' <<<"$findings" || true)"
 
   if [ -z "${CLAUDE_NOTE_CMD:-}" ]; then
-    if [ "${CRITIC_NOTE_HARNESS:-claude}" = "codex" ]; then
-      log "CLAUDE_NOTE_CMD unset for Codex; queue kept for retry"
+    if [ "$REQUIRE_FEEDBACK" = true ] ||
+       [ "${CRITIC_NOTE_HARNESS:-claude}" = "codex" ]; then
+      log "CLAUDE_NOTE_CMD unset for required/Codex delivery; queue kept for retry"
+      [ -z "$memory_delivery_receipt" ] || \
+        update_memory_delivery "$memory_delivery_receipt" deferred || true
       [ -z "$supplied_id" ] || emit_delivery_disposition "$supplied_id" deferred
       write_required_status "$session" delivery || true
       return 0
     fi
     log "CLAUDE_NOTE_CMD unset; skipping delivery"
+    if [ -n "$memory_delivery_receipt" ] &&
+       ! update_memory_delivery "$memory_delivery_receipt" expired; then
+      log "memory receipt could not record expired delivery; queue kept for retry"
+      DELIVERY_STATUS=deferred
+      write_required_status "$session" memory || true
+      return 0
+    fi
+    DELIVERY_STATUS=expired
     consume_queue "$queue" "$session"
     [ -z "$supplied_id" ] || emit_delivery_disposition "$supplied_id" expired
     return 0
@@ -534,8 +663,31 @@ deliver_findings() {
       # Codex zero proves durable mailbox deposit only. Hook emission and model
       # consumption are later states; edit-queue acknowledgement is safe now.
       rm -f "$attempts_file"
-      if consume_queue "$queue" "$session"; then
+      if [ -n "$memory_delivery_receipt" ] &&
+         ! update_memory_delivery "$memory_delivery_receipt" deposited; then
+        refresh_runtime_policy || true
+        if [ "$MEMORY_MODE" = required ]; then
+          log "memory receipt could not record durable deposit; queue kept for retry"
+          DELIVERY_STATUS=deferred
+          write_required_status "$session" memory || true
+          return 0
+        fi
+        log "advisory memory receipt could not record durable deposit; delivery proceeds degraded"
+        python3 "$QUARTET_DIR/agents/release/memory-review.py" degrade-receipt \
+          --receipt "$memory_delivery_receipt" \
+          --code delivery_receipt_failed \
+          --message "durable notification succeeded but receipt finalization failed" \
+          --delivery-status deposited >/dev/null 2>&1 || \
+          rm -f "$memory_delivery_receipt"
+        emit_event release.critique.memory_failed source=shoulder \
+          reason=delivery_receipt files="$n_files" tokens=0 billable_tokens=0
         DELIVERY_STATUS=deposited
+        consume_queue "$queue" "$session"
+        emit_delivery_disposition "$note_id" deposited
+        return 0
+      fi
+      DELIVERY_STATUS=deposited
+      if consume_queue "$queue" "$session"; then
         emit_delivery_disposition "$note_id" deposited
         write_required_status "$session" deposited || true
       else
@@ -547,12 +699,16 @@ deliver_findings() {
       # note was NOT delivered but the condition is session-state that a
       # later pass can find cleared. Keep the queue; no attempt cap.
       log "claude-note exit $note_rc; queue kept for retry"
+      [ -z "$memory_delivery_receipt" ] || \
+        update_memory_delivery "$memory_delivery_receipt" deferred || true
       emit_delivery_disposition "$note_id" deferred
       write_required_status "$session" delivery || true ;;
     75)
       # Built-in Codex mailbox deposit failed before its atomic rename.
       # Never acknowledge the reviewed queue until durable persistence exists.
       log "critic-note deposit unavailable; queue kept for retry"
+      [ -z "$memory_delivery_receipt" ] || \
+        update_memory_delivery "$memory_delivery_receipt" deferred || true
       emit_delivery_disposition "$note_id" deferred
       write_required_status "$session" delivery || true ;;
     *)
@@ -572,6 +728,14 @@ deliver_findings() {
           rc="$note_rc" attempts="$attempts" \
           ${failed_lineage[@]+"${failed_lineage[@]}"}
         emit_delivery_disposition "$note_id" failed
+        if [ -n "$memory_delivery_receipt" ] &&
+           ! update_memory_delivery "$memory_delivery_receipt" failed; then
+          log "memory receipt could not record failed delivery; queue kept for retry"
+          DELIVERY_STATUS=deferred
+          write_required_status "$session" memory || true
+          return 0
+        fi
+        DELIVERY_STATUS=failed
         if [ "$REQUIRE_FEEDBACK" = true ]; then
           write_retry_state "$attempts_file" "$attempts" \
             "$delivery_generation" || true
@@ -584,6 +748,8 @@ deliver_findings() {
         write_retry_state "$attempts_file" "$attempts" \
           "$delivery_generation" || true
         emit_delivery_disposition "$note_id" deferred
+        [ -z "$memory_delivery_receipt" ] || \
+          update_memory_delivery "$memory_delivery_receipt" deferred || true
         log "claude-note exit $note_rc; queue kept for retry ($attempts/3)"
       fi
       write_required_status "$session" delivery || true ;;
@@ -645,10 +811,12 @@ critique_queue() {
   local valid_response_file="$QUEUE_DIR/critic-valid-response-$session"
   local retry_snapshot="$QUEUE_DIR/critic-snapshot-$session"
 
+  refresh_runtime_policy || true
+
   # Delivery-retry guard: when a critique already ran for this exact queue
   # snapshot, reuse it instead of re-spending the model. Late live-queue
   # appends do not change the already-reviewed snapshot or its delivery ID.
-  if [ -s "$findings_file" ] && [ -s "$retry_snapshot" ] &&
+  if [ "$MEMORY_CONFIGURED" != true ] && [ -s "$findings_file" ] && [ -s "$retry_snapshot" ] &&
       [ "$findings_file" -nt "$retry_snapshot" ]; then
     local cached_n
     cached_n="$(cat "$findings_files_count" 2>/dev/null || true)"
@@ -833,6 +1001,152 @@ critique_queue() {
   # ---- project extension (conventions layer) --------------------------------
   local project_ext="" ext_file="$PROJECT_DIR/.agents/release.md"
   local full_diff="$diff"
+  local memory_helper="$QUARTET_DIR/agents/release/memory-review.py"
+  local rules_helper="$QUARTET_DIR/agents/lib/rules-memory.py"
+  local memory_receipt="$QUEUE_DIR/critic-memory-receipt-$session.json"
+  local memory_query_file="" memory_context_file="" memory_diff_file=""
+  local memory_prompt="" memory_record_count=0 memory_query_ok=false
+  local memory_active=false memory_degraded=false memory_deadline_active=false
+  local memory_stage_reason="" memory_setup_reason="" memory_base="" remaining=""
+  local REVIEW_DEADLINE=0
+  if [ "$MEMORY_CONFIGURED" = true ]; then
+    # The one deadline starts before retrieval: index contention and receipt
+    # preparation consume the same bounded review budget as every model stage.
+    REVIEW_DEADLINE=$(( $(date +%s) + REVIEW_TIMEOUT_SEC ))
+    memory_deadline_active=true
+    if [ "$CRITIC_DIFF_MODE" = staged ]; then
+      memory_base="$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || \
+        printf '%s' HEAD)"
+    else
+      memory_base="$(git -C "$PROJECT_DIR" rev-parse "$trunk" 2>/dev/null || \
+        printf '%s' "$trunk")"
+    fi
+    if ! memory_query_file="$(mktemp "$QUEUE_DIR/.critic-memory-query.XXXXXX")"; then
+      memory_setup_reason=mktemp_query
+    elif ! memory_context_file="$(mktemp "$QUEUE_DIR/.critic-memory-context.XXXXXX")"; then
+      memory_setup_reason=mktemp_context
+    elif ! memory_diff_file="$(mktemp "$QUEUE_DIR/.critic-memory-diff.XXXXXX")"; then
+      memory_setup_reason=mktemp_diff
+    elif ! printf '%s' "$full_diff" >"$memory_diff_file"; then
+      memory_setup_reason=diff_write
+    fi
+    if [ -n "$memory_setup_reason" ]; then
+      log "rules-memory temporary input setup failed ($memory_setup_reason)"
+      emit_event release.critique.memory_failed source=shoulder \
+        reason="$memory_setup_reason" files="$n_files" tokens=0
+      write_raw_memory_degradation "$memory_setup_reason" \
+        "rules-memory temporary input setup failed" >/dev/null 2>&1 || \
+        rm -f "$memory_receipt"
+      rm -f "$memory_query_file" "$memory_context_file" "$memory_diff_file"
+      refresh_runtime_policy || true
+      if [ "$MEMORY_MODE" = required ]; then
+        write_required_status "$session" memory || true
+        return 0
+      fi
+      memory_degraded=true
+    else
+    remaining="$(review_remaining)" || remaining=0
+    if [ "$remaining" -le 0 ]; then
+      memory_stage_reason=deadline
+    elif timeout "$remaining" python3 "$rules_helper" query \
+        --project "$PROJECT_DIR" --diff-file "$memory_diff_file" \
+        >"$memory_query_file"; then
+      memory_query_ok=true
+      memory_record_count="$(jq -r '.record_count // 0' "$memory_query_file" \
+        2>/dev/null || echo invalid)"
+      if ! [[ "$memory_record_count" =~ ^[0-9]+$ ]]; then
+        memory_query_ok=false
+        memory_stage_reason=query_shape
+      fi
+    else
+      if [ "$?" -eq 124 ]; then memory_stage_reason=deadline
+      else memory_stage_reason=query
+      fi
+    fi
+    if [ "$memory_query_ok" = true ] && [ "$memory_record_count" -gt 0 ]; then
+      memory_active=true
+      remaining="$(review_remaining)" || remaining=0
+      if [ "$remaining" -le 0 ]; then
+        memory_query_ok=false
+        memory_stage_reason=deadline
+      else
+        local memory_stage_rc
+        memory_prompt="$(timeout "$remaining" python3 "$memory_helper" prepare \
+          --project "$PROJECT_DIR" --query-file "$memory_query_file" \
+          --diff-file "$memory_diff_file" --base "$memory_base" \
+          --diff-mode "$CRITIC_DIFF_MODE" \
+          --config "$PROJECT_DIR/.agents/config.toml" \
+          --gates "$PROJECT_DIR/.agents/gates.md" \
+          --harness "$MEMORY_REVIEW_HARNESS" \
+          --model "$MEMORY_REVIEW_MODEL" --provider "$MEMORY_REVIEW_PROVIDER" \
+          --output "$memory_context_file")"
+        memory_stage_rc=$?
+        if [ "$memory_stage_rc" -ne 0 ]; then
+          memory_query_ok=false
+          if [ "$memory_stage_rc" -eq 124 ]; then memory_stage_reason=deadline
+          else memory_stage_reason=prepare
+          fi
+        fi
+      fi
+    elif [ "$memory_query_ok" = true ]; then
+      # Empty ledgers are the byte/model-count legacy path and have no receipt.
+      memory_deadline_active=false
+      rm -f "$memory_receipt"
+    fi
+
+    # A cached delivery is reusable only after recomputing and checking every
+    # exact-diff memory binding. An empty ledger deliberately takes the legacy
+    # fresh-review path and leaves no memory receipt.
+    if [ "$memory_active" = true ] && [ "$memory_query_ok" = true ] &&
+       [ -f "$findings_file" ] && [ -s "$retry_snapshot" ] &&
+       python3 "$memory_helper" validate-cache --context "$memory_context_file" \
+         --receipt "$memory_receipt" --findings "$findings_file"; then
+      local cached_n
+      cached_n="$(cat "$findings_files_count" 2>/dev/null || true)"
+      [[ "$cached_n" =~ ^[0-9]+$ ]] || cached_n="$n_files"
+      if update_memory_delivery "$memory_receipt" delivery; then
+        log "reusing receipt-validated memory critique for session $session"
+        deliver_findings "$queue" "$session" "$findings_file" "$cached_n" "" \
+          "$delivery_session" "$author_harness" "$memory_receipt"
+        rm -f "$memory_query_file" "$memory_context_file" "$memory_diff_file"
+        return 0
+      fi
+      log "cached memory receipt could not enter delivery; running a fresh review"
+    fi
+    # Never let a stale review file or receipt survive into a fresh generation.
+    if [ "$memory_active" = true ] && [ "$memory_query_ok" = true ]; then
+      rm -f "$findings_file" "$findings_files_count" "$memory_receipt"
+    fi
+    if [ "$memory_query_ok" != true ]; then
+      memory_active=false
+      [ -n "$memory_stage_reason" ] || memory_stage_reason=query_shape
+      log "rules-memory query/receipt preparation failed"
+      emit_event release.critique.memory_failed source=shoulder \
+        reason="$memory_stage_reason" \
+        files="$n_files" tokens=0
+      if ! python3 "$memory_helper" degraded-input --project "$PROJECT_DIR" \
+          --query-file "$memory_query_file" --diff-file "$memory_diff_file" \
+          --base "$memory_base" --diff-mode "$CRITIC_DIFF_MODE" \
+          --config "$PROJECT_DIR/.agents/config.toml" \
+          --gates "$PROJECT_DIR/.agents/gates.md" --mode "$MEMORY_MODE" \
+          --harness "$MEMORY_REVIEW_HARNESS" --model "$MEMORY_REVIEW_MODEL" \
+          --provider "$MEMORY_REVIEW_PROVIDER" --receipt "$memory_receipt" \
+          --code "$memory_stage_reason" \
+          --message "rules-memory retrieval or receipt preparation failed"; then
+        # A stale complete receipt is less safe than no receipt when the
+        # replacement surface itself is unavailable.
+        rm -f "$memory_receipt"
+      fi
+      refresh_runtime_policy || true
+      if [ "$MEMORY_MODE" = required ]; then
+        write_required_status "$session" memory || true
+        rm -f "$memory_query_file" "$memory_context_file" "$memory_diff_file"
+        return 0
+      fi
+      memory_degraded=true
+    fi
+    fi
+  fi
   [ -f "$ext_file" ] && project_ext="$(cat "$ext_file")"
   project_ext="$(_bounded_prompt_section "$project_ext" 16000 \
     "PROJECT EXTENSION")"
@@ -885,8 +1199,20 @@ TOKENS_HINT|<none>"
   # claude. spawn_model omits --model when empty, matching the historical
   # conditional model_args exactly.
   local claude_out claude_rc
-  spawn_model --harness "${CRITIC_HARNESS:-claude}" --model "${CRITIC_MODEL:-}" \
-    --provider "${CRITIC_PROVIDER:-}" --prompt "$prompt" --log /dev/null --json
+  if [ "$memory_deadline_active" = true ]; then
+    remaining="$(review_remaining)" || remaining=0
+    if [ "$remaining" -gt 0 ]; then
+      spawn_model --harness "${CRITIC_HARNESS:-claude}" --model "${CRITIC_MODEL:-}" \
+        --provider "${CRITIC_PROVIDER:-}" --prompt "$prompt" --log /dev/null \
+        --json --timeout "$remaining"
+    else
+      SPAWN_RAW=""; SPAWN_RC=124; SPAWN_TEXT=""; SPAWN_TOKENS=0
+      _SPAWN_STDERR="whole-review deadline exhausted before generic review"
+    fi
+  else
+    spawn_model --harness "${CRITIC_HARNESS:-claude}" --model "${CRITIC_MODEL:-}" \
+      --provider "${CRITIC_PROVIDER:-}" --prompt "$prompt" --log /dev/null --json
+  fi
   claude_out="$SPAWN_RAW"; claude_rc="$SPAWN_RC"
   if [ "$claude_rc" -ne 0 ] || [ -z "$claude_out" ]; then
     # Same 3-strike rule as delivery: a persistent spawn failure (bad
@@ -903,7 +1229,8 @@ TOKENS_HINT|<none>"
     if [ "$sa" -ge 3 ]; then
       log "critic claude run failed (exit=$claude_rc) after $sa attempts; giving up on reviewed entries: $err_line"
       emit_event release.critique.spawn_failed source=shoulder \
-        rc="$claude_rc" attempts="$sa" files="$n_files" stderr="$err_line"
+        rc="$claude_rc" attempts="$sa" files="$n_files" \
+        tokens="${SPAWN_TOKENS:-0}" stderr="$err_line"
       if [ "$REQUIRE_FEEDBACK" = true ]; then
         write_retry_state "$spawn_attempts_file" "$sa" \
           "$spawn_generation" || true
@@ -916,6 +1243,9 @@ TOKENS_HINT|<none>"
     else
       write_retry_state "$spawn_attempts_file" "$sa" \
         "$spawn_generation" || true
+      emit_event release.critique.spawn_attempt_failed source=shoulder \
+        rc="$claude_rc" attempt="$sa" files="$n_files" \
+        tokens="${SPAWN_TOKENS:-0}"
       log "critic claude run failed (exit=$claude_rc); queue kept for retry ($sa/3): $err_line"
     fi
     return 0
@@ -991,7 +1321,7 @@ TOKENS_HINT|<none>"
       --shipyard "$QUARTET_DIR" --diff-file "$diff_file" >"$selection_file"; then
     log "specialist selection failed; generic findings withheld and queue kept"
     emit_event release.critique.specialist_failed source=shoulder \
-      reason=manifest_or_selection files="$n_files"
+      reason=manifest_or_selection files="$n_files" tokens="$tokens"
     rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
       "$diff_file" "$response_file"
     return 0
@@ -999,6 +1329,8 @@ TOKENS_HINT|<none>"
   specialist_count="$(jq -r 'length' "$selection_file" 2>/dev/null || echo invalid)"
   if ! [[ "$specialist_count" =~ ^[0-9]+$ ]]; then
     log "specialist selection returned malformed output; queue kept"
+    emit_event release.critique.specialist_failed source=shoulder \
+      reason=selection_shape files="$n_files" tokens="$tokens"
     rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
       "$diff_file" "$response_file"
     return 0
@@ -1078,14 +1410,27 @@ EXACT MATCHING HUNKS:
 
 $specialist_hunks"
 
-    spawn_model --harness "${CRITIC_HARNESS:-claude}" \
-      --model "${CRITIC_MODEL:-}" --provider "${CRITIC_PROVIDER:-}" \
-      --prompt "$specialist_prompt" --log /dev/null --json
+    if [ "$memory_deadline_active" = true ]; then
+      remaining="$(review_remaining)" || remaining=0
+      if [ "$remaining" -gt 0 ]; then
+        spawn_model --harness "${CRITIC_HARNESS:-claude}" \
+          --model "${CRITIC_MODEL:-}" --provider "${CRITIC_PROVIDER:-}" \
+          --prompt "$specialist_prompt" --log /dev/null --json \
+          --timeout "$remaining"
+      else
+        SPAWN_RAW=""; SPAWN_RC=124; SPAWN_TEXT=""; SPAWN_TOKENS=0
+      fi
+    else
+      spawn_model --harness "${CRITIC_HARNESS:-claude}" \
+        --model "${CRITIC_MODEL:-}" --provider "${CRITIC_PROVIDER:-}" \
+        --prompt "$specialist_prompt" --log /dev/null --json
+    fi
     specialist_rc="$SPAWN_RC"
     if [ "$specialist_rc" -ne 0 ] || [ -z "$SPAWN_RAW" ]; then
       log "specialist '$slug' review failed (exit=$specialist_rc); queue kept"
       emit_event release.critique.specialist_failed source=shoulder \
-        reason=spawn specialist="$slug" rc="$specialist_rc" files="$n_files"
+        reason=spawn specialist="$slug" rc="$specialist_rc" files="$n_files" \
+        tokens="$((tokens + specialist_tokens + ${SPAWN_TOKENS:-0}))"
       rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
         "$diff_file" "$response_file" "$evidence_file"
       return 0
@@ -1099,7 +1444,8 @@ $specialist_hunks"
     if [ "$specialist_clean_count" -ne 1 ] || [ -n "$specialist_invalid_lines" ]; then
       log "specialist '$slug' returned malformed review output; queue kept"
       emit_event release.critique.specialist_failed source=shoulder \
-        reason=malformed_response specialist="$slug" files="$n_files"
+        reason=malformed_response specialist="$slug" files="$n_files" \
+        tokens="$((tokens + specialist_tokens))"
       rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
         "$diff_file" "$response_file" "$evidence_file"
       return 0
@@ -1111,16 +1457,238 @@ $specialist_hunks"
       --live-docs-json "$live_docs" --response-file "$response_file" \
       --reviewed-at "$reviewed_at" >>"$evidence_file" || {
         log "specialist '$slug' source evidence was malformed; queue kept"
+        emit_event release.critique.specialist_failed source=shoulder \
+          reason=source_evidence specialist="$slug" files="$n_files" \
+          tokens="$((tokens + specialist_tokens))"
         rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
           "$diff_file" "$response_file" "$evidence_file"
         return 0
       }
   done < <(jq -c '.[]' "$selection_file")
 
+  # A configured ledger cannot be silently skipped. The deterministic query,
+  # fresh reviewer, and receipt boundary are enforced here.
+  : >"$diff_file"
+  local memory_review_count=0 memory_tokens=0 memory_review_completed=false
+  local memory_failure_code="" memory_started_at="" memory_ended_at=""
+  if [ "$memory_active" = true ]; then
+    memory_review_count="$(jq -er '
+      select(.schema_version == 1 and (.binding | type) == "object"
+        and (.review_set_ids | type) == "array"
+        and (.candidate_evidence | type) == "array"
+        and (.prompt_digest | type) == "string")
+      | .review_set_ids | length
+    ' "$memory_context_file" 2>/dev/null || echo invalid)"
+    if ! [[ "$memory_review_count" =~ ^[0-9]+$ ]]; then
+      log "memory review context was malformed"
+      refresh_runtime_policy || true
+      emit_event release.critique.memory_failed source=shoulder \
+        reason=context files="$n_files" \
+        tokens="$((tokens + specialist_tokens))" \
+        billable_tokens="$(memory_failure_billable "$((tokens + specialist_tokens))")"
+      refresh_runtime_policy || true
+      if [ "$MEMORY_MODE" = required ]; then
+        write_required_status "$session" memory || true
+        rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+          "$diff_file" "$response_file" "$memory_query_file" \
+          "$memory_context_file" "$memory_diff_file"
+        return 0
+      fi
+      python3 "$memory_helper" degraded-input --project "$PROJECT_DIR" \
+        --query-file "$memory_query_file" --diff-file "$memory_diff_file" \
+        --base "$memory_base" --diff-mode "$CRITIC_DIFF_MODE" \
+        --config "$PROJECT_DIR/.agents/config.toml" \
+        --gates "$PROJECT_DIR/.agents/gates.md" --mode "$MEMORY_MODE" \
+        --harness "$MEMORY_REVIEW_HARNESS" --model "$MEMORY_REVIEW_MODEL" \
+        --provider "$MEMORY_REVIEW_PROVIDER" --receipt "$memory_receipt" \
+        --code context --message "memory review context was malformed" \
+        >/dev/null 2>&1 || rm -f "$memory_receipt"
+      memory_active=false
+      memory_degraded=true
+    fi
+    if [ "$memory_active" = true ] && [ "$memory_review_count" -eq 0 ]; then
+      if ! python3 "$memory_helper" zero --context "$memory_context_file" \
+          --receipt "$memory_receipt"; then
+        log "zero-candidate memory receipt failed"
+        refresh_runtime_policy || true
+        emit_event release.critique.memory_failed source=shoulder \
+          reason=zero_receipt files="$n_files" \
+          tokens="$((tokens + specialist_tokens))" \
+          billable_tokens="$(memory_failure_billable "$((tokens + specialist_tokens))")"
+        refresh_runtime_policy || true
+        if [ "$MEMORY_MODE" = required ]; then
+          write_required_status "$session" memory || true
+          rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+            "$diff_file" "$response_file" "$memory_query_file" \
+            "$memory_context_file" "$memory_diff_file"
+          return 0
+        fi
+        python3 "$memory_helper" degraded --context "$memory_context_file" \
+          --receipt "$memory_receipt" --code zero_receipt_failed \
+          --message "zero-candidate receipt publication failed" \
+          >/dev/null 2>&1 || rm -f "$memory_receipt"
+        memory_active=false
+        memory_degraded=true
+      fi
+    elif [ "$memory_active" = true ]; then
+      remaining="$(review_remaining)" || remaining=0
+      memory_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      if [ "$remaining" -gt 0 ]; then
+        spawn_model --harness "$MEMORY_REVIEW_HARNESS" \
+          --model "$MEMORY_REVIEW_MODEL" --provider "$MEMORY_REVIEW_PROVIDER" \
+          --prompt "$memory_prompt" --log /dev/null --json \
+          --timeout "$remaining"
+      else
+        SPAWN_RAW=""; SPAWN_RC=124; SPAWN_TEXT=""; SPAWN_TOKENS=0
+        SPAWN_PROVIDER=""; SPAWN_MODEL=""
+      fi
+      memory_ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      memory_tokens="${SPAWN_TOKENS:-0}"
+      [[ "$memory_tokens" =~ ^[0-9]+$ ]] || memory_tokens=0
+
+      if [ "${SPAWN_RC:-1}" -eq 124 ]; then
+        memory_failure_code=deadline
+      elif [ "${SPAWN_RC:-1}" -ne 0 ]; then
+        memory_failure_code=reviewer_spawn
+      elif [ -z "${SPAWN_TEXT:-}" ]; then
+        memory_failure_code=malformed_reviewer_output
+      elif [ -z "${SPAWN_MODEL:-}" ] || [ -z "${SPAWN_PROVIDER:-}" ]; then
+        memory_failure_code=reviewer_identity
+      else
+        printf '%s\n' "$SPAWN_TEXT" >"$response_file"
+        : >"$diff_file"
+        if python3 "$memory_helper" normalize \
+            --context "$memory_context_file" --response "$response_file" \
+            --receipt "$memory_receipt" \
+            --resolved-model "$SPAWN_MODEL" \
+            --resolved-provider "$SPAWN_PROVIDER" \
+            --started-at "$memory_started_at" --ended-at "$memory_ended_at" \
+            --tokens "$memory_tokens" --rc "$SPAWN_RC" \
+            --identity-source spawn-dispatcher-v1 >"$diff_file"; then
+          memory_review_completed=true
+        else
+          memory_failure_code=malformed_reviewer_output
+        fi
+      fi
+
+      if [ "$memory_review_completed" != true ]; then
+        [ -n "$memory_failure_code" ] || memory_failure_code=reviewer_failed
+        log "rules-memory review did not complete ($memory_failure_code)"
+        refresh_runtime_policy || true
+        python3 "$memory_helper" degraded --context "$memory_context_file" \
+          --receipt "$memory_receipt" --code "$memory_failure_code" \
+          --message "fresh historical-risk reviewer did not complete" \
+          >/dev/null 2>&1 || rm -f "$memory_receipt"
+        emit_event release.critique.memory_failed source=shoulder \
+          reason="$memory_failure_code" files="$n_files" \
+          tokens="$((tokens + specialist_tokens + memory_tokens))" \
+          billable_tokens="$(memory_failure_billable \
+            "$((tokens + specialist_tokens + memory_tokens))")"
+        refresh_runtime_policy || true
+        if [ "$MEMORY_MODE" = required ]; then
+          write_required_status "$session" memory || true
+          rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+            "$diff_file" "$response_file" "$evidence_file" \
+            "$memory_query_file" "$memory_context_file" "$memory_diff_file"
+          return 0
+        fi
+        memory_active=false
+        memory_degraded=true
+      fi
+    fi
+  fi
+
+  # Recompute every deterministic binding after all model work and before any
+  # memory finding can enter delivery. A concurrent edit to HEAD, the ledger,
+  # config, gates, or derived index invalidates the just-produced receipt.
+  if [ "$memory_active" = true ]; then
+    local memory_freshness_code="" memory_fresh_base="$memory_base"
+    remaining="$(review_remaining)" || remaining=0
+    if [ "$remaining" -le 0 ]; then
+      memory_freshness_code=deadline
+    else
+      timeout "$remaining" python3 "$rules_helper" query \
+        --project "$PROJECT_DIR" --diff-file "$memory_diff_file" \
+        >"$memory_query_file"
+      memory_stage_rc=$?
+      if [ "$memory_stage_rc" -ne 0 ]; then
+        if [ "$memory_stage_rc" -eq 124 ]; then memory_freshness_code=deadline
+        else memory_freshness_code=freshness_query
+        fi
+      elif [ "$CRITIC_DIFF_MODE" = staged ]; then
+        memory_fresh_base="$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || \
+          printf '%s' HEAD)"
+      else
+        memory_fresh_base="$(git -C "$PROJECT_DIR" rev-parse "$trunk" 2>/dev/null || \
+          printf '%s' "$trunk")"
+      fi
+      if [ -z "$memory_freshness_code" ]; then
+        if [ "$memory_fresh_base" != "$memory_base" ]; then
+          memory_freshness_code=base_changed
+        else
+          remaining="$(review_remaining)" || remaining=0
+          if [ "$remaining" -le 0 ]; then
+            memory_freshness_code=deadline
+          else
+            timeout "$remaining" python3 "$memory_helper" prepare \
+              --project "$PROJECT_DIR" --query-file "$memory_query_file" \
+              --diff-file "$memory_diff_file" --base "$memory_fresh_base" \
+              --diff-mode "$CRITIC_DIFF_MODE" \
+              --config "$PROJECT_DIR/.agents/config.toml" \
+              --gates "$PROJECT_DIR/.agents/gates.md" \
+              --harness "$MEMORY_REVIEW_HARNESS" \
+              --model "$MEMORY_REVIEW_MODEL" --provider "$MEMORY_REVIEW_PROVIDER" \
+              --output "$memory_context_file" >/dev/null
+            memory_stage_rc=$?
+            if [ "$memory_stage_rc" -ne 0 ]; then
+              if [ "$memory_stage_rc" -eq 124 ]; then memory_freshness_code=deadline
+              else memory_freshness_code=freshness_prepare
+              fi
+            elif ! python3 "$memory_helper" validate-cache \
+                --context "$memory_context_file" --receipt "$memory_receipt" \
+                --findings "$diff_file"; then
+              memory_freshness_code=stale_binding
+            fi
+          fi
+        fi
+      fi
+    fi
+    if [ -n "$memory_freshness_code" ]; then
+      log "rules-memory receipt became invalid before delivery ($memory_freshness_code)"
+      refresh_runtime_policy || true
+      emit_event release.critique.memory_failed source=shoulder \
+        reason="$memory_freshness_code" files="$n_files" \
+        tokens="$((tokens + specialist_tokens + memory_tokens))" \
+        billable_tokens="$(memory_failure_billable \
+          "$((tokens + specialist_tokens + memory_tokens))")"
+      python3 "$memory_helper" degraded-input --project "$PROJECT_DIR" \
+        --query-file "$memory_query_file" --diff-file "$memory_diff_file" \
+        --base "$memory_fresh_base" --diff-mode "$CRITIC_DIFF_MODE" \
+        --config "$PROJECT_DIR/.agents/config.toml" \
+        --gates "$PROJECT_DIR/.agents/gates.md" --mode "$MEMORY_MODE" \
+        --harness "$MEMORY_REVIEW_HARNESS" --model "$MEMORY_REVIEW_MODEL" \
+        --provider "$MEMORY_REVIEW_PROVIDER" --receipt "$memory_receipt" \
+        --code "$memory_freshness_code" \
+        --message "rules-memory inputs changed or could not be revalidated before delivery" \
+        >/dev/null 2>&1 || rm -f "$memory_receipt"
+      refresh_runtime_policy || true
+      if [ "$MEMORY_MODE" = required ]; then
+        write_required_status "$session" memory || true
+        rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+          "$diff_file" "$response_file" "$evidence_file" \
+          "$memory_query_file" "$memory_context_file" "$memory_diff_file"
+        return 0
+      fi
+      : >"$diff_file"
+      memory_active=false
+      memory_degraded=true
+    fi
+  fi
+
   local findings n_block n_warn n_note
   findings="$(python3 "$specialist_helper" merge-findings \
-    "$generic_findings" "$specialist_findings")"
-  tokens=$((tokens + specialist_tokens))
+    "$generic_findings" "$specialist_findings" "$diff_file")"
+  tokens=$((tokens + specialist_tokens + memory_tokens))
   n_block="$(grep -c '^block|' <<<"$findings" || true)"
   n_warn="$(grep -c '^warn|' <<<"$findings" || true)"
   n_note="$(grep -c '^note|' <<<"$findings" || true)"
@@ -1132,8 +1700,75 @@ $specialist_hunks"
   fi
   printf '%s\n' "$n_files" >"$findings_files_count"
   printf 'valid mode=%s\n' "$CRITIC_DIFF_MODE" >"$valid_response_file"
+  if [ "$memory_active" = true ]; then
+    if ! python3 "$memory_helper" bind-findings --receipt "$memory_receipt" \
+        --findings "$findings_file" >/dev/null; then
+      log "memory receipt could not bind merged findings"
+      refresh_runtime_policy || true
+      emit_event release.critique.memory_failed source=shoulder \
+        reason=bind_findings files="$n_files" tokens="$tokens" \
+        billable_tokens="$(memory_failure_billable "$tokens")"
+      if [ "$MEMORY_MODE" = required ]; then
+        write_required_status "$session" memory || true
+        rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+          "$diff_file" "$response_file" "$memory_query_file" \
+          "$memory_context_file" "$memory_diff_file"
+        return 0
+      fi
+      python3 "$memory_helper" degraded --context "$memory_context_file" \
+        --receipt "$memory_receipt" --code bind_findings_failed \
+        --message "merged findings could not be bound to memory receipt" \
+        >/dev/null 2>&1 || rm -f "$memory_receipt"
+      : >"$diff_file"
+      findings="$(python3 "$specialist_helper" merge-findings \
+        "$generic_findings" "$specialist_findings")"
+      if [ -n "$findings" ]; then
+        printf '%s\n' "$findings" >"$findings_file"
+      else
+        : >"$findings_file"
+      fi
+      n_block="$(grep -c '^block|' <<<"$findings" || true)"
+      n_warn="$(grep -c '^warn|' <<<"$findings" || true)"
+      n_note="$(grep -c '^note|' <<<"$findings" || true)"
+      memory_active=false
+      memory_degraded=true
+    fi
+  fi
+  if [ "$memory_active" = true ] &&
+     ! update_memory_delivery "$memory_receipt" delivery; then
+    log "memory receipt could not enter delivery state"
+    refresh_runtime_policy || true
+    emit_event release.critique.memory_failed source=shoulder \
+      reason=delivery_receipt files="$n_files" tokens="$tokens" \
+      billable_tokens="$(memory_failure_billable "$tokens")"
+    if [ "$MEMORY_MODE" = required ]; then
+      write_required_status "$session" memory || true
+      rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
+        "$diff_file" "$response_file" "$memory_query_file" \
+        "$memory_context_file" "$memory_diff_file"
+      return 0
+    fi
+    python3 "$memory_helper" degraded --context "$memory_context_file" \
+      --receipt "$memory_receipt" --code delivery_receipt_failed \
+      --message "memory receipt could not enter delivery state" \
+      >/dev/null 2>&1 || rm -f "$memory_receipt"
+    : >"$diff_file"
+    findings="$(python3 "$specialist_helper" merge-findings \
+      "$generic_findings" "$specialist_findings")"
+    if [ -n "$findings" ]; then
+      printf '%s\n' "$findings" >"$findings_file"
+    else
+      : >"$findings_file"
+    fi
+    n_block="$(grep -c '^block|' <<<"$findings" || true)"
+    n_warn="$(grep -c '^warn|' <<<"$findings" || true)"
+    n_note="$(grep -c '^note|' <<<"$findings" || true)"
+    memory_active=false
+    memory_degraded=true
+  fi
   rm -f "$generic_findings" "$specialist_findings" "$selection_file" \
-    "$diff_file" "$response_file"
+    "$diff_file" "$response_file" "$memory_query_file" \
+    "$memory_context_file" "$memory_diff_file"
 
   local critique_id="" critique_lineage=() summary
   if outcome_lineage_enabled; then
@@ -1153,8 +1788,12 @@ $specialist_hunks"
   log "critique: $n_block block, $n_warn warn, $n_note note across $n_files files (tokens=$tokens)"
 
   # ---- deliver to the dev session -------------------------------------------
+  local delivery_receipt=""
+  if [ "$memory_active" = true ] && [ -f "$memory_receipt" ]; then
+    delivery_receipt="$memory_receipt"
+  fi
   deliver_findings "$queue" "$session" "$findings_file" "$n_files" "$critique_id" \
-    "$delivery_session" "$author_harness"
+    "$delivery_session" "$author_harness" "$delivery_receipt"
   return 0
 }
 

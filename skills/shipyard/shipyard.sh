@@ -156,6 +156,55 @@ cmd_memory() {
   "${cmd[@]}"
 }
 
+_memory_status_report() {
+  local document rc configured state mode records active superseded ledger_digest
+  local index_state index_digest embedding receipt_state coverage verdict delivery action
+  if ! jq -e '.memory | type == "object"' <<<"$CFG_JSON" >/dev/null 2>&1; then
+    if jq -e 'has("memory")' <<<"$CFG_JSON" >/dev/null 2>&1; then
+      echo "memory:"
+      echo "  state: invalid (configured [memory] value is not a table)"
+    fi
+    return 0
+  fi
+  document="$(
+    python3 "$QUARTET_DIR/agents/lib/rules-memory.py" status --project "$PROJECT_DIR" 2>/dev/null
+  )"
+  rc=$?
+  configured="$(jq -r '.configured // false' <<<"$document" 2>/dev/null || echo invalid)"
+  if [ "$configured" = "false" ] && [ "$rc" -eq 0 ]; then
+    return 0
+  fi
+  echo "memory:"
+  if [ -z "$document" ] || ! jq -e 'type == "object"' <<<"$document" >/dev/null 2>&1; then
+    echo "  state: unavailable (status helper returned invalid output)"
+    return 0
+  fi
+  state="$(jq -r '.state // "invalid"' <<<"$document")"
+  mode="$(jq -r '.mode // "unknown"' <<<"$document")"
+  records="$(jq -r '.record_count // 0' <<<"$document")"
+  active="$(jq -r '.active_count // 0' <<<"$document")"
+  superseded="$(jq -r '.superseded_count // 0' <<<"$document")"
+  ledger_digest="$(jq -r '.ledger_digest // "none"' <<<"$document")"
+  echo "  policy: mode=$mode state=$state"
+  echo "  ledger: records=$records active=$active superseded=$superseded digest=$ledger_digest"
+  if [ "$state" != "ready" ]; then
+    jq -r '.errors[]? | "  error: \(.code)"' <<<"$document"
+    return 0
+  fi
+  index_state="$(jq -r '.index.state // "unknown"' <<<"$document")"
+  index_digest="$(jq -r '.index.actual_digest // .index.expected_digest // "none"' <<<"$document")"
+  embedding="$(jq -r 'if .embedding.available == true then "available" else "unavailable" end' <<<"$document")"
+  echo "  index: state=$index_state digest=$index_digest"
+  echo "  embedding: $embedding backend=$(jq -r '.embedding.backend // "unknown"' <<<"$document")"
+  receipt_state="$(jq -r '.receipt.state // "unknown"' <<<"$document")"
+  coverage="$(jq -r '.receipt.coverage // "none"' <<<"$document")"
+  verdict="$(jq -r '.receipt.verdict // "none"' <<<"$document")"
+  delivery="$(jq -r '.receipt.delivery // "none"' <<<"$document")"
+  echo "  receipt: state=$receipt_state coverage=$coverage verdict=$verdict delivery=$delivery diff_freshness=unverified"
+  action="$(jq -r '[.index.action, .receipt.action] | map(select(. != null and . != "")) | unique | join("; ")' <<<"$document")"
+  [ -z "$action" ] || echo "  action: $action"
+}
+
 # ---- dashboard -------------------------------------------------------------
 _dashboard_manifest_value() {
   python3 -c '
@@ -416,6 +465,7 @@ cmd_status() {
     echo "shipyard: no crew installed for '$PROJECT_NAME'"
     echo "  (no $unit_dir/$pattern)"
     echo "  install with: $QUARTET_DIR/install.sh --project $PROJECT_DIR"
+    _memory_status_report
     echo "dashboard:"
     _dashboard_report "  " || true
     return 3
@@ -429,6 +479,8 @@ cmd_status() {
   for r in design build release medic scribe; do
     [ -f "$PROJECT_DIR/.agents/$r.md" ] && echo "  - $r: $PROJECT_DIR/.agents/$r.md"
   done
+
+  _memory_status_report
 
   # Read-only drift audit — only when the full toolchain is present (skipped in
   # the hermetic test env, where gh/claude are not stubbed).

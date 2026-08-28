@@ -19,6 +19,7 @@ setup() {
   load helpers
   DOCTOR_TEST_BASH="$(PATH="${SHIPYARD_TEST_COMMAND_PATH:-$PATH}" command -v bash)"
   quartet_setup
+  export XDG_CACHE_HOME="$BATS_TEST_TMPDIR/cache"
   UNITS="$HOME/.config/systemd/user"
 
   # systemctl: is-enabled <x.timer> succeeds iff the timer file exists and no
@@ -50,6 +51,30 @@ doctor_install() {
 run_doctor() {
   run env QUARTET_DIR="$QUARTET_ROOT" \
     "$DOCTOR_TEST_BASH" "$QUARTET_ROOT/install.sh" --doctor --project "$P"
+}
+
+enable_doctor_memory() {
+  local mode="${1:-advisory}"
+  printf '\n[memory]\nmode = "%s"\nledger = ".agents/rules-ledger.jsonl"\n' \
+    "$mode" >>"$P/.agents/config.toml"
+  : >"$P/.agents/rules-ledger.jsonl"
+}
+
+seed_doctor_rule() {
+  python3 - "$P/.agents/rules-ledger.jsonl" <<'PY'
+from pathlib import Path
+import json, sys
+r={"schema_version":1,"id":"DOCTOR-RACE","occurred_at":"2026-08-20T12:30:00Z",
+"kind":"regression","severity":"block","status":"active",
+"summary":"A conditional transition raced.",
+"mechanism":"A stale writer passed a split read-check-write sequence.",
+"rule":"Use an atomic version-bound transition.",
+"required_evidence":"Run a deterministic interleaving regression test.",
+"associations":{"paths":["src/state.py"],"tags":["race-condition"]},
+"remediation":"Bind the write to the observed version.",
+"sources":[{"kind":"ticket","ref":"docs/tickets/DOCTOR-RACE.md"}]}
+Path(sys.argv[1]).write_text(json.dumps(r,sort_keys=True,separators=(",",":"))+"\n")
+PY
 }
 
 # split-string retired words (never literal in tests/)
@@ -92,6 +117,79 @@ retired_word_a() { printf '%s' "au""gur"; }
   elapsed_ms="$(( (e - s) / 1000000 ))"
   [ "$status" -eq 0 ]
   [ "$elapsed_ms" -lt 5000 ]
+}
+
+@test "doctor: configured empty memory is clean and read-only" {
+  doctor_install; enable_doctor_memory
+  snapshot="$(python3 - "$P" "$XDG_CACHE_HOME" <<'PY'
+from pathlib import Path
+import sys
+for root in map(Path,sys.argv[1:]):
+    if root.exists():
+        for p in [root,*sorted(root.rglob("*"))]: print(p,p.lstat().st_mtime_ns)
+PY
+)"
+  run_doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"DOCTOR memory:"* ]]
+  current="$(python3 - "$P" "$XDG_CACHE_HOME" <<'PY'
+from pathlib import Path
+import sys
+for root in map(Path,sys.argv[1:]):
+    if root.exists():
+        for p in [root,*sorted(root.rglob("*"))]: print(p,p.lstat().st_mtime_ns)
+PY
+)"
+  [ "$snapshot" = "$current" ]
+}
+
+@test "doctor: unconfigured projects never invoke the memory helper" {
+  doctor_install
+  real_python="$(python3 -c 'import sys; print(sys.executable)')"
+  make_stub_script python3 "exec \"$real_python\" \"\$@\""
+  : >"$SHIM_LOG/python3.argv"
+
+  run_doctor
+  [ "$status" -eq 0 ]
+  ! grep -Fq 'agents/lib/rules-memory.py status' "$SHIM_LOG/python3.argv"
+
+  enable_doctor_memory
+  run_doctor
+  [ "$status" -eq 0 ]
+  grep -Fq 'agents/lib/rules-memory.py status' "$SHIM_LOG/python3.argv"
+}
+
+@test "doctor: invalid ledger and absent active index are actionable memory findings" {
+  doctor_install; enable_doctor_memory required
+  printf '{"summary":"PRIVATE-DOCTOR-PROSE"}\n' >"$P/.agents/rules-ledger.jsonl"
+  run_doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"DOCTOR memory: state=invalid errors="* ]]
+  [[ "$output" == *"missing_key"* ]]
+  [[ "$output" != *"PRIVATE-DOCTOR-PROSE"* ]]
+
+  seed_doctor_rule
+  run_doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"DOCTOR memory: index=absent"* ]]
+  [[ "$output" == *"run a bounded shipyard memory query"* ]]
+}
+
+@test "doctor: fresh index is clean and unsafe latest receipt is a finding" {
+  doctor_install; enable_doctor_memory; seed_doctor_rule
+  scope="$BATS_TEST_TMPDIR/doctor-memory-scope"
+  printf 'atomic version-bound transition stale writer\n' >"$scope"
+  run env XDG_CACHE_HOME="$XDG_CACHE_HOME" python3 -B \
+    "$QUARTET_ROOT/agents/lib/rules-memory.py" query --project "$P" --scope-file "$scope"
+  [ "$status" -eq 0 ]
+  run_doctor
+  [ "$status" -eq 0 ]
+
+  printf '{}\n' >"$P/tmp/critic-memory-receipt-bad.json"
+  chmod 644 "$P/tmp/critic-memory-receipt-bad.json"
+  run_doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"DOCTOR memory: receipt=invalid code=receipt_invalid"* ]]
 }
 
 @test "doctor (f): missing AGENTS.md skill bridge -> finding" {

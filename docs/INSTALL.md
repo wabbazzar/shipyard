@@ -58,6 +58,15 @@ the Traps appendix) that polish-ticket and execute-ticket read.
 | Project key | Purpose | Default and validation |
 |---|---|---|
 | `[design].usage_path` | Directory whose `*.jsonl` beacons count as real product usage for mentat and fleet inspection | `data/usage`; when set, it must be a readable project-relative directory. Absolute paths, `..`, non-strings, and project-escaping symlinks are invalid. Missing, empty, unreadable, and malformed sources remain explicit coverage states rather than measured zero. |
+| `[memory].mode`, `[memory].ledger` | Opt a project into diff-associated historical-rule retrieval while keeping its ledger project-owned | absent/off; initialize advisory with `shipyard memory init`, validate before use, and promote to `required` only after replay |
+
+Rules-memory source data stays in the project at
+`.agents/rules-ledger.jsonl`. Shipyard owns its schema, local retrieval index,
+review/receipt protocol, and diagnostics. The derived index lives under the
+platform user cache, never in the checkout; it may be moved aside and rebuilt
+by a bounded `shipyard memory query`. Runtime receipts under `tmp/` are
+observability artifacts, not ledger authority. See `docs/ADAPTING.md` for the
+authoring, migration, and rollout contract.
 
 ### L4 — roles + conventions
 **Where:** `.agents/<role>.md`.
@@ -296,9 +305,11 @@ word prefix, not a letter — the prefixes actually emitted are:
 | `launcher` / `cron` | legacy per-project launcher scripts / crontab lines |
 | `ledger` | (hub only) a dispatch decision in `data/news/decisions.jsonl` not mirrored into the target project's `data/decisions.jsonl` |
 | `shoulder` | (opt-in only — flagged only once a project has enabled shoulder mode) the capture hook not wired into the authoring harness's native config, the delivery env or watcher unit/plist missing or stale; fix with `install.sh --wire-shoulder` |
+| `memory` | (opt-in only) invalid ledger/config, unavailable embedding backend, absent/stale/corrupt derived index for active rules, or a degraded/stale/invalid latest exact-diff receipt; fix with the emitted validate/query/review action |
 | `lifecycle` | a ticket sitting in a folder its own `Status:` line contradicts — delegated to `scripts/ticket-lifecycle.sh --check` (a flat project with no lifecycle layout is not a finding) |
 
-It is strictly read-only (no writes or scheduler mutation) and finishes in
+It is strictly read-only (no writes, cache rebuilds, receipt touches, model or
+network calls, or scheduler mutation) and finishes in
 well under a second, so it runs as a `[[medic.checks]]` entry every scan —
 the next self-written drop-in or dead hook pages within one tick instead of
 surfacing weeks later.

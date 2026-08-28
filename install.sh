@@ -865,7 +865,54 @@ run_doctor() {
     fi
   fi
 
-  # (j) ticket lifecycle drift — every ticket must sit in the folder its
+  # (k) project rules memory — opt-in only. The helper's status path validates
+  #     source/cache/receipt identities without building an index, touching a
+  #     receipt, calling a model, or reading ledger prose into this output.
+  local memory_helper="$QUARTET_DIR/agents/lib/rules-memory.py"
+  local memory_doc="" memory_rc=0 memory_configured memory_state memory_errors
+  local memory_index memory_embedding memory_receipt memory_code memory_action
+  memory_configured=false
+  if jq -e '.memory | type == "object"' <<<"$CFG_JSON" >/dev/null 2>&1; then
+    memory_doc="$(python3 -B "$memory_helper" status --project "$PROJECT_DIR" 2>/dev/null)"
+    memory_rc=$?
+    memory_configured="$(jq -r '.configured // false' <<<"$memory_doc" 2>/dev/null || echo invalid)"
+  fi
+  if [ "$memory_configured" = "true" ]; then
+    memory_state="$(jq -r '.state // "invalid"' <<<"$memory_doc")"
+    if [ "$memory_rc" -ne 0 ] || [ "$memory_state" != "ready" ]; then
+      memory_errors="$(jq -r '[.errors[]?.code] | unique | join(",")' <<<"$memory_doc" 2>/dev/null)"
+      [ -n "$memory_errors" ] || memory_errors="status_unavailable"
+      emit "memory: state=invalid errors=$memory_errors action=run shipyard memory validate"
+    else
+      memory_embedding="$(jq -r '.embedding.available // false' <<<"$memory_doc")"
+      if [ "$memory_embedding" != "true" ]; then
+        emit "memory: embedding=unavailable action=repair [memory].vector_backend configuration"
+      fi
+      memory_index="$(jq -r '.index.state // "invalid"' <<<"$memory_doc")"
+      case "$memory_index" in
+        fresh|not_applicable) : ;;
+        *)
+          memory_code="$(jq -r '.index.error_code // "none"' <<<"$memory_doc")"
+          memory_action="$(jq -r '.index.action // "run a bounded shipyard memory query"' <<<"$memory_doc")"
+          emit "memory: index=$memory_index code=$memory_code action=$memory_action"
+          ;;
+      esac
+      memory_receipt="$(jq -r '.receipt.state // "invalid"' <<<"$memory_doc")"
+      case "$memory_receipt" in
+        absent|complete) : ;;
+        *)
+          memory_code="$(jq -r '.receipt.error_code // "none"' <<<"$memory_doc")"
+          memory_action="$(jq -r '.receipt.action // "run a fresh exact-diff review"' <<<"$memory_doc")"
+          emit "memory: receipt=$memory_receipt code=$memory_code action=$memory_action"
+          ;;
+      esac
+    fi
+  elif [ "$memory_configured" = "invalid" ] ||
+       jq -e 'has("memory")' <<<"$CFG_JSON" >/dev/null 2>&1; then
+    emit "memory: state=invalid errors=status_unavailable action=run shipyard memory validate"
+  fi
+
+  # (l) ticket lifecycle drift — every ticket must sit in the folder its
   #     `Status:` line implies. The deterministic engine is the authority.
   #     Exit 1 = drift (one finding per misfiled ticket — blocking, which is
   #     the point); exit 3 = the project has no lifecycle layout configured, so

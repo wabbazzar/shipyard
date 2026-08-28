@@ -9,12 +9,13 @@ description: >
   here", "/shipyard dashboard", "shipyard dashboard", "open the dashboard",
   "/shipyard inspect", "shipyard inspect", "fleet health", "where should
   the next Shipyard PR focus", "add a specialist for <subsystem>", or "shipyard
-  learn <lesson>". Five subcommands: `status` (read-only report of the local
+  learn <lesson>", or "shipyard memory". Six subcommands: `status` (read-only report of the local
   install), `dashboard` (report the private loopback URL and health, with an
   explicit-only browser opener), `inspect` (strictly read-only current-user fleet evidence, rendered
   for humans by default or as stable schema-v1 JSON), `add-specialist
   <subsystem>` (scaffold and wire a domain specialist), and `learn "<lesson>"`
-  (route a lesson through the ADAPTING.md taxonomy). The deterministic core is
+  (route a lesson through the ADAPTING.md taxonomy), and `memory` (initialize,
+  validate, inspect, or query a project-owned rules ledger). The deterministic core is
   `skills/shipyard/shipyard.sh` — run it; do not reimplement its logic in prose.
 ---
 
@@ -45,6 +46,8 @@ bash .claude/skills/shipyard/shipyard.sh dashboard [--open]
 bash .claude/skills/shipyard/shipyard.sh inspect [--json] [--days N]
 bash .claude/skills/shipyard/shipyard.sh add-specialist <subsystem>
 bash .claude/skills/shipyard/shipyard.sh learn "<lesson>"
+bash .claude/skills/shipyard/shipyard.sh memory init|validate|status|query \
+  [--scope-file PATH|--diff-file PATH]
 ```
 
 Pass `--project <dir>` to target a different checkout than the current one.
@@ -100,6 +103,23 @@ the specialist archetype in `docs/ADAPTING.md`.
 Routes a lesson through the `docs/ADAPTING.md` triage taxonomy
 (project-specific / generic / install-time) to the right destination. Empty or
 ambiguous lesson ⇒ exit `2`.
+
+### `memory init|validate|status|query`
+
+Shipyard owns the schema, safe deterministic retrieval/index mechanics, and
+review/receipt contract; the project owns its tracked
+`.agents/rules-ledger.jsonl`. `init` idempotently creates advisory config and an
+empty ledger. `validate` checks the source contract. `status` is strictly
+read-only and reports policy/count/digests, derived-index and embedding health,
+and the latest exact-diff receipt without ledger/reviewer prose. `query`
+accepts exactly one bounded `--scope-file` or exact `--diff-file`, builds or
+reuses the disposable cache outside the worktree, and emits explained bounded
+candidates. None of these commands calls a model or the network.
+
+Retrieval is candidate generation, not proof. In advisory rollout, degradation
+is visible but non-blocking; required mode is fail-closed in the owning
+planning/release workflow. Follow `docs/ADAPTING.md#project-rules-memory` for
+authoring, migration, replay, cache disposal, and receipt interpretation.
 
 ## Reading the result
 

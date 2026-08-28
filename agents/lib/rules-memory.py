@@ -87,6 +87,11 @@ MAX_QUERY_BYTES = 4 * 1024 * 1024
 MAX_QUERY_TERMS = 512
 MAX_QUERY_FEATURE_VALUES = 256
 MAX_VECTOR_CODEPOINTS = 128 * 1024
+MAX_STATUS_CACHE_ENTRIES = 1_024
+MAX_STATUS_RECEIPTS = 256
+MAX_STATUS_RUNTIME_ENTRIES = 1_024
+MAX_STATUS_RECEIPT_BYTES = 1024 * 1024
+MAX_STATUS_IDENTITY_BYTES = 4 * 1024 * 1024
 INDEX_SCHEMA_VERSION = 1
 INDEX_LOCK_SECONDS = 10.0
 NORMALIZER_VERSION = "rules-memory-document-v1"
@@ -603,6 +608,8 @@ def inspect_project(command: str, root: Path) -> tuple[dict[str, Any], int]:
             document["active_count"] = sum(record.get("status") == "active" for record in records)
             document["superseded_count"] = sum(record.get("status") == "superseded" for record in records)
             document["ledger_digest"] = digest
+            if command == "status" and digest is not None and not diagnostics.errors:
+                document.update(runtime_status(root, config, records, digest))
     document["errors"] = diagnostics.errors
     if not diagnostics.errors:
         document["state"] = "ready"
@@ -1015,6 +1022,895 @@ def current_index(path: Path, expected: dict[str, str], record_count: int) -> di
     connection, metadata = opened
     connection.close()
     return metadata
+
+
+def status_action(message: str | None) -> str | None:
+    """Keep status remediation bounded and free of ledger/reviewer prose."""
+    return message
+
+
+def inspect_index_status(
+    root: Path,
+    config: dict[str, Any],
+    records: ValidatedRecords,
+    ledger_digest: str,
+) -> tuple[dict[str, Any], str | None]:
+    documents = normalized_records(records, config["ledger"])
+    backend = fts_backend()
+    result: dict[str, Any] = {
+        "state": "not_applicable" if not documents else "absent",
+        "cache_key": project_cache_identity(root),
+        "expected_digest": None,
+        "actual_digest": None,
+        "schema_version": INDEX_SCHEMA_VERSION,
+        "normalizer_version": NORMALIZER_VERSION,
+        "shipyard_version": SHIPYARD_INDEX_VERSION,
+        "vector_backend": VECTOR_BACKEND,
+        "fts_backend": backend,
+        "action": None,
+    }
+    if not documents:
+        return result, None
+
+    source_layout_digest = hashlib.sha256(records.ledger_bytes).hexdigest()
+    identity = index_identity(ledger_digest, source_layout_digest, backend)
+    expected_digest = index_digest(identity, documents)
+    result["expected_digest"] = expected_digest
+    base = platform_cache_root().expanduser().absolute()
+    cache_key = result["cache_key"]
+    cache_dir = base / "shipyard" / "memory" / str(cache_key)
+    index_path = cache_dir / f"index-{expected_digest}.sqlite3"
+    rebuild = status_action("run a bounded shipyard memory query to rebuild the derived index")
+    try:
+        validate_cache_ancestors(base)
+        if not base.exists():
+            result["action"] = rebuild
+            return result, expected_digest
+        reject_symlink_components(base)
+        if not owned_directory(base, private=False) or group_world_writable(base):
+            raise OSError("cache root is not a private owned directory")
+        shipyard_root = base / "shipyard"
+        memory_root = shipyard_root / "memory"
+        if not shipyard_root.exists() or not memory_root.exists():
+            result["action"] = rebuild
+            return result, expected_digest
+        reject_symlink_components(memory_root)
+        if (
+            not owned_directory(shipyard_root, private=True)
+            or not owned_directory(memory_root, private=True)
+            or not valid_cache_marker(memory_root / CACHE_MARKER)
+        ):
+            raise OSError("Shipyard memory cache ownership marker is invalid")
+        if not cache_dir.exists():
+            result["action"] = rebuild
+            return result, expected_digest
+        reject_symlink_components(cache_dir)
+        if not owned_directory(cache_dir, private=True):
+            raise OSError("project memory cache directory is unsafe")
+        with os.scandir(cache_dir) as scan:
+            entries = [
+                Path(entry.path)
+                for _, entry in zip(range(MAX_STATUS_CACHE_ENTRIES + 1), scan)
+            ]
+        if len(entries) > MAX_STATUS_CACHE_ENTRIES:
+            raise OSError("project memory cache entry bound exceeded")
+        partials = [
+            item
+            for item in entries
+            if item.name.startswith(".index-")
+            or (
+                item.name.startswith("index-")
+                and item.suffix not in {".sqlite3", ".lock"}
+            )
+        ]
+        if partials:
+            raise OSError("partial memory index artifact is present")
+        if index_path.exists() or index_path.is_symlink():
+            reject_symlink_components(index_path)
+            metadata = current_index(index_path, identity, len(documents))
+            if metadata is None:
+                raise OSError("expected memory index is corrupt or mismatched")
+            result.update(
+                state="fresh",
+                actual_digest=metadata.get("index_digest"),
+                action=None,
+            )
+            return result, expected_digest
+        stale = [
+            item
+            for item in entries
+            if item.name.startswith("index-") and item.name.endswith(".sqlite3")
+        ]
+        if stale:
+            result.update(state="stale", action=rebuild)
+        else:
+            result["action"] = rebuild
+        return result, expected_digest
+    except (OSError, ValueError, sqlite3.DatabaseError):
+        result.update(
+            state="invalid",
+            action=status_action(
+                "move the unsafe/corrupt derived cache aside, then run a bounded shipyard memory query"
+            ),
+            error_code="index_invalid",
+        )
+        return result, expected_digest
+
+
+def read_status_receipt(path: Path) -> tuple[dict[str, Any], os.stat_result]:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+            or metadata.st_size > MAX_STATUS_RECEIPT_BYTES
+        ):
+            raise OSError("receipt must be a private bounded regular file")
+        raw = bytearray()
+        while len(raw) <= MAX_STATUS_RECEIPT_BYTES:
+            chunk = os.read(descriptor, min(65536, MAX_STATUS_RECEIPT_BYTES + 1 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+        if len(raw) > MAX_STATUS_RECEIPT_BYTES:
+            raise OSError("receipt size bound exceeded")
+        value = json.loads(bytes(raw).decode("utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("receipt must contain one JSON object")
+        return value, metadata
+    finally:
+        os.close(descriptor)
+
+
+def status_file_identity(path: Path) -> dict[str, Any]:
+    """Return the receipt identity shape without following or reading unbounded files."""
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        return {"state": "missing", "digest": None, "bytes": None}
+    except OSError:
+        return {"state": "unsafe", "digest": None, "bytes": None}
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_STATUS_IDENTITY_BYTES:
+            return {"state": "unsafe", "digest": None, "bytes": None}
+        digest = hashlib.sha256()
+        consumed = 0
+        while consumed <= MAX_STATUS_IDENTITY_BYTES:
+            chunk = os.read(descriptor, min(65536, MAX_STATUS_IDENTITY_BYTES + 1 - consumed))
+            if not chunk:
+                break
+            consumed += len(chunk)
+            digest.update(chunk)
+        if consumed > MAX_STATUS_IDENTITY_BYTES:
+            return {"state": "unsafe", "digest": None, "bytes": None}
+        return {
+            "state": "present",
+            "digest": digest.hexdigest(),
+            "bytes": consumed,
+        }
+    except OSError:
+        return {"state": "unsafe", "digest": None, "bytes": None}
+    finally:
+        os.close(descriptor)
+
+
+def receipt_text(value: Any, *, maximum: int = MAX_PROSE) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= maximum
+
+
+def receipt_hex(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def receipt_timestamp(value: Any) -> bool:
+    return isinstance(value, str) and valid_utc_timestamp(value)
+
+
+def receipt_ids(value: Any, *, maximum: int = MAX_RECORDS) -> bool:
+    if (
+        not isinstance(value, list)
+        or len(value) > maximum
+        or not all(isinstance(item, str) and ID_RE.fullmatch(item) for item in value)
+    ):
+        return False
+    return len(set(value)) == len(value)
+
+
+def valid_receipt_identity(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != {"state", "digest", "bytes"}:
+        return False
+    if value["state"] == "missing":
+        return value["digest"] is None and value["bytes"] is None
+    return (
+        value["state"] == "present"
+        and receipt_hex(value["digest"])
+        and isinstance(value["bytes"], int)
+        and not isinstance(value["bytes"], bool)
+        and 0 <= value["bytes"] <= MAX_STATUS_IDENTITY_BYTES
+    )
+
+
+def valid_receipt_query_features(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    allowed = {
+        "imports",
+        "paths",
+        "status_terms",
+        "symbols",
+        "test_names",
+        "term_count",
+        "transitions",
+        "vector_text_truncated",
+    }
+    if not set(value) <= allowed or not isinstance(value.get("term_count"), int):
+        return False
+    if isinstance(value.get("term_count"), bool) or not 0 <= value["term_count"] <= MAX_QUERY_TERMS:
+        return False
+    if "vector_text_truncated" in value and not isinstance(value["vector_text_truncated"], bool):
+        return False
+    for key in allowed - {"term_count", "vector_text_truncated"}:
+        items = value.get(key, [])
+        if (
+            not isinstance(items, list)
+            or len(items) > MAX_QUERY_FEATURE_VALUES
+            or any(not isinstance(item, str) or len(item) > MAX_INERT for item in items)
+        ):
+            return False
+    return True
+
+
+def valid_receipt_limits(value: Any) -> bool:
+    keys = {"max_channel_candidates", "max_fused_candidates", "max_prompt_records"}
+    if not isinstance(value, dict) or set(value) != keys:
+        return False
+    if any(
+        isinstance(value[key], bool)
+        or not isinstance(value[key], int)
+        or not 1 <= value[key] <= 10_000
+        for key in keys
+    ):
+        return False
+    return (
+        value["max_fused_candidates"] <= value["max_channel_candidates"] * 3
+        and value["max_prompt_records"] <= value["max_fused_candidates"]
+    )
+
+
+def valid_receipt_reviewer_request(value: Any) -> bool:
+    keys = {
+        "harness",
+        "model",
+        "provider",
+        "model_explicit",
+        "provider_explicit",
+        "contract_version",
+    }
+    if not isinstance(value, dict) or set(value) != keys:
+        return False
+    if value["contract_version"] != "rules-memory-review-v1":
+        return False
+    if not all(receipt_text(value[key], maximum=MAX_INERT) for key in ("harness", "model", "provider")):
+        return False
+    if not isinstance(value["model_explicit"], bool) or not isinstance(value["provider_explicit"], bool):
+        return False
+    return (
+        value["model_explicit"] == (value["model"] != "<implicit-unresolved>")
+        and value["provider_explicit"] == (value["provider"] != "<implicit-unresolved>")
+    )
+
+
+def valid_receipt_candidate(value: Any) -> bool:
+    keys = {"id", "severity", "status", "citation", "sources", "channels", "excerpt"}
+    if not isinstance(value, dict) or set(value) != keys:
+        return False
+    if not isinstance(value["id"], str) or not ID_RE.fullmatch(value["id"]):
+        return False
+    if value["severity"] not in SEVERITY_RANK or value["status"] != "active":
+        return False
+    citation = value["citation"]
+    if not receipt_text(citation, maximum=MAX_INERT) or re.fullmatch(r"[^:\x00]+:[1-9][0-9]*", citation) is None:
+        return False
+    sources = value["sources"]
+    if not isinstance(sources, list) or len(sources) > MAX_SOURCES:
+        return False
+    if any(
+        not isinstance(source, dict)
+        or set(source) != SOURCE_KEYS
+        or source.get("kind") not in {"path", "commit", "ticket", "issue"}
+        or not receipt_text(source.get("ref"), maximum=MAX_INERT)
+        for source in sources
+    ):
+        return False
+    channels = value["channels"]
+    if (
+        not isinstance(channels, dict)
+        or not channels
+        or not set(channels) <= {"exact", "fts", "vector"}
+        or any(not isinstance(explanation, dict) for explanation in channels.values())
+    ):
+        return False
+    excerpt = value["excerpt"]
+    return (
+        isinstance(excerpt, dict)
+        and set(excerpt) == set(PROSE_FIELDS)
+        and all(receipt_text(excerpt[field]) for field in PROSE_FIELDS)
+    )
+
+
+def validate_receipt_schema(receipt: dict[str, Any]) -> bool:
+    """Validate the bounded Phase-4 receipt as a self-consistent document."""
+    state = receipt.get("state")
+    common = {
+        "schema_version",
+        "binding",
+        "retrieved_ids",
+        "review_set_ids",
+        "omitted_ids",
+        "candidate_evidence",
+        "prompt_digest",
+        "reviewer",
+        "state",
+        "coverage",
+        "dispositions",
+        "findings",
+        "verdict",
+        "findings_digest",
+        "delivery",
+    }
+    receipt_keys = set(receipt)
+    review_evidence = state == "complete" or (
+        state == "degraded" and receipt.get("coverage") in {"full", "bounded"}
+    )
+    valid_keys = (
+        receipt_keys == common | {"response_digest", "reviewed_at"}
+        if state == "complete"
+        else receipt_keys
+        == common
+        | (
+            {"error", "response_digest", "reviewed_at"}
+            if review_evidence
+            else {"error"}
+        )
+        if state == "degraded"
+        else False
+    )
+    if receipt.get("schema_version") != 1 or not valid_keys:
+        return False
+    binding = receipt.get("binding")
+    binding_keys = {
+        "project_root",
+        "project_identity",
+        "diff_digest",
+        "base_identity",
+        "diff_mode",
+        "ledger_digest",
+        "source_layout_digest",
+        "index_digest",
+        "index_schema_version",
+        "normalizer_version",
+        "vector_backend",
+        "config_identity",
+        "config_digest",
+        "config_state",
+        "gates_identity",
+        "gates_digest",
+        "gates_state",
+        "policy_mode",
+        "query_features",
+        "limits",
+        "reviewer",
+    }
+    if (
+        not isinstance(binding, dict)
+        or set(binding) not in (
+            binding_keys | {"ledger_line_count"},
+            binding_keys if state == "degraded" else set(),
+        )
+    ):
+        return False
+    if (
+        not receipt_text(binding["project_root"], maximum=4096)
+        or not receipt_hex(binding["project_identity"])
+        or not receipt_hex(binding["diff_digest"])
+        or not receipt_text(binding["base_identity"], maximum=MAX_INERT)
+        or binding["diff_mode"] not in {"branch", "staged"}
+        or binding["policy_mode"] not in {"advisory", "required"}
+        or not valid_receipt_identity(binding["config_identity"])
+        or not valid_receipt_identity(binding["gates_identity"])
+        or binding["config_digest"] != binding["config_identity"]["digest"]
+        or binding["config_state"] != binding["config_identity"]["state"]
+        or binding["gates_digest"] != binding["gates_identity"]["digest"]
+        or binding["gates_state"] != binding["gates_identity"]["state"]
+        or not valid_receipt_reviewer_request(binding["reviewer"])
+    ):
+        return False
+    digest_fields = ("ledger_digest", "source_layout_digest", "index_digest")
+    if any(value is not None and not receipt_hex(value) for value in (binding[key] for key in digest_fields)):
+        return False
+    index_fields = (
+        binding["index_digest"],
+        binding["index_schema_version"],
+        binding["normalizer_version"],
+        binding["vector_backend"],
+    )
+    if any(item is None for item in index_fields) != all(item is None for item in index_fields):
+        return False
+    if binding["index_digest"] is not None and (
+        binding["index_schema_version"] != INDEX_SCHEMA_VERSION
+        or binding["normalizer_version"] != NORMALIZER_VERSION
+        or binding["vector_backend"] != VECTOR_BACKEND
+    ):
+        return False
+    ledger_line_count = binding.get("ledger_line_count")
+    if ledger_line_count is not None and (
+        isinstance(ledger_line_count, bool)
+        or not isinstance(ledger_line_count, int)
+        or not 0 <= ledger_line_count <= MAX_RECORDS
+    ):
+        return False
+    if review_evidence and (
+        any(binding[key] is None for key in digest_fields)
+        or ledger_line_count is None
+        or not valid_receipt_query_features(binding["query_features"])
+        or not valid_receipt_limits(binding["limits"])
+    ):
+        return False
+    if state == "degraded" and (
+        binding["query_features"] is not None
+        and not valid_receipt_query_features(binding["query_features"])
+        or binding["limits"] is not None
+        and not valid_receipt_limits(binding["limits"])
+    ):
+        return False
+
+    retrieved = receipt.get("retrieved_ids")
+    review_set = receipt.get("review_set_ids")
+    omitted = receipt.get("omitted_ids")
+    candidates = receipt.get("candidate_evidence")
+    if not all(receipt_ids(value) for value in (retrieved, review_set, omitted)):
+        return False
+    if review_set + omitted != retrieved:
+        return False
+    if not isinstance(candidates, list) or len(candidates) != len(retrieved):
+        return False
+    if any(not valid_receipt_candidate(item) for item in candidates):
+        return False
+    if [item["id"] for item in candidates] != retrieved or not receipt_hex(receipt.get("prompt_digest")):
+        return False
+    limits = binding.get("limits")
+    if isinstance(limits, dict) and (
+        len(retrieved) > limits["max_fused_candidates"]
+        or len(review_set) > limits["max_prompt_records"]
+    ):
+        return False
+
+    reviewer = receipt.get("reviewer")
+    if not isinstance(reviewer, dict) or set(reviewer) != {"requested", "resolved", "invocation"}:
+        return False
+    if reviewer["requested"] != binding["reviewer"]:
+        return False
+    resolved, invocation = reviewer["resolved"], reviewer["invocation"]
+    invocation_keys = {"state", "identity", "started_at", "ended_at", "tokens", "rc", "identity_source"}
+    if not isinstance(resolved, dict) or set(resolved) != {"model", "provider"}:
+        return False
+    if not isinstance(invocation, dict) or set(invocation) != invocation_keys:
+        return False
+    if review_evidence:
+        requested = reviewer["requested"]
+        if not all(
+            receipt_text(resolved.get(key), maximum=MAX_INERT)
+            for key in ("model", "provider")
+        ):
+            return False
+        for key, explicit_key in (
+            ("model", "model_explicit"),
+            ("provider", "provider_explicit"),
+        ):
+            if requested[explicit_key] and resolved[key] != requested[key]:
+                return False
+            if not requested[explicit_key]:
+                if review_set and resolved[key] == "<implicit-unresolved>":
+                    return False
+                if not review_set and resolved[key] != "<implicit-unresolved>":
+                    return False
+        if review_set:
+            if (
+                invocation["state"] != "complete"
+                or not receipt_hex(invocation["identity"])
+                or not receipt_timestamp(invocation["started_at"])
+                or not receipt_timestamp(invocation["ended_at"])
+                or invocation["started_at"] > invocation["ended_at"]
+                or isinstance(invocation["tokens"], bool)
+                or not isinstance(invocation["tokens"], int)
+                or invocation["tokens"] < 0
+                or invocation["rc"] != 0
+                or invocation["identity_source"] != "spawn-dispatcher-v1"
+            ):
+                return False
+        elif invocation != {
+            "state": "not_required",
+            "identity": "rules-memory-zero-candidate-v1",
+            "started_at": None,
+            "ended_at": None,
+            "tokens": 0,
+            "rc": None,
+            "identity_source": "not_applicable",
+        }:
+            return False
+    elif (
+        resolved != {"model": None, "provider": None}
+        or invocation
+        != {
+            "state": "not_started",
+            "identity": None,
+            "started_at": None,
+            "ended_at": None,
+            "tokens": 0,
+            "rc": None,
+            "identity_source": None,
+        }
+    ):
+        return False
+
+    by_id = {item["id"]: item for item in candidates}
+    dispositions = receipt.get("dispositions")
+    findings = receipt.get("findings")
+    if not isinstance(dispositions, list) or not isinstance(findings, list):
+        return False
+    if state == "degraded":
+        error = receipt.get("error")
+        if (
+            not isinstance(error, dict)
+            or set(error) != {"code", "message"}
+            or not receipt_text(error.get("code"), maximum=MAX_INERT)
+            or not isinstance(error.get("message"), str)
+            or len(error["message"]) > 512
+        ):
+            return False
+    if not review_evidence:
+        if (
+            receipt.get("coverage") != "incomplete"
+            or receipt.get("verdict") != "incomplete"
+            or dispositions != []
+            or findings != []
+            or receipt.get("findings_digest") is not None
+        ):
+            return False
+    else:
+        if len(dispositions) != len(review_set):
+            return False
+        disposition_ids: list[str] = []
+        disposition_by_id: dict[str, dict[str, Any]] = {}
+        for item in dispositions:
+            if not isinstance(item, dict) or set(item) != {"id", "state", "path", "citation", "evidence"}:
+                return False
+            rule_id = item["id"]
+            if (
+                rule_id not in by_id
+                or rule_id in disposition_by_id
+                or item["state"] not in {"applies", "requires_evidence", "falsified", "informational", "superseded"}
+                or not safe_relative_path(item["path"])
+                or item["citation"] != by_id[rule_id]["citation"]
+                or not receipt_text(item["evidence"])
+            ):
+                return False
+            disposition_ids.append(rule_id)
+            disposition_by_id[rule_id] = item
+        if disposition_ids != review_set:
+            return False
+        finding_by_id: dict[str, dict[str, Any]] = {}
+        for item in findings:
+            if not isinstance(item, dict) or set(item) != {"severity", "path", "id", "message"}:
+                return False
+            rule_id = item["id"]
+            disposition = disposition_by_id.get(rule_id)
+            if (
+                disposition is None
+                or rule_id in finding_by_id
+                or item["severity"] != by_id[rule_id]["severity"]
+                or item["path"] != disposition["path"]
+                or not receipt_text(item["message"])
+            ):
+                return False
+            finding_by_id[rule_id] = item
+        for rule_id, disposition in disposition_by_id.items():
+            applicable = disposition["state"] in {"applies", "requires_evidence"}
+            if applicable != (rule_id in finding_by_id):
+                return False
+        expected_verdict = max(
+            (item["severity"] for item in findings),
+            key=lambda item: SEVERITY_RANK[item],
+            default="clean",
+        )
+        if (
+            receipt.get("coverage") != ("bounded" if omitted else "full")
+            or receipt.get("verdict") != expected_verdict
+            or not receipt_hex(receipt.get("findings_digest"))
+            or not receipt_timestamp(receipt.get("reviewed_at"))
+            or (
+                receipt.get("response_digest") is not None
+                and not receipt_hex(receipt.get("response_digest"))
+            )
+            or (bool(review_set) != (receipt.get("response_digest") is not None))
+        ):
+            return False
+
+    delivery = receipt.get("delivery")
+    allowed_delivery = {
+        "pending", "delivery", "deferred", "deposited", "failed", "expired", "not_delivered"
+    }
+    if not isinstance(delivery, dict) or not set(delivery) <= {"status", "updated_at"}:
+        return False
+    if set(delivery) not in ({"status"}, {"status", "updated_at"}) or delivery.get("status") not in allowed_delivery:
+        return False
+    if delivery["status"] == "not_delivered" and state != "degraded":
+        return False
+    if "updated_at" in delivery and not receipt_timestamp(delivery["updated_at"]):
+        return False
+    if delivery["status"] not in {"pending", "not_delivered"} and "updated_at" not in delivery:
+        return False
+    return True
+
+
+def inspect_receipt_status(
+    root: Path,
+    config: dict[str, Any],
+    records: ValidatedRecords,
+    ledger_digest: str,
+    expected_index_digest: str | None,
+) -> dict[str, Any]:
+    absent = {
+        "state": "absent",
+        "count": 0,
+        "coverage": None,
+        "verdict": None,
+        "reviewed_at": None,
+        "delivery": None,
+        "diff_freshness": "unverified",
+        "error_code": None,
+        "action": None,
+    }
+    receipt_dir = root / "tmp"
+    if not receipt_dir.exists():
+        return absent
+    if receipt_dir.is_symlink() or not receipt_dir.is_dir():
+        return {
+            **absent,
+            "state": "invalid",
+            "error_code": "receipt_directory_unsafe",
+            "action": "repair the project runtime directory before the next exact-diff review",
+        }
+    try:
+        receipt_dir.resolve().relative_to(root.resolve())
+    except ValueError:
+        return {
+            **absent,
+            "state": "invalid",
+            "error_code": "receipt_directory_escape",
+            "action": "repair the project runtime directory before the next exact-diff review",
+        }
+    try:
+        with os.scandir(receipt_dir) as scan:
+            runtime_entries = [
+                entry
+                for _, entry in zip(range(MAX_STATUS_RUNTIME_ENTRIES + 1), scan)
+            ]
+    except OSError:
+        return {
+            **absent,
+            "state": "invalid",
+            "error_code": "receipt_directory_unreadable",
+            "action": "repair the project runtime directory before the next exact-diff review",
+        }
+    if len(runtime_entries) > MAX_STATUS_RUNTIME_ENTRIES:
+        return {
+            **absent,
+            "state": "invalid",
+            "error_code": "receipt_directory_bound_exceeded",
+            "action": "archive old runtime artifacts outside the project and rerun exact-diff review",
+        }
+    candidates = [
+        Path(entry.path)
+        for entry in runtime_entries
+        if entry.name.startswith("critic-memory-receipt-") and entry.name.endswith(".json")
+    ]
+    if len(candidates) > MAX_STATUS_RECEIPTS:
+        return {
+            **absent,
+            "state": "invalid",
+            "count": len(candidates),
+            "error_code": "receipt_bound_exceeded",
+            "action": "archive old runtime receipts outside the project and rerun exact-diff review",
+        }
+    if not candidates:
+        return absent
+    try:
+        latest: tuple[int, str, Path] | None = None
+        for path in candidates:
+            metadata = path.lstat()
+            candidate = (metadata.st_mtime_ns, path.name, path)
+            if latest is None or candidate[:2] > latest[:2]:
+                latest = candidate
+        assert latest is not None
+        receipt, _ = read_status_receipt(latest[2])
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        return {
+            **absent,
+            "state": "invalid",
+            "count": len(candidates),
+            "error_code": "receipt_invalid",
+            "action": "move the invalid runtime receipt aside and rerun exact-diff review",
+        }
+    result = {**absent, "count": len(candidates)}
+    if not validate_receipt_schema(receipt):
+        return {
+            **result,
+            "state": "invalid",
+            "error_code": "receipt_schema_invalid",
+            "action": "move the invalid runtime receipt aside and rerun exact-diff review",
+        }
+    binding = receipt.get("binding")
+    state = receipt.get("state")
+    coverage = receipt.get("coverage")
+    verdict = receipt.get("verdict")
+    delivery = receipt.get("delivery")
+    error = receipt.get("error")
+    assert isinstance(binding, dict) and isinstance(delivery, dict)
+    config_identity = status_file_identity(root / ".agents" / "config.toml")
+    gates_identity = status_file_identity(root / ".agents" / "gates.md")
+    source_layout_digest = hashlib.sha256(records.ledger_bytes).hexdigest()
+    project_root = str(root.resolve())
+    project_identity = hashlib.sha256(project_root.encode()).hexdigest()
+    expected = {
+        "project_root": project_root,
+        "project_identity": project_identity,
+        "config_identity": config_identity,
+        "config_digest": config_identity["digest"],
+        "config_state": config_identity["state"],
+        "gates_identity": gates_identity,
+        "gates_digest": gates_identity["digest"],
+        "gates_state": gates_identity["state"],
+        "policy_mode": config.get("mode"),
+    }
+    if any(binding.get(key) != value for key, value in expected.items()):
+        return {
+            **result,
+            "state": "stale",
+            "coverage": coverage,
+            "verdict": verdict,
+            "reviewed_at": receipt.get("reviewed_at"),
+            "delivery": delivery.get("status"),
+            "error_code": "receipt_binding_stale",
+            "action": "run a fresh exact-diff review",
+        }
+    historical_expected = {
+        "ledger_digest": ledger_digest,
+        "source_layout_digest": source_layout_digest,
+        "ledger_line_count": len(records),
+        "index_digest": expected_index_digest,
+        "index_schema_version": INDEX_SCHEMA_VERSION if expected_index_digest else None,
+        "normalizer_version": NORMALIZER_VERSION if expected_index_digest else None,
+        "vector_backend": VECTOR_BACKEND if expected_index_digest else None,
+    }
+    if state == "complete":
+        stale_binding = any(
+            binding.get(key) != value for key, value in historical_expected.items()
+        )
+    else:
+        stale_binding = any(
+            binding.get(key) is not None and binding.get(key) != value
+            for key, value in historical_expected.items()
+        )
+    current_limits = {
+        "max_channel_candidates": config["max_channel_candidates"],
+        "max_fused_candidates": config["max_fused_candidates"],
+        "max_prompt_records": config["max_prompt_records"],
+    }
+    if binding.get("limits") is not None and binding.get("limits") != current_limits:
+        stale_binding = True
+    if stale_binding:
+        return {
+            **result,
+            "state": "stale",
+            "coverage": coverage,
+            "verdict": verdict,
+            "reviewed_at": receipt.get("reviewed_at"),
+            "delivery": delivery.get("status"),
+            "error_code": "receipt_binding_stale",
+            "action": "run a fresh exact-diff review",
+        }
+
+    active_records = {
+        record["id"]: record for record in records if record.get("status") == "active"
+    }
+    for candidate in receipt["candidate_evidence"]:
+        record = active_records.get(candidate["id"])
+        expected_line = records.source_lines.get(candidate["id"])
+        if (
+            record is None
+            or candidate["severity"] != record["severity"]
+            or candidate["sources"] != record["sources"]
+            or candidate["citation"] != f"{config['ledger']}:{expected_line}"
+        ):
+            return {
+                **result,
+                "state": "invalid",
+                "error_code": "receipt_evidence_invalid",
+                "action": "move the invalid runtime receipt aside and rerun exact-diff review",
+            }
+    if state == "complete" and delivery.get("status") != "deposited":
+        return {
+            **result,
+            "state": "stale",
+            "coverage": coverage,
+            "verdict": verdict,
+            "reviewed_at": receipt.get("reviewed_at"),
+            "delivery": delivery.get("status"),
+            "error_code": "receipt_delivery_incomplete",
+            "action": "finish delivery or run a fresh exact-diff review",
+        }
+    result.update(
+        state=state,
+        coverage=coverage,
+        verdict=verdict,
+        reviewed_at=receipt.get("reviewed_at"),
+        delivery=delivery.get("status"),
+        error_code=(error.get("code") if isinstance(error, dict) else None),
+        action=(
+            "resolve the recorded runtime error and rerun exact-diff review"
+            if state == "degraded"
+            else None
+        ),
+    )
+    return result
+
+
+def runtime_status(
+    root: Path,
+    config: dict[str, Any],
+    records: ValidatedRecords,
+    ledger_digest: str,
+) -> dict[str, Any]:
+    try:
+        index, expected_digest = inspect_index_status(root, config, records, ledger_digest)
+    except (OSError, ValueError, sqlite3.DatabaseError):
+        index = {
+            "state": "invalid",
+            "action": "repair the derived cache and rerun a bounded shipyard memory query",
+            "error_code": "index_status_failed",
+        }
+        expected_digest = None
+    try:
+        receipt = inspect_receipt_status(root, config, records, ledger_digest, expected_digest)
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        receipt = {
+            "state": "invalid",
+            "count": 0,
+            "coverage": None,
+            "verdict": None,
+            "reviewed_at": None,
+            "delivery": None,
+            "diff_freshness": "unverified",
+            "error_code": "receipt_status_failed",
+            "action": "repair runtime receipt state and rerun exact-diff review",
+        }
+    return {
+        "embedding": {
+            "available": config.get("vector_backend") == VECTOR_BACKEND,
+            "backend": config.get("vector_backend"),
+            "dimensions": VECTOR_DIMENSIONS,
+        },
+        "index": index,
+        "receipt": receipt,
+    }
 
 
 def build_index(path: Path, identity: dict[str, str], documents: list[dict[str, Any]]) -> None:
@@ -1462,6 +2358,32 @@ def vector_channel(
     return ranked[:limit], query_truncated
 
 
+PROSE_SUFFIXES = {".adoc", ".md", ".mdx", ".rst", ".txt"}
+GENERATED_BASENAMES = {
+    "cargo.lock",
+    "go.sum",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "uv.lock",
+    "yarn.lock",
+}
+GENERATED_PARTS = {"build", "coverage", "dist", "node_modules", "vendor"}
+
+
+def diff_path_requires_exact_only(path: str) -> bool:
+    """Keep prose/generated-only edits out of similarity-only review."""
+    normalized = path.casefold()
+    pure = PurePosixPath(normalized)
+    name = pure.name
+    return (
+        pure.suffix in PROSE_SUFFIXES
+        or name in GENERATED_BASENAMES
+        or name.endswith((".generated.js", ".generated.ts", ".min.css", ".min.js", ".map"))
+        or bool(set(pure.parts) & GENERATED_PARTS)
+    )
+
+
 def excerpt(record: dict[str, Any]) -> dict[str, str]:
     return {field: record[field] for field in PROSE_FIELDS}
 
@@ -1591,10 +2513,26 @@ def query_memory(
             indexed_records = load_index_records(connection)
             channel_limit = limits["max_channel_candidates"]
             exact = exact_channel(indexed_records, text, features, channel_limit)
-            full_text = fts_channel(
-                connection, indexed_records, features["terms"], metadata["fts_backend"], channel_limit
+            exact_only = (
+                kind == "diff"
+                and bool(features["paths"])
+                and all(diff_path_requires_exact_only(path) for path in features["paths"])
             )
-            vectors, vector_truncated = vector_channel(indexed_records, text, channel_limit)
+            if exact_only:
+                full_text = []
+                vectors = []
+                vector_truncated = False
+            else:
+                full_text = fts_channel(
+                    connection,
+                    indexed_records,
+                    features["terms"],
+                    metadata["fts_backend"],
+                    channel_limit,
+                )
+                vectors, vector_truncated = vector_channel(
+                    indexed_records, text, channel_limit
+                )
             candidates = fuse_channels(
                 indexed_records,
                 {"exact": exact, "fts": full_text, "vector": vectors},

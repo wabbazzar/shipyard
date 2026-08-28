@@ -878,8 +878,13 @@
       "example": "A payments specialist that blocks a change re-introducing a rejected retry strategy, citing the decision-log entry that ruled it out.",
       "source": "agents/specialist/role.md — installed via /shipyard add-specialist"
     },
+    "project rules memory": {
+      "def": "An opt-in, diff-associated historical-risk layer: Shipyard owns safe deterministic retrieval, review, receipts, and status mechanics while each project owns its tracked structured rules ledger.",
+      "example": "A changed state-transition hunk retrieves earlier non-atomic incidents, requires an atomic guard plus deterministic interleaving test, and records whether the current diff applies or falsifies each cited rule.",
+      "source": "agents/lib/rules-memory.py and .agents/rules-ledger.jsonl"
+    },
     "/shipyard": {
-      "def": "The operator's in-project console for an installed crew: `status`, strictly read-only `inspect` over matching current-user manifests, `add-specialist <subsystem>`, and `learn \"<lesson>\"`. Inspect renders a human view or stable schema-v1 JSON from one bounded evidence document; it does not certify fleet health, and next-PR recommendations retain their evidence and limitations.",
+      "def": "The operator's in-project console for an installed crew: `status`, `dashboard`, strictly read-only `inspect` over matching current-user manifests, `add-specialist <subsystem>`, `learn \"<lesson>\"`, and project-owned rules `memory`. Inspect renders stable schema-v1 JSON, does not certify fleet health, and keeps recommendations bounded by evidence and limitations; memory status exposes bounded digests/states/actions without ledger prose.",
       "example": "shipyard inspect → human fleet/attention/effectiveness/next-PR/coverage view. shipyard inspect --json → the same versioned evidence document.",
       "source": "skills/shipyard/shipyard.sh"
     }

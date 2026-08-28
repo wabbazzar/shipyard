@@ -12,9 +12,10 @@ Every adapted skill declares two surfaces, so generalizing never means gutting:
 - **Parameter surface** — what the installer configures, so the skill stays
   generic: gate-file path, notify command, events dir, ports, trunk branch.
   These are read from the project, never baked into the skill.
-- **Learning surface** — the one file where lessons for that skill accumulate:
-  e.g. the project's `.agents/gates.md` **Traps** appendix (for polish-ticket /
-  execute-ticket), or the triage output routed by `coverage-audit`.
+- **Learning surface** — the project-owned file where lessons for that behavior
+  accumulate: e.g. `.agents/gates.md` **Traps** for build procedure, or the
+  structured `.agents/rules-ledger.jsonl` for a recurring failure mechanism
+  that should be associated with future scopes and diffs.
 
 Each skill's `## Adaptation Contract` section names both. When you correct a
 behavior, the correction lands on that skill's learning surface.
@@ -93,6 +94,74 @@ templates for the named subsystem and wires the decision log into the project's
 `write_ticket` context, its gates note, and a **hunk-keyed** release-critic
 block (never a changed-file-membership one — see the critic input contract).
 
+## Project rules memory
+
+Project rules memory handles a different failure mode from a specialist or a
+long prose appendix: a new agent edits a related hunk but does not associate it
+with an older incident. The ownership boundary is deliberate:
+
+- **Shipyard owns mechanics:** the strict record schema and parser, path/size
+  safety, deterministic local hybrid retrieval, cache identity/publication,
+  planning and exact-diff reviewer contracts, receipt binding, status, and
+  Doctor diagnostics. These remain generic and versioned in Shipyard.
+- **Each project owns rules:** `.agents/rules-ledger.jsonl` is tracked beside
+  `.agents/config.toml`, reviewed like code, and contains only project-safe
+  summaries, mechanisms, rules, required evidence, associations, remediation,
+  and source references. Customer records, transcripts, secrets, and hidden
+  reasoning never belong there.
+
+### Authoring and migration
+
+Run `shipyard memory init` once; it adds advisory `[memory]` configuration and
+an empty ledger idempotently. Convert an existing incident log one event at a
+time: use a stable ID, describe the mechanism rather than the one-off symptom,
+associate likely paths/symbols/subsystems/state transitions, state the concrete
+guard and deterministic evidence future changes owe, and cite a safe ticket,
+commit, issue, or project-relative path. Preserve old entries as `superseded`
+with explicit `supersedes` links instead of rewriting history. Run `shipyard
+memory validate` before review. Free-form logs may remain provenance; they are
+not queried until deliberately normalized into this ledger.
+
+### Rollout and operation
+
+Start in `advisory`. Replay representative bad, guarded, and unrelated diffs:
+the bad diff should produce a cited requirement, the guarded diff should
+falsify the same candidates with current evidence, and unrelated prose should
+spawn no memory reviewer. Move to `required` only after those checks are stable;
+required mode fails closed on malformed/missing ledgers, unavailable or stale
+retrieval, malformed reviewer output, and mismatched receipts. Advisory reports
+the same degradation without creating a release stop.
+
+Receipts never accept an unresolved model identity. With the default Claude
+reviewer, Shipyard pins the memory-only invocation to `sonnet` and records
+provider `claude`. If the release shoulder uses Codex or Hermes, configure an
+explicit release/harness model before enabling memory; otherwise advisory mode
+reports `reviewer_identity` and required mode keeps the queue closed.
+
+The index under the user cache directory is disposable derived state. It is
+bound to project identity, exact ledger bytes/canonical digest, schema,
+normalizer, FTS backend, embedding backend, and Shipyard index version. To
+recover from a stale/corrupt status, move only the status-named project cache
+directory aside, then run one bounded `shipyard memory query`; never edit the
+SQLite file or treat it as evidence. An empty ledger needs no index.
+
+`shipyard status` is read-only and reports policy, validated record counts and
+digest, index freshness, embedding availability, and the newest exact-diff
+receipt. `complete` means its bound inputs still match and delivery was
+deposited; `degraded` records an explicit review/runtime failure; `stale` means
+a bound ledger/config/gate/index identity changed or delivery was incomplete;
+`invalid` means the artifact is unsafe or malformed; `absent` means no exact
+diff has yet produced one. Diff freshness is reported as unverified when the
+current generation cannot be reconstructed from receipt metadata alone. Status
+and Doctor expose codes/actions, never ledger or reviewer prose.
+
+The coverage boundary stays honest: retrieval proposes bounded historical
+candidates; it does not prove applicability, discover incidents never authored
+in the ledger, or replace a deterministic regression test. One fresh reviewer
+must decide every selected rule against the exact current scope/diff and cite
+both rule and path. Scores alone never block; a falsified candidate does not
+block; omitted candidates and degraded stages remain explicit in receipts.
+
 ## The routing rule (stated once)
 
 | The lesson is… | Route it to… |
@@ -100,6 +169,7 @@ block (never a changed-file-membership one — see the critic input contract).
 | a one-off correction for this ticket | the ticket's decision tables |
 | project taste (LOC, deps, naming) | `.agents/<role>.md` `## Conventions` |
 | a project gate or budget | `.agents/config.toml` / `.agents/gates.md` |
+| a recurring project failure mechanism associated with future diffs | `.agents/rules-ledger.jsonl` via `shipyard memory init|validate` |
 | portable doctrine | a core PR (leak-checked, fleet-live on merge) |
 | a question every future install should ask | the installer interview |
 | how a phase should be *built* (who does the work) | the ticket's `Delegation:` line → the Ledger's `builder:` line |
