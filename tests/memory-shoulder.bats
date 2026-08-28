@@ -5,7 +5,7 @@ setup() {
   load helpers
   quartet_setup
   quartet_use_native_bash
-  export XDG_CACHE_HOME="$BATS_TEST_TMPDIR/cache"
+  quartet_memory_cache_setup
   export CRITIC_IDLE_SEC=1 CRITIC_DIFF_MODE=staged
 }
 

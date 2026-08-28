@@ -19,7 +19,7 @@ setup() {
   load helpers
   DOCTOR_TEST_BASH="$(PATH="${SHIPYARD_TEST_COMMAND_PATH:-$PATH}" command -v bash)"
   quartet_setup
-  export XDG_CACHE_HOME="$BATS_TEST_TMPDIR/cache"
+  quartet_memory_cache_setup
   UNITS="$HOME/.config/systemd/user"
 
   # systemctl: is-enabled <x.timer> succeeds iff the timer file exists and no

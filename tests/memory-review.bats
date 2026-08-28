@@ -4,7 +4,7 @@
 setup() {
   load helpers
   quartet_setup
-  export XDG_CACHE_HOME="$BATS_TEST_TMPDIR/cache"
+  quartet_memory_cache_setup
   P="$(make_fixture_project memory-review-helper)"
   printf '\n[memory]\nmode = "required"\nledger = ".agents/rules-ledger.jsonl"\n' \
     >>"$P/.agents/config.toml"
@@ -190,7 +190,7 @@ PY
     --receipt "$RECEIPT" --code query --message 'query failed'
   new_inode="$(ls -i "$RECEIPT" | awk '{print $1}')"
   [ "$old_inode" != "$new_inode" ]
-  [ "$(stat -f '%Lp' "$RECEIPT" 2>/dev/null || stat -c '%a' "$RECEIPT")" = 600 ]
+  [ "$(stat -c '%a' "$RECEIPT" 2>/dev/null || stat -f '%Lp' "$RECEIPT")" = 600 ]
   jq -e '.state=="degraded" and .error.code=="query"
     and .binding.diff_digest and .reviewer.invocation.state=="not_started"
     and .reviewer.requested.model=="<implicit-unresolved>"' "$RECEIPT" >/dev/null

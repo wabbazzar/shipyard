@@ -4,7 +4,7 @@
 setup() {
   load helpers
   quartet_setup
-  export XDG_CACHE_HOME="$BATS_TEST_TMPDIR/cache"
+  quartet_memory_cache_setup
 }
 
 SH="skills/shipyard/shipyard.sh"
@@ -338,7 +338,10 @@ PY
 }
 
 @test "cache rejects worktree and symlink roots and repairs only marked private nodes" {
-  P="$(make_fixture_project memory-cache-safety)"
+  fixture_project="$(make_fixture_project memory-cache-safety)"
+  P="$MEMORY_CACHE_TEST_ROOT/project"
+  mv "$fixture_project" "$P"
+  chmod 0700 "$P" "$P/.agents"
   enable_memory "$P"
   golden_ledger "$P/.agents/rules-ledger.jsonl"
   S="$BATS_TEST_TMPDIR/safety-scope"; printf 'stale writer\n' >"$S"
@@ -348,9 +351,9 @@ PY
   [ "$status" -eq 2 ]
   [[ "$output" == *'cache root must be outside'* ]]
 
-  mkdir "$BATS_TEST_TMPDIR/real-cache"
-  ln -s "$BATS_TEST_TMPDIR/real-cache" "$BATS_TEST_TMPDIR/cache-link"
-  run env XDG_CACHE_HOME="$BATS_TEST_TMPDIR/cache-link/child" QUARTET_DIR="$QUARTET_ROOT" \
+  mkdir "$MEMORY_CACHE_TEST_ROOT/real-cache"
+  ln -s "$MEMORY_CACHE_TEST_ROOT/real-cache" "$MEMORY_CACHE_TEST_ROOT/cache-link"
+  run env XDG_CACHE_HOME="$MEMORY_CACHE_TEST_ROOT/cache-link/child" QUARTET_DIR="$QUARTET_ROOT" \
     bash "$QUARTET_ROOT/$SH" memory query --project "$P" --scope-file "$S"
   [ "$status" -eq 2 ]
   [[ "$output" == *'symlink component'* ]]
@@ -382,23 +385,23 @@ PY
   golden_ledger "$P/.agents/rules-ledger.jsonl"
   S="$BATS_TEST_TMPDIR/owner-scope"; printf 'stale writer\n' >"$S"
 
-  BAD="$BATS_TEST_TMPDIR/writable-xdg"; mkdir "$BAD"; chmod 0777 "$BAD"
+  BAD="$MEMORY_CACHE_TEST_ROOT/writable-xdg"; mkdir "$BAD"; chmod 0777 "$BAD"
   run env XDG_CACHE_HOME="$BAD" QUARTET_DIR="$QUARTET_ROOT" \
     bash "$QUARTET_ROOT/$SH" memory query --project "$P" --scope-file "$S"
   [ "$status" -eq 2 ]
   [[ "$output" == *'must not be group/world-writable'* ]]
   [ "$(stat -c '%a' "$BAD" 2>/dev/null || stat -f '%Lp' "$BAD")" = "777" ]
 
-  UNMARKED="$BATS_TEST_TMPDIR/unmarked-xdg"; mkdir -p "$UNMARKED/shipyard"; chmod 0777 "$UNMARKED/shipyard"
+  UNMARKED="$MEMORY_CACHE_TEST_ROOT/unmarked-xdg"; mkdir -p "$UNMARKED/shipyard"; chmod 0700 "$UNMARKED"; chmod 0777 "$UNMARKED/shipyard"
   run env XDG_CACHE_HOME="$UNMARKED" QUARTET_DIR="$QUARTET_ROOT" \
     bash "$QUARTET_ROOT/$SH" memory query --project "$P" --scope-file "$S"
   [ "$status" -eq 2 ]
   [[ "$output" == *'unmarked Shipyard cache root is group/world-writable'* ]]
   [ "$(stat -c '%a' "$UNMARKED/shipyard" 2>/dev/null || stat -f '%Lp' "$UNMARKED/shipyard")" = "777" ]
 
-  mkdir "$BATS_TEST_TMPDIR/foreign-target"
-  ln -s "$BATS_TEST_TMPDIR/foreign-target" "$BATS_TEST_TMPDIR/foreign-link"
-  run python3 -B - "$QUARTET_ROOT/$HELPER" "$BATS_TEST_TMPDIR/foreign-link/child" <<'PY'
+  mkdir "$MEMORY_CACHE_TEST_ROOT/foreign-target"
+  ln -s "$MEMORY_CACHE_TEST_ROOT/foreign-target" "$MEMORY_CACHE_TEST_ROOT/foreign-link"
+  run python3 -B - "$QUARTET_ROOT/$HELPER" "$MEMORY_CACHE_TEST_ROOT/foreign-link/child" <<'PY'
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
@@ -429,7 +432,7 @@ PY
   golden_ledger "$P/.agents/rules-ledger.jsonl"
   S="$BATS_TEST_TMPDIR/swap-scope"; printf 'stale writer\n' >"$S"
 
-  PARENT="$BATS_TEST_TMPDIR/writable-parent"; BASE="$PARENT/private-base"
+  PARENT="$MEMORY_CACHE_TEST_ROOT/writable-parent"; BASE="$PARENT/private-base"
   mkdir -p "$BASE"; chmod 0777 "$PARENT"; chmod 0700 "$BASE"
   run env XDG_CACHE_HOME="$BASE" QUARTET_DIR="$QUARTET_ROOT" \
     bash "$QUARTET_ROOT/$SH" memory query --project "$P" --scope-file "$S"

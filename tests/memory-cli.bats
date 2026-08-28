@@ -265,7 +265,8 @@ signatures = [
     "AKIA" + "A" * 16,
     "xoxb-" + "A" * 10,
     "-----BEGIN " + "PRIVATE KEY-----",
-    "sourceUuid=" + "12345678-1234-1234-1234-123456789abc",
+    "sourceUuid=" +
+    "12345678-1234-1234-1234-123456789abc",
 ]
 for index, signature in enumerate(signatures):
     record = {

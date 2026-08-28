@@ -83,6 +83,16 @@ quartet_setup() {
   make_notify_stub
 }
 
+quartet_memory_cache_setup() {
+  local file root
+  file="${BATS_TEST_FILENAME##*/}"
+  file="${file%.bats}"
+  root="${BATS_RUN_TMPDIR:?}/memory-cache-test-$file-${BATS_TEST_NUMBER:?}"
+  mkdir -m 0700 "$root"
+  export MEMORY_CACHE_TEST_ROOT="$root"
+  export XDG_CACHE_HOME="$root/cache"
+}
+
 # Critic hooks are installed with /bin/bash on Darwin. Homebrew Bash 5.3 can
 # stall in their nested Python lock helpers, so hook-focused files opt into the
 # same interpreter as launchd without changing the shell used by other tests.

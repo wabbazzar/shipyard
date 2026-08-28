@@ -4,7 +4,7 @@
 setup() {
   load helpers
   quartet_setup
-  export XDG_CACHE_HOME="$BATS_TEST_TMPDIR/cache"
+  quartet_memory_cache_setup
 }
 
 SH="skills/shipyard/shipyard.sh"
