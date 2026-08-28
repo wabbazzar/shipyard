@@ -208,8 +208,10 @@ csg_read_required_feedback() {
     return 2
   }
   raw="$(jq -cr '
-    if (.shoulder | type) == "object" and
-       (.shoulder | has("require_feedback"))
+    if (.memory | type) == "object" and .memory.mode == "required"
+    then true
+    elif (.shoulder | type) == "object" and
+         (.shoulder | has("require_feedback"))
     then .shoulder.require_feedback
     else false
     end
@@ -256,7 +258,7 @@ csg_status_kind() {
     return 0
   }
   case "$raw" in
-    budget|spawn|delivery|malformed_response_exhausted) CSG_STATUS="$raw" ;;
+    budget|spawn|delivery|malformed_response_exhausted|memory) CSG_STATUS="$raw" ;;
     running|deposited) CSG_STATUS=timeout ;;
     *) CSG_STATUS=delivery ;;
   esac

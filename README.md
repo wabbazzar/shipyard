@@ -162,6 +162,10 @@ codes `0`/`2`/`3`):
 - `shipyard learn "<lesson>"` — route a lesson through the `docs/ADAPTING.md`
   taxonomy (`--to project|generic|install`, else a keyword heuristic) to a
   project note or a `docs/tickets/` stub for review.
+- `shipyard memory init|validate|status|query` — opt a project into its own
+  structured incident/rules ledger, validate it, inspect derived-index and
+  exact-diff receipt health, or retrieve bounded candidates for a planning
+  scope/current diff. Shipyard owns the mechanics; the project owns the ledger.
 
 For the current inspection, a multi-project design/shoulder budget
 recommendation is eligible only when exact manifests prove one resolved
@@ -176,6 +180,25 @@ subsystem's settled decisions and invariants against fresh-context erosion, and
 reproduces "why does X happen" against the real system rather than narrating a
 plausible story. It reviews; it does not redesign. Scaffold it with
 `/shipyard add-specialist`. See `docs/ADAPTING.md`.
+
+### Diff-associated project rules memory
+
+For recurring failure mechanisms that must follow the changed hunk—not a
+particular agent's remembered prose—a project may opt in to **project rules
+memory**. Shipyard owns the schema, safe parser, deterministic hybrid index,
+planning/exact-diff review contracts, receipts, and status tooling. Each
+project owns and reviews its tracked `.agents/rules-ledger.jsonl`; neither the
+cache nor runtime receipts are source of truth.
+
+Start with `shipyard memory init` (advisory), add only evidence-backed records,
+and run `shipyard memory validate`. Promote `[memory].mode` to `required` only
+after representative diffs retrieve useful history and guarded diffs are
+correctly falsified. The memory invocation always records an explicit reviewer
+identity: the default Claude path pins `sonnet` + `claude`; Codex or Hermes
+memory review therefore requires an explicit release/harness model. `shipyard
+status` reports ledger counts/digest, index
+freshness, embedding availability, and the newest exact-diff receipt without
+printing ledger/reviewer prose. See [the adoption workflow](docs/ADAPTING.md#project-rules-memory).
 
 ## Dogfood overseer
 
@@ -230,6 +253,7 @@ configuration, and it is YOUR job:
 | runner-owned blocking gate | `[release.blocking_gate]` — runs one configured deterministic command synchronously after the model turn in selected hook/daily modes, bounds it with `timeout_sec`, withholds the public result until completion, and writes the configured `result_key`; post-merge continues to use `test_cmd` and `typecheck` directly | **unset** (no runner-owned gate) |
 | false-green guard | `[release] verify_gate` — in hook/daily mode the proctor *self-reports* its verdict; with this set the runner re-runs the real `typecheck` + `test_cmd` and overrides a claimed `pass` to **fail** if either really fails, so a hallucinated green can't reach medic or the dispatch. Costs one real gate run. post-merge already runs the gate deterministically. | **false** (trust the model) |
 | outcome lineage | `[telemetry] outcome_lineage` — adds only opaque run/work/critique IDs, explicit domain references, available token classes, and critique delivery dispositions; malformed non-booleans fail config validation | **false/unset** (legacy event bytes) |
+| project rules memory | `[memory]` selects `advisory` or fail-closed `required` review against the project-owned `.agents/rules-ledger.jsonl`; derived indexes remain outside the worktree | **absent/off** |
 | off switch | Linux: `systemctl --user disable --now <project>-<display>.timer`; macOS: `launchctl bootout gui/$(id -u)/com.shipyard.<project>-<display>` | — |
 | hands-off repo | `autonomous = true` (top-level) — a private, disposable dogfood repo with no human in the loop: it never appears in the hub's approval wire, and the ticket auto-gate proceeds without stopping even for a user-decision. Pair with `[medic] can_merge = true`. **Only ever set this on a throwaway private repo.** | **unset** (human-in-the-loop) |
 | inspect first | `install.sh --dry-run` prints every unit and crontab change before writing | — |
@@ -277,6 +301,10 @@ can_merge = false
    prompt filenames use the role ids only (`[build]`/`[release]`,
    `build.md`/`release.md`) — the legacy `[augur]`/`[guardian]` compat layer
    is retired.
+
+   Optional project rules memory is initialized separately with
+   `shipyard memory init`; its tracked ledger belongs to the project while all
+   indexing and review mechanics remain in this Shipyard core.
 
 2. Run the installer:
 
@@ -364,7 +392,9 @@ root `AGENTS.md` skill bridge present; no dead `.claude/settings.json` hooks;
 no legacy launchers/cron; exact local Git identity/hook keys for opted-in
 projects; (hub only) mentat dispatch decisions mirrored into the target
 project's `data/decisions.jsonl`; (opt-in only) shoulder-mode wiring — capture
-hook, delivery env, watcher unit/plist; and tickets sitting in a folder their
+hook, delivery env, watcher unit/plist; (opt-in only) memory ledger validity,
+derived-index freshness, embedding availability, and newest receipt health;
+and tickets sitting in a folder their
 own `Status:` line contradicts. See [docs/INSTALL.md](docs/INSTALL.md) for the
 full `DOCTOR <class>` table. Disabled roles absent from
 `[install.timers]` are intentional, not Doctor drift. The audit finishes in

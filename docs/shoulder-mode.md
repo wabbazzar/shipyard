@@ -251,6 +251,11 @@ headless runs never set it, so they are unaffected.
 | conventions + project rubric | `<project>/.agents/release.md` | — |
 | events dir | `QUARTET_EVENTS_DIR`, else `<project>/data/events` | — |
 
+For opt-in rules memory, reviewer identity is receipt-bound. The unset Claude
+path therefore invokes and records `sonnet` explicitly; non-Claude memory
+review requires an explicit `CRITIC_MODEL`. This does not change the generic
+critic's legacy unset-model invocation.
+
 ## Events
 
 ```
