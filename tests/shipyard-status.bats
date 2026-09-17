@@ -49,7 +49,7 @@ enable_memory() {
 
 @test "shipyard inspect public contract is bounded and non-certifying" {
   skill="$QUARTET_ROOT/skills/shipyard/SKILL.md"
-  readme="$QUARTET_ROOT/README.md"
+  operations="$QUARTET_ROOT/docs/OPERATIONS.md"
   editorial="$QUARTET_ROOT/docs/deck-editorial.json"
 
   grep -Fq '"/shipyard inspect"' "$skill"
@@ -60,10 +60,10 @@ enable_memory() {
   grep -Fq 'stable schema-v1 JSON' "$skill"
   grep -Fq 'bounded by evidence and reported limitations' "$skill"
 
-  grep -Fq 'six independently enforced daily consumers' "$readme"
+  grep -Fq 'six independently enforced daily consumers' "$operations"
   grep -Fq 'matching current-user manifests into the current Shipyard core' \
-    "$readme"
-  grep -Fq 'never infers an unknown shoulder root' "$readme"
+    "$operations"
+  grep -Fq 'never infers an unknown shoulder root' "$operations"
 
   jq -e '
     .glossary["/shipyard"].def

@@ -46,20 +46,19 @@ setup() {
 }
 
 @test "the closed trial result is exact and routed to its follow-up" {
-  run python3 - "$QUARTET_ROOT/README.md" "$INDEX" "$EDITORIAL" <<'PY'
+  run python3 - "$QUARTET_ROOT/docs/tickets/pending/close-five-day-trial-findings.md" "$INDEX" "$EDITORIAL" <<'PY'
 import json
 import pathlib
 import re
 import sys
 
-readme = pathlib.Path(sys.argv[1]).read_text()
+trial = pathlib.Path(sys.argv[1]).read_text()
 source = pathlib.Path(sys.argv[2]).read_text()
 editorial = json.loads(pathlib.Path(sys.argv[3]).read_text())
 
-assert readme.count("trial met **2/4 floors**") == 1
-assert "T2 MISS (2/3 projects)" in readme
-assert "T3 MISS (0 valid ordered chains)" in readme
-assert "docs/tickets/pending/close-five-day-trial-findings.md" in readme
+assert trial.count("The final trial result is **2/4 floors met**.") == 1
+assert "T2 — usage assessed | **MISS (2/3)**" in trial
+assert "T3 — feature shipped end to end | **MISS (0)**" in trial
 
 table = source.split('<table class="ship-table" id="trial-results">', 1)[1].split("</table>", 1)[0]
 assert re.findall(r'<th scope="col">([^<]+)</th>', table) == ["Criterion", "Floor", "Result"]

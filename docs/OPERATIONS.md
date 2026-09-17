@@ -25,6 +25,20 @@ writing. The doctor recognizes intentionally disabled roles and reports only
 actual drift. See [INSTALL.md](INSTALL.md) for its finding classes and repair
 options.
 
+## Fleet inspection
+
+`shipyard inspect [--json] [--days N]` is a strictly read-only, bounded view
+of matching current-user manifests into the current Shipyard core. It does not
+certify fleet health: missing or malformed sources, snapshot limits, and
+recommendations remain bounded by evidence and reported limitations. Its JSON
+is stable schema-v1 output; its normal console is for human review.
+
+The inspection reports six independently enforced daily consumers—Design,
+Build, Release runner, Release shoulder critic, Medic, and Scribe—without
+collapsing their token gates. A multi-project Design or shoulder budget
+recommendation needs exact manifests proving one resolved unscoped gate root;
+it never infers an unknown shoulder root.
+
 ## Probes and release checks
 
 Medic can watch HTTP endpoints and deterministic drift checks:
