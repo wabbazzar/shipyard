@@ -28,6 +28,11 @@ QUARTET_OPS_JSON     # dashboard ops-state file (optional)
 QUARTET_EVENTS_DIR   # append-only JSONL event stream directory
 ```
 
+`QUARTET_*` is a legacy compatibility prefix, not Shipyard branding. It is the
+supported interface today; do not introduce new configuration under that name.
+The operational reference and migration posture are in
+[OPERATIONS.md](OPERATIONS.md#notifications-and-environment-variables).
+
 Jobs **bake** env; they don't read it live. Changing a knob means re-running
 the installer. User scheduler jobs start with a near-empty environment, so an
 unbaked knob silently mutes notifications and disables the ops scan — the
