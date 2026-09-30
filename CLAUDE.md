@@ -35,6 +35,7 @@ agents/lib/               load-config.sh naming.sh post-run.sh log_event.sh
                           revert-merge.sh detect-trunk.sh mentat-proposal.sh
                           spawn.sh outcome-lineage.sh release-verdict.sh
                           shoulder-wire.sh toml-python.sh
+                          incident-classification.sh rules-memory.py
 agents/release/critic-*   shoulder mode (queue → watch → cold critique)
 skills/                   nine shared skills + install skill + gates template
 install.sh                per-project installer / --doctor / --uninstall
