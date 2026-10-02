@@ -63,6 +63,7 @@ the Traps appendix) that polish-ticket and execute-ticket read.
 | Project key | Purpose | Default and validation |
 |---|---|---|
 | `[design].usage_path` | Directory whose `*.jsonl` beacons count as real product usage for mentat and fleet inspection | `data/usage`; when set, it must be a readable project-relative directory. Absolute paths, `..`, non-strings, and project-escaping symlinks are invalid. Missing, empty, unreadable, and malformed sources remain explicit coverage states rather than measured zero. |
+| `[design].failure_detail` | When `true`, a `claude_failed` design run adds `exit_code` and `cause` (`empty_output`, `stall_exhausted`, `timeout`, `exit_nonzero`) to `job.end` and appends the stderr to `tmp/<svc>-last-failure.log`, which later runs do not truncate | `false`: `job.end` and files are byte-identical to before |
 | `[memory].mode`, `[memory].ledger` | Opt a project into diff-associated historical-rule retrieval while keeping its ledger project-owned | absent/off; initialize advisory with `shipyard memory init`, validate before use, and promote to `required` only after replay |
 
 Rules-memory source data stays in the project at

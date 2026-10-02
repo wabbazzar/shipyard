@@ -241,6 +241,8 @@ background processes started, no live config edited.
 
 ## Ledger
 
+- Phase 1+2 (2026-10-01): `builder: subagent (1 agent)` for tests; `builder: inline (single runner branch ~20 lines)` for runner. Doctor premise re-proved: `install.sh` has no event-stream read (only an echo at :1014). Red→green on 4 `failure_detail` cases; unset-key guards green pre- and post-change. Baseline `bats tests/` 925 green. Doc row added to `docs/INSTALL.md` config table.
+
 (builder appends: plan + commit hash per phase, `builder: subagent (N agents)` /
 `builder: inline (<reason>)`, auto-decided open decisions, and the follow-up
 "design has no timeout/token cap — owner decision" note.)

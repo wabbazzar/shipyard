@@ -355,6 +355,23 @@ CLAUDE_OUT="$SPAWN_RAW"; CLAUDE_RC="$SPAWN_RC"
 echo "[$SVC] claude exit=$CLAUDE_RC" >> "$LOG_FILE"
 if [ "$CLAUDE_RC" -ne 0 ] || [ -z "$CLAUDE_OUT" ]; then
   echo "[$SVC] claude produced no output; no proposals drafted" >> "$LOG_FILE"
+  # [design] failure_detail (default off => byte-identical job.end, no file):
+  # name the cause and keep a record no later run truncates (LOG_FILE is
+  # rewritten at every start, which is how a 4-day failure lost its stderr).
+  FAIL_DETAIL="$(jq_from_json "$CFG_JSON" -r '.design.failure_detail // false' 2>/dev/null)"
+  if [ "$FAIL_DETAIL" = "true" ]; then
+    if [ "$CLAUDE_RC" -eq 124 ]; then FAIL_CAUSE=timeout
+    elif [ "$CLAUDE_RC" -eq 0 ]; then FAIL_CAUSE=empty_output
+    elif printf '%s' "${_SPAWN_STDERR:-}$CLAUDE_OUT" | grep -qEi "$_SPAWN_STALL_RE"; then
+      FAIL_CAUSE=stall_exhausted
+    else FAIL_CAUSE=exit_nonzero; fi
+    {
+      echo "[$SVC] $(now_iso) claude_failed rc=$CLAUDE_RC cause=$FAIL_CAUSE"
+      grep '^\[spawn\]' "$LOG_FILE" 2>/dev/null || true
+      printf '%s\n%s\n' "${_SPAWN_STDERR:-}" "$CLAUDE_OUT" | head -20
+    } >> "$RESULT_DIR/$SVC-last-failure.log" 2>/dev/null || true
+    finish fail reason=claude_failed exit_code="$CLAUDE_RC" cause="$FAIL_CAUSE"
+  fi
   finish fail reason=claude_failed
 fi
 
