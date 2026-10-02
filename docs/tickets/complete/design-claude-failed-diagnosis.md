@@ -2,7 +2,7 @@
 
 - **Created:** 2026-10-01
 - **Owner:** wabbazzar
-- **Status:** Pending — polished, ready for `execute-ticket`
+- **Status:** Complete — built and verified on local main; awaiting push
 - **Priority:** med
 - **Type:** bugfix
 - **Estimated Points:** 5 (three phases: 2 · 2 · 1)
