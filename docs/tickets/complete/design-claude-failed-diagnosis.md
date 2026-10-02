@@ -243,6 +243,11 @@ background processes started, no live config edited.
 
 - Phase 1+2 (2026-10-01): `builder: subagent (1 agent)` for tests; `builder: inline (single runner branch ~20 lines)` for runner. Doctor premise re-proved: `install.sh` has no event-stream read (only an echo at :1014). Red→green on 4 `failure_detail` cases; unset-key guards green pre- and post-change. Baseline `bats tests/` 925 green. Doc row added to `docs/INSTALL.md` config table.
 
+- Phase 3 (2026-10-01): `builder: subagent (1 agent)`. `agents/lib/job-fail-streak.sh` + `tests/job-fail-streak.bats` (11 cases; 10 shown red pre-script, two-scan cooldown case added after). Real-stream replay exit 0; fixture of 09-19→09-22 exit 1. Medic check path has a 24h cooldown (`runner.sh:681`, infra branch ~1060) — no blocker. Example block in `docs/OPERATIONS.md`. Final gate (orchestrator re-run): `bats tests/` 942 ok / 0 not ok; leak-check clean; deck fresh; syntax sweep ok; `collectors.sh` diff empty.
+- Auto-decided open decisions: all three defaults applied (off on shipyard's own install; threshold 2; name `design-fail-streak`). Live `.agents/config.toml` NOT edited — owner enables with `[design] failure_detail = true` and the OPERATIONS.md check block.
+- Follow-up (owner decision, untouched): design has no timeout/token cap.
+- Not pushed: commits are on local `main`; push/CI read left to the owner.
+
 (builder appends: plan + commit hash per phase, `builder: subagent (N agents)` /
 `builder: inline (<reason>)`, auto-decided open decisions, and the follow-up
 "design has no timeout/token cap — owner decision" note.)

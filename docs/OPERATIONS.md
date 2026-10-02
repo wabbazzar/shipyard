@@ -57,6 +57,17 @@ timeout_sec = 30
 restart_unit = "myproject-deploy.timer" # optional and whitelisted
 ```
 
+A repeated-failure check for a crew that fails without tripping a unit
+(read-only; `skipped` runs are neutral, an `ok` run resets the streak). The
+cooldown below applies, so it notifies at most once per UTC day:
+
+```toml
+[[medic.checks]]
+name = "design-fail-streak"
+cmd = 'bash "$QUARTET_DIR/agents/lib/job-fail-streak.sh" --svc <project>-<design display> --threshold 2'
+timeout_sec = 10
+```
+
 Failed drift checks become `infra` incidents, or `restart` incidents when the
 unit is permitted; they are not silently treated as code regressions. Starter
 checks live in `agents/medic/check-examples/`.
