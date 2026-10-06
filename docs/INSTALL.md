@@ -320,6 +320,12 @@ well under a second, so it runs as a `[[medic.checks]]` entry every scan —
 the next self-written drop-in or dead hook pages within one tick instead of
 surfacing weeks later.
 
+A second read-only helper, `agents/lib/job-fail-streak.sh --svc <svc>
+[--threshold N=2] [--events-dir D]`, is meant for the same `[[medic.checks]]`
+slot: it exits 1 (one-line reason on stdout) when the service's trailing run of
+`job.end status=fail` events reaches the threshold. `status=skipped` is ignored;
+any other status breaks the streak. Exit 2 = bad arguments.
+
 ## Repair (relink)
 
 Doctor is read-only, so a missing skill symlink (class `skill`) otherwise waits for
