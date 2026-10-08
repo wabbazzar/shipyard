@@ -64,6 +64,8 @@ the Traps appendix) that polish-ticket and execute-ticket read.
 |---|---|---|
 | `[design].usage_path` | Directory whose `*.jsonl` beacons count as real product usage for mentat and fleet inspection | `data/usage`; when set, it must be a readable project-relative directory. Absolute paths, `..`, non-strings, and project-escaping symlinks are invalid. Missing, empty, unreadable, and malformed sources remain explicit coverage states rather than measured zero. |
 | `[design].failure_detail` | When `true`, a `claude_failed` design run adds `exit_code` and `cause` (`empty_output`, `stall_exhausted`, `timeout`, `exit_nonzero`) to `job.end` and appends the stderr to `tmp/<svc>-last-failure.log`, which later runs do not truncate | `false`: `job.end` and files are byte-identical to before |
+| `[install].paused` | Switch a project's **scheduled** crew off on purpose while keeping its skills installed. `install.sh` refuses to write or enable any job (exit 2, even `--dry-run`); Doctor reports only jobs or a shoulder watcher that are *still* enabled, never the intentionally absent ones. Disable the live timers yourself when you set it (`systemctl --user disable --now <project>-*.timer <project>-<release>-watch.service`); remove the key to reinstall | `false` |
+| `[scribe].publish` | Where a nightly scribe commit goes: `local` (stays on the trunk checkout), `push` (straight to trunk), or `pr` (moved to a `scribe/<utc-stamp>` branch, pushed, opened as a PR with Acceptance/Verification evidence; the trunk checkout is reset back with `git reset --keep` so unrelated local edits survive; older open `scribe/*` PRs are closed as superseded). A fleet PR watcher then merges it when CI is green | unset → `push` if the legacy `auto_push = true`, else `local` |
 | `[memory].mode`, `[memory].ledger` | Opt a project into diff-associated historical-rule retrieval while keeping its ledger project-owned | absent/off; initialize advisory with `shipyard memory init`, validate before use, and promote to `required` only after replay |
 
 Rules-memory source data stays in the project at
@@ -299,6 +301,7 @@ word prefix, not a letter — the prefixes actually emitted are:
 
 | class | catches |
 |-------|---------|
+| `paused` | (`[install] paused = true` only) a crew job or shoulder watcher still enabled on a project whose crew is switched off; replaces every other role/unit check for that project |
 | `prompt` | an expected `.agents/<role>.md` project prompt is missing |
 | `unit` | an expected role's scheduler job missing, disabled, or pointing outside `$QUARTET_DIR` |
 | `stale` | a stale duplicate — more than one job running the same role runner |

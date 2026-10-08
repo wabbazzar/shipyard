@@ -11,8 +11,9 @@
 #
 # In daily mode, after claude exits, the runner counts diffed files in
 # config.scribe.content_paths. If non-zero AND config.scribe.auto_commit
-# is true, it commits with the configured prefix. Optionally pushes if
-# config.scribe.auto_push is true.
+# is true, it commits with the configured prefix. config.scribe.publish
+# then decides where the commit goes: local (default), push (trunk), or pr
+# (scribe/<stamp> branch + pull request; trunk checkout reset back).
 #
 # Trailer goes through agents/lib/post-run.sh with --no-escalate —
 # scribe failures don't go to medic (doc-gen failures aren't fixable
@@ -83,6 +84,19 @@ WALL_CLOCK="$(jq_from_json "$CFG_JSON" -r '.scribe.wall_clock_sec // 3600')"
 COMMIT_PREFIX="$(jq_from_json "$CFG_JSON" -r '.scribe.commit_message_prefix // "scribe: nightly refresh"')"
 AUTO_COMMIT="$(jq_from_json "$CFG_JSON" -r '.scribe.auto_commit // true')"
 AUTO_PUSH="$(jq_from_json "$CFG_JSON" -r '.scribe.auto_push // false')"
+# publish: where a daily commit goes. local = stays on the trunk checkout;
+# push = pushed straight to trunk (legacy auto_push = true); pr = moved to a
+# scribe/<stamp> branch, pushed, opened as a PR, trunk checkout reset back —
+# the fleet PR watcher merges it when CI is green. Unset falls back to the
+# legacy auto_push boolean so existing configs keep their behavior.
+PUBLISH="$(jq_from_json "$CFG_JSON" -r '.scribe.publish // empty')"
+if [ -z "$PUBLISH" ]; then
+  if [ "$AUTO_PUSH" = "true" ]; then PUBLISH="push"; else PUBLISH="local"; fi
+fi
+case "$PUBLISH" in
+  local|push|pr) ;;
+  *) echo "bad [scribe] publish: $PUBLISH (want local|push|pr)" >&2; exit 2 ;;
+esac
 CONTENT_PATHS_JSON="$(jq_from_json "$CFG_JSON" -c '.scribe.content_paths // []')"
 LIFECYCLE_DIRS="$(jq_from_json "$CFG_JSON" -r '(.write_ticket.lifecycle_dirs // false) | tostring')"
 
@@ -98,6 +112,7 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
     --arg display "$DISPLAY" \
     --arg dir "$PROJECT_DIR" \
     --arg trunk "$TRUNK_BRANCH" \
+    --arg publish "$PUBLISH" \
     --argjson cfg "$CFG_JSON" \
     '{agent:$agent, role:$role, display:$display,
       project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
@@ -106,6 +121,7 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
       content_paths:($cfg.scribe.content_paths // []),
       auto_commit:($cfg.scribe.auto_commit // true),
       auto_push:($cfg.scribe.auto_push // false),
+      publish:$publish,
       budgets:{budget_tokens_daily:($cfg.scribe.budget_tokens_daily // 1000000)}}'
   exit 0
 fi
@@ -264,13 +280,35 @@ if [ "$MODE" = "daily" ] && [ "$AUTO_COMMIT" = "true" ] && \
 
 Co-Authored-By: $SVC <noreply@anthropic.com>" -- "${PATHSPECS[@]}" >> "$LOG_FILE" 2>&1; then
     COMMIT_OUTCOME="ok"
-    if [ "$AUTO_PUSH" = "true" ]; then
-      if git push origin "$(git rev-parse --abbrev-ref HEAD)" >> "$LOG_FILE" 2>&1; then
-        COMMIT_OUTCOME="pushed"
-      else
-        COMMIT_OUTCOME="committed_push_failed"
-      fi
-    fi
+    case "$PUBLISH" in
+      push)
+        if git push origin "$(git rev-parse --abbrev-ref HEAD)" >> "$LOG_FILE" 2>&1; then
+          COMMIT_OUTCOME="pushed"
+        else
+          COMMIT_OUTCOME="committed_push_failed"
+        fi
+        ;;
+      pr)
+        # shellcheck disable=SC1091
+        source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
+        # shellcheck disable=SC1091
+        source "$QUARTET_DIR/agents/lib/scribe-publish.sh"
+        if PR_TRUNK="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")"; then
+          scribe_publish_pr "$PROJECT_DIR" "$PR_TRUNK" "$SVC" \
+            "$COMMIT_PREFIX ($CHANGED file(s))" "$CHANGED" "$LOG_FILE"
+          PR_RC=$?
+        else
+          PR_RC=10
+        fi
+        case "$PR_RC" in
+          0)  COMMIT_OUTCOME="pr_opened" ;;
+          10) COMMIT_OUTCOME="committed_push_failed"; JOB_STATUS="fail" ;;
+          11) COMMIT_OUTCOME="pushed_reset_failed";   JOB_STATUS="fail" ;;
+          13) COMMIT_OUTCOME="trunk_ahead_unpushed";  JOB_STATUS="fail" ;;
+          *)  COMMIT_OUTCOME="pushed_pr_failed";      JOB_STATUS="fail" ;;
+        esac
+        ;;
+    esac
   else
     COMMIT_OUTCOME="commit_failed"
     JOB_STATUS="fail"

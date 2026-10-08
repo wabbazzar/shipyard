@@ -213,6 +213,11 @@ PROJECT_NAME="$(jq_from_json "$CFG_JSON" -r '.project_name // empty')"
 IDENTITY_POLICY_FILE="$PROJECT_DIR/.shipyard-git-identity.toml"
 
 SHOULDER_AUTO="$(jq_from_json "$CFG_JSON" -r '.shoulder.auto_wire // false')"
+# [install] paused = true: the operator has switched this project's scheduled
+# crew OFF on purpose (skills stay installed). Install refuses to write or
+# enable jobs; Doctor flags anything still scheduled instead of anything
+# missing. Removing the key is the only way to reinstall.
+INSTALL_PAUSED="$(jq_from_json "$CFG_JSON" -r '(.install.paused // false) | tostring')"
 SHOULDER_MULTI="$(jq_from_json "$CFG_JSON" -r '
   if (.shoulder | type) == "object" and (.shoulder | has("harnesses"))
   then "true" else "false" end')"
@@ -501,6 +506,27 @@ run_doctor() {
 
   local qd_real; qd_real="$(cd "$QUARTET_DIR" && pwd -P)"
   local role u
+
+  # Paused project: the only drift is a crew job that is still scheduled or a
+  # shoulder watcher still running. Nothing is "expected" to be enabled.
+  if [ "$INSTALL_PAUSED" = "true" ]; then
+    for role in $QUARTET_ROLES; do
+      while IFS= read -r u; do
+        [ -z "$u" ] && continue
+        timer_enabled "$u" && emit "paused: '$role' job $u is still enabled while [install] paused = true"
+      done <<<"$(crew_units_for_role "$role")"
+    done
+    if [ "$SCHEDULER" = "systemd" ]; then
+      local paused_watch
+      paused_watch="${PROJECT_NAME}-$(role_display release "$CFG_JSON")-watch.service"
+      if systemctl --user is-enabled "$paused_watch" >/dev/null 2>&1; then
+        emit "paused: shoulder watcher $paused_watch is still enabled while [install] paused = true"
+      fi
+    fi
+    [ "$findings" -eq 0 ] && echo "DOCTOR: clean (crew paused by [install] paused = true)"
+    [ "$findings" -eq 0 ]
+    return
+  fi
 
   # Expected role set: [install.timers] keys ∪ roles with an enabled crew
   # job; installer default when both are empty. (The installed agent set is
@@ -1106,6 +1132,13 @@ case "$MODE" in
   relink)                run_relink; exit $? ;;
   uninstall)             run_uninstall; exit $? ;;
 esac
+
+# A paused project never gets jobs written or enabled, in dry-run or for real.
+if [ "$INSTALL_PAUSED" = "true" ]; then
+  echo "==> $PROJECT_NAME: [install] paused = true in $CFG — crew scheduling is switched off on purpose." >&2
+  echo "    Nothing written or enabled. Remove the key to reinstall; run --doctor to confirm nothing is still scheduled." >&2
+  exit 2
+fi
 
 # Resolve and validate the scheduler role set before install mutates config,
 # project files, manifests, crontab, or scheduler state.
