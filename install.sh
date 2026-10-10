@@ -1674,6 +1674,23 @@ for SKILLS_DEST in "${SKILLS_DESTS[@]}"; do
   done
 done
 
+# Crew runtime state that lives inside the project tree but is never policy:
+# build worktrees and the machine-local shoulder delivery env. Left untracked
+# they make the build pre-flight read the tree as dirty and skip every night
+# (bopthere, 2026-10). Append-only; an existing rule is left alone.
+if [ -f "$PROJECT_DIR/.gitignore" ]; then
+  for ignore_rule in ".worktrees/" ".agents/shoulder.env"; do
+    if grep -qxF "$ignore_rule" "$PROJECT_DIR/.gitignore" 2>/dev/null; then
+      continue
+    elif [ "$DRY_RUN" = "1" ]; then
+      echo "  would gitignore: $ignore_rule"
+    else
+      printf '%s\n' "$ignore_rule" >> "$PROJECT_DIR/.gitignore"
+      echo "  gitignored: $ignore_rule"
+    fi
+  done
+fi
+
 # Drop the gate file template into .agents/gates.md — but NEVER clobber an
 # existing gate file (it accumulates this project's filled-in commands + the
 # Traps appendix).
@@ -1898,6 +1915,11 @@ if [ "$WIRE_SHOULDER" = "1" ] || [ "$sh_auto" = "true" ]; then
       printf 'CRITIC_NOTE_TARGET=%q\n' "$sh_target"
     [ -n "$sh_deliver" ] &&
       printf 'CRITIC_NOTE_DELIVER_CMD=%q\n' "$sh_deliver"
+    # The watcher logs release.critique into QUARTET_EVENTS_DIR when set;
+    # without it every shoulder unit wrote a private <project>/data/events
+    # that no dashboard read and that dirtied the build pre-flight.
+    [ -n "${QUARTET_EVENTS_DIR:-}" ] &&
+      printf 'QUARTET_EVENTS_DIR=%q\n' "$QUARTET_EVENTS_DIR"
   )"$'\n'
   if [ "$DRY_RUN" = "1" ]; then
     echo "  would write: $sh_env"
