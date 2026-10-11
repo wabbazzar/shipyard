@@ -306,7 +306,9 @@ disarmed unless `CRITIC_BLOCK=1`.
 the capture hook in the authoring harness's native config — the harness is
 `[shoulder] harness` else `[harness].default` else `claude` — and writes
 `<project>/.agents/shoulder.env` from the `[notify]` block so the watch service
-gets `CLAUDE_NOTE_CMD` / `CRITIC_NOTE_*` without hand-wiring. **With the opt-in
+gets `CLAUDE_NOTE_CMD` / `CRITIC_NOTE_*` without hand-wiring (plus
+`QUARTET_EVENTS_DIR` when the installer's environment sets it, so
+`release.critique` lands in the shared event stream). **With the opt-in
 unset, `install.sh` touches no harness config** — the installer still refuses to
 own those files by default. `install.sh --doctor` reports wiring drift once a
 project has opted in. Re-running is idempotent; an existing unrelated hook is
