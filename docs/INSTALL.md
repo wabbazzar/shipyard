@@ -132,7 +132,10 @@ recon  →  interview  →  write L2–L5  →  bake units  →  verify
    one) and fill it in; the theme block; the conventions block.
 4. **Bake jobs.** `install.sh --project <dir> --theme <t>` writes systemd units
    on Linux or LaunchAgent plists on macOS with L1 env baked in, symlinks the
-   L5 skills, enables the timers, and removes legacy cron launchers.
+   L5 skills, enables the timers, and removes legacy cron launchers. If the
+   project has a `.gitignore`, it appends `.worktrees/` and
+   `.agents/shoulder.env` (skipping rules already present) so crew runtime
+   state never dirties the build pre-flight.
 5. **Verify.** `medic --mode scan --dry-run` loads clean, the release gates
    are green now, the scheduler reports each job loaded, and the nine skill
    symlinks resolve.
