@@ -32,7 +32,7 @@ setup() {
 }
 
 @test "the writing-site copy carries the same invariant (when present)" {
-  SITE="$QUARTET_ROOT/../wabbazzar.github.io/writing/the-shipyard/index.html"
+  SITE="$QUARTET_ROOT/../github-website/writing/the-shipyard/index.html"
   [ -f "$SITE" ] || skip "writing-site copy not checked out beside this repo"
   run grep -n '<button class="gloss"' "$SITE"
   [ "$status" -ne 0 ]
