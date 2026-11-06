@@ -67,6 +67,18 @@ source "$QUARTET_DIR/agents/lib/mentat-proposal.sh"
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/incident-classification.sh"
 
+# Probe HTTP status capture. curl's -w "%{http_code}" prints a code (000 when
+# there was no HTTP response) AND may exit nonzero (28 timeout, 56/92 reset),
+# so an `|| echo 000` fallback double-prints: 200000 / 000000. Ignore curl's
+# exit status and accept only a clean 3-digit code; anything else is 000.
+probe_http_status() {
+  local url="$1" timeout="$2" resolve="${3:-}" out
+  local args=(-sS -o /dev/null -w "%{http_code}" --max-time "$timeout")
+  [ -n "$resolve" ] && args+=(--resolve "$resolve")
+  out="$(curl "${args[@]}" "$url" 2>/dev/null || true)"
+  if [[ "$out" =~ ^[0-9]{3}$ ]]; then printf '%s' "$out"; else printf '000'; fi
+}
+
 # ---------- --self-test: merge → post-merge-fail → revert, both shapes ------
 medic_self_test() {
   # Builds a throwaway origin+clone per commit shape, lands a regression
@@ -116,9 +128,24 @@ medic_self_test() {
     fi
     echo "self-test: $shape — merge -> post-merge-fail -> revert OK"
   done
+  # probe-status: stub curl (prints $STUB_OUT, exits $STUB_RC) must never
+  # yield anything but a clean 3-digit code (regression: 200000 / 000000).
+  mkdir -p "$root/stub"
+  printf '#!/bin/bash\nprintf "%%s" "$STUB_OUT"\nexit "${STUB_RC:-0}"\n' >"$root/stub/curl"
+  chmod +x "$root/stub/curl"
+  local c got
+  for c in "200:0:200" "200:28:200" "000:7:000" ":6:000" "abc:0:000"; do
+    got="$(STUB_OUT="${c%%:*}" STUB_RC="$(echo "$c" | cut -d: -f2)" PATH="$root/stub:$PATH" probe_http_status http://x 5)"
+    if [ "$got" = "${c##*:}" ]; then
+      echo "self-test: probe-status [$c] -> $got OK"
+    else
+      echo "self-test: probe-status [$c] -> '$got' FAIL (want ${c##*:})"
+      rc=1
+    fi
+  done
   rm -rf "$root"
   if [ "$rc" -eq 0 ]; then
-    echo "self-test: PASS (shapes exercised: squash, true-merge)"
+    echo "self-test: PASS (shapes exercised: squash, true-merge, probe-status)"
   else
     echo "self-test: FAIL"
   fi
@@ -486,9 +513,7 @@ detect_scan_probes() {
     fi
 
     local status_code
-    local curl_args=(-sS -o /dev/null -w "%{http_code}" --max-time "$p_timeout")
-    [ -n "$p_resolve" ] && curl_args+=(--resolve "$p_resolve")
-    status_code="$(curl "${curl_args[@]}" "$p_url" 2>/dev/null || echo "000")"
+    status_code="$(probe_http_status "$p_url" "$p_timeout" "$p_resolve")"
 
     if [ "$status_code" = "$p_expect" ]; then
       echo "[medic] probe $p_name OK ($status_code)" >> "$LOG_FILE"
