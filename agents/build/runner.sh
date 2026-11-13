@@ -60,6 +60,15 @@ source "$QUARTET_DIR/agents/lib/detect-trunk.sh"
 CFG_JSON="$(load_config_json "$CONFIG_FILE")" || \
   { echo "failed to parse $CONFIG_FILE" >&2; exit 2; }
 
+# Trunk reconciliation is strictly opt-in; reject misspelled string booleans.
+if ! jq_from_json "$CFG_JSON" -e '
+  if ((.build // {}) | has("reconcile_trunk"))
+  then (.build.reconcile_trunk | type) == "boolean" else true end' >/dev/null; then
+  echo "build.reconcile_trunk must be a boolean" >&2
+  exit 2
+fi
+RECONCILE_TRUNK="$(jq_from_json "$CFG_JSON" -r '.build.reconcile_trunk // false')"
+
 PROJECT_NAME="$(jq_from_json "$CFG_JSON" -r '.project_name')"
 
 # Canonical role identity + resolved display name (svc string). Legacy
@@ -92,6 +101,7 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
       project:$cfg.project_name, project_dir:$dir, trunk:$trunk,
       can_merge:($cfg.medic.can_merge // false),
       allow_no_ci:($cfg.build.allow_no_ci // false),
+      reconcile_trunk:($cfg.build.reconcile_trunk // false),
       in_scope_paths:($cfg.build.in_scope_paths // []),
       forbidden_paths:($cfg.build.forbidden_paths // []),
       budgets:{budget_tokens_daily:($cfg.build.budget_tokens_daily // 1000000),
@@ -195,6 +205,112 @@ if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
         mode="$MODE" status="abort" reason="not_trunk" || true
       exit 0
     fi
+    if [ "$RECONCILE_TRUNK" = true ]; then
+      # This opt-in guard preserves caller work. The initial dirty guard above
+      # already approved installer-owned untracked symlinks/runtime fragments.
+      PREFLIGHT_HEAD="$(git rev-parse HEAD)"
+      preflight_unchanged() {
+        [ "$(git rev-parse --abbrev-ref HEAD)" = "$TRUNK_BRANCH" ] &&
+          [ "$(git rev-parse HEAD)" = "$PREFLIGHT_HEAD" ] &&
+          [ "$(git status --porcelain --untracked-files=all)" = "$PORCELAIN" ]
+      }
+      git_detail() {
+        python3 -c '
+import re,sys
+text=re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", sys.stdin.read())
+lines=[re.sub(r"[\x00-\x1f\x7f]", "", line).strip() for line in text.splitlines()]
+lines=[line for line in lines if line and not re.match(r"^(remote: *)?hint:", line)]
+print("; ".join(lines)[:300])'
+      }
+      preflight_event() {
+        [ -x "$LOG_EVENT" ] && "$LOG_EVENT" "$SVC" job.end \
+          mode="$MODE" status=abort reason="$1" detail="$2" || true
+      }
+      skip_changed_preflight() {
+        echo "[$SVC] SKIP: checkout changed during Git preflight" >> "$LOG_FILE"
+        preflight_event preflight_changed "Checkout changed during Git preflight; left caller work untouched."
+        exit 0
+      }
+      GIT_OUTPUT="$(git fetch origin "$TRUNK_BRANCH" --quiet 2>&1)"
+      GIT_RC=$?
+      printf '%s\n' "$GIT_OUTPUT" >> "$LOG_FILE"
+      if [ "$GIT_RC" -ne 0 ]; then
+        preflight_event fetch_failed "$(printf '%s' "$GIT_OUTPUT" | git_detail)"
+        exit 1
+      fi
+      preflight_unchanged || skip_changed_preflight
+      # Resolve the fetched tracking ref once. Missing/corrupt refs or graph
+      # errors must never masquerade as an empty (already-current) graph.
+      REMOTE_HEAD="$(git rev-parse --verify "refs/remotes/origin/$TRUNK_BRANCH^{commit}" 2>&1)" || {
+        preflight_event git_state_failed "$(printf '%s' "$REMOTE_HEAD" | git_detail)"
+        exit 1
+      }
+      REMOTE_COMMITS="$(git rev-list "$PREFLIGHT_HEAD..$REMOTE_HEAD" 2>&1)" || {
+        preflight_event git_state_failed "$(printf '%s' "$REMOTE_COMMITS" | git_detail)"
+        exit 1
+      }
+      if [ -n "$REMOTE_COMMITS" ]; then
+        GIT_OUTPUT="$(git merge-base --is-ancestor "$PREFLIGHT_HEAD" "$REMOTE_HEAD" 2>&1)"
+        GRAPH_RC=$?
+        if [ "$GRAPH_RC" -gt 1 ]; then
+          preflight_event git_state_failed "$(printf '%s' "$GIT_OUTPUT" | git_detail)"
+          exit 1
+        elif [ "$GRAPH_RC" -eq 0 ]; then
+          GIT_OUTPUT="$(git merge --ff-only "$REMOTE_HEAD" 2>&1)"
+        else
+          GIT_OUTPUT="$(git merge --no-edit "$REMOTE_HEAD" 2>&1)"
+        fi
+        GIT_RC=$?
+        printf '%s\n' "$GIT_OUTPUT" >> "$LOG_FILE"
+        if [ "$GIT_RC" -ne 0 ]; then
+          # Only abort a merge we started. Never reset/stash caller changes.
+          if [ -f "$(git rev-parse --git-path MERGE_HEAD)" ]; then
+            if ! git merge --abort >> "$LOG_FILE" 2>&1; then
+              preflight_event merge_abort_failed "Git merge could not be aborted; inspect checkout before retrying."
+              exit 1
+            fi
+          fi
+          DETAIL="$(printf '%s' "$GIT_OUTPUT" | git_detail)"
+          preflight_event push_diverged "$DETAIL"
+          NOTICE_FILE="$(git rev-parse --git-path shipyard-build-trunk-notice)"
+          NOTICE_DAY="$(date -u +%Y-%m-%d)"
+          if [ "$(cat "$NOTICE_FILE" 2>/dev/null || true)" != "$NOTICE_DAY" ]; then
+            # Best-effort once/day attempt: the notification wrapper intentionally
+            # hides transport failures. Avoid paging every scheduled conflict run.
+            printf '%s\n' "$NOTICE_DAY" > "$NOTICE_FILE"
+            quartet_notify --class actionable --episode "trunk-conflict:$PROJECT_NAME:$NOTICE_DAY" \
+              "$SVC (trunk conflict)" \
+              "Trunk reconciliation stopped; resolve $TRUNK_BRANCH versus origin/$TRUNK_BRANCH manually before retrying. $DETAIL" || true
+          fi
+          exit 0
+        fi
+        PREFLIGHT_HEAD="$(git rev-parse HEAD)"
+      fi
+      preflight_unchanged || skip_changed_preflight
+      # A fetched commit (or another author before the snapshot) may change
+      # budgets/permissions. Never push or invoke a model using stale policy.
+      CURRENT_CFG_JSON="$(load_config_json "$CONFIG_FILE" 2>/dev/null)" || {
+        preflight_event config_read_failed "Project configuration could not be re-read after Git integration; inspect it before retrying."
+        exit 1
+      }
+      if [ "$(jq_from_json "$CURRENT_CFG_JSON" -S -c '.')" != "$(jq_from_json "$CFG_JSON" -S -c '.')" ]; then
+        preflight_event config_changed "Project configuration changed during Git integration; skipped push/model work. The next cycle will load the new policy."
+        exit 0
+      fi
+      LOCAL_COMMITS="$(git rev-list "$REMOTE_HEAD..$PREFLIGHT_HEAD" 2>&1)" || {
+        preflight_event git_state_failed "$(printf '%s' "$LOCAL_COMMITS" | git_detail)"
+        exit 1
+      }
+      if [ -n "$LOCAL_COMMITS" ]; then
+        GIT_OUTPUT="$(git push origin "$TRUNK_BRANCH" 2>&1)"
+        GIT_RC=$?
+        printf '%s\n' "$GIT_OUTPUT" >> "$LOG_FILE"
+        if [ "$GIT_RC" -ne 0 ]; then
+          preflight_event push_failed "$(printf '%s' "$GIT_OUTPUT" | git_detail)"
+          exit 1
+        fi
+      fi
+    else
     git fetch origin "$TRUNK_BRANCH" --quiet 2>>"$LOG_FILE" || true
     if [ -n "$(git rev-list "origin/$TRUNK_BRANCH..$TRUNK_BRANCH" 2>/dev/null)" ]; then
       echo "[$SVC] pushing local $TRUNK_BRANCH ahead-of-origin commits" >> "$LOG_FILE"
@@ -203,6 +319,7 @@ if [ "$MODE" = "live" ] || [ "$MODE" = "dry-run" ]; then
           mode="$MODE" status="abort" reason="push_failed" || true
         exit 1
       }
+    fi
     fi
   fi
 

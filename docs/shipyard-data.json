@@ -115,7 +115,7 @@
       "name": "helldiver",
       "was": "",
       "loop": "build",
-      "status": "Live. Merge is opt-in and a zero-CI repo can’t merge vacuously; incident repairs no longer slip in a side-door — they enter as proposals at the top of the loop.",
+      "status": "Live. Merge is opt-in and a zero-CI repo can’t merge vacuously; incident repairs enter as proposals at the top of the loop. Trunk reconciliation is a separate, default-off build option.",
       "tagline": "Takes ratified tickets to shipped code.",
       "headline": "Auto-merge was opt-out (default true), and a repo with zero CI checks passed the CI gate vacuously.",
       "gate": "CI green + explicit opt-in merge; no checks = red (waivable only by allow_no_ci)",
@@ -146,7 +146,7 @@
           "disposition": "kept + hardened",
           "source": "agents/build/runner.sh + role.md",
           "summary": "Nightly fyi-requests.jsonl → autonomous PRs.",
-          "detail": "The flow stays; the gates change. Auto-merge flips from opt-out to opt-in, so a repo only merges its own PRs when it deliberately says so. And the green-or-no-checks path splits: a repo with zero CI checks now fails the gate instead of passing it vacuously, waivable only by an explicit allow_no_ci with a logged waiver. [D-17]"
+          "detail": "The flow stays; the gates change. Auto-merge flips from opt-out to opt-in, so a repo only merges its own PRs when it deliberately says so. And the green-or-no-checks path splits: a repo with zero CI checks now fails the gate instead of passing it vacuously, waivable only by an explicit allow_no_ci with a logged waiver. [D-17] Separately, [build] reconcile_trunk defaults to false. When true, live preflight fetches remote trunk, fast-forwards remote-only history or merges clean divergence, then pushes normally. Conflicts abort the merge, preserve the original clean checkout, and skip with exit 0, job.end status=abort reason=push_diverged, bounded detail, and one actionable owner notice per UTC day/project. Changed project configuration defers model work until a fresh invocation loads the new gates. Actual Git state/fetch/push errors remain nonzero. No rebase or force-push; unset/false preserves legacy behavior."
         },
         {
           "name": "incident repairs — via the loop",
