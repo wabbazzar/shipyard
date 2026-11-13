@@ -3,18 +3,26 @@
 
 from __future__ import annotations
 
+import os
+import sys
+
+# Direct execution must not let this file shadow Python's stdlib inspect
+# during the traceback -> dataclasses import chain (Python 3.14 and later).
+if __package__ in {None, ""}:
+    _script_directory = os.path.dirname(os.path.realpath(__file__))
+    sys.path[:] = [entry for entry in sys.path
+                   if os.path.realpath(entry) != _script_directory]
+
 import argparse
 import hashlib
 import json
 import math
-import os
 import plistlib
 import re
 import shlex
 import shutil
 import stat
 import subprocess
-import sys
 import tomllib
 from collections import defaultdict
 from concurrent.futures import Future, ThreadPoolExecutor

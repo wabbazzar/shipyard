@@ -60,6 +60,30 @@ run_overseer() {
 assessed_status() { events_json | jq -r 'select(.event=="overseer.assessed") | .status' | tail -1; }
 n_assessed() { events_json | jq -c 'select(.event=="overseer.assessed")' | wc -l | tr -d ' '; }
 
+# systemd 259 uses "code=exited, status=N/NAME"; older releases used a slash.
+# https://github.com/systemd/systemd/blob/v259/src/run/run.c#L2348
+has_systemd_exit_status() {
+  local text="$1" expected="$2" name
+  case "$expected" in
+    0) name=SUCCESS ;;
+    1) name=FAILURE ;;
+    *) return 2 ;;
+  esac
+  [[ "$text" =~ (^|[[:space:]])code=exited(/status=$expected|,\ status=$expected/$name)($|[[:space:]]) ]]
+}
+
+@test "systemd exit-status assertion accepts legacy and v259 rendering without confusing failures" {
+  has_systemd_exit_status 'Main processes terminated with: code=exited/status=0' 0
+  has_systemd_exit_status 'Main processes terminated with: code=exited/status=1' 1
+  has_systemd_exit_status 'Main processes terminated with: code=exited, status=0/SUCCESS' 0
+  has_systemd_exit_status 'Main processes terminated with: code=exited, status=1/FAILURE' 1
+  ! has_systemd_exit_status 'Main processes terminated with: code=exited/status=1' 0
+  ! has_systemd_exit_status 'Main processes terminated with: code=exited, status=1/FAILURE' 0
+  ! has_systemd_exit_status 'Main processes terminated with: code=exited, status=0/SUCCESS' 1
+  ! has_systemd_exit_status 'Main processes terminated with: code=killed, status=1/HUP' 1
+  ! has_systemd_exit_status 'Main processes terminated with: code=exited/status=10' 1
+}
+
 @test "--check-config lists only autonomous repos" {
   make_repo alpha true >/dev/null; make_repo beta false >/dev/null; make_repo gamma true >/dev/null
   run run_overseer --check-config
@@ -200,7 +224,7 @@ Co-authored-by: alpha-chronicler <noreply@anthropic.com>"
     /bin/bash "$QUARTET_ROOT/agents/overseer/runner.sh" --project "$P"
   [ "$status" -eq 0 ]
   [[ "$output" == *"Finished with result: success"* ]]
-  [[ "$output" == *"code=exited/status=0"* ]]
+  has_systemd_exit_status "$output" 0
 }
 
 @test "systemd error verdict fails oneshot" {
@@ -217,7 +241,7 @@ Co-authored-by: alpha-chronicler <noreply@anthropic.com>"
     /bin/bash "$QUARTET_ROOT/agents/overseer/runner.sh" --project "$P"
   [ "$status" -ne 0 ]
   [[ "$output" == *"Finished with result: exit-code"* ]]
-  [[ "$output" == *"code=exited/status=1"* ]]
+  has_systemd_exit_status "$output" 1
 }
 
 @test "a healthy fleet stays silent (no notification for any repo)" {
