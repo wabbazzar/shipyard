@@ -341,9 +341,13 @@ read_lock_owner() {
   LOCK_OWNER_TOKEN=""
   LOCK_OWNER_IDENTITY=""
   LOCK_OWNER_CREATED=""
+  LOCK_OWNER_RECORD=""
   safe_file "$owner" || return 1
+  # Retain the exact record whose fields drive liveness checks. Re-reading the
+  # path afterward could bind a dead owner's PID to a live successor's token.
+  IFS= read -r LOCK_OWNER_RECORD <"$owner" || return 1
   IFS=' ' read -r LOCK_OWNER_PID LOCK_OWNER_TOKEN third fourth extra \
-    <"$owner" || return 1
+    <<<"$LOCK_OWNER_RECORD" || return 1
   [[ "$LOCK_OWNER_PID" =~ ^[1-9][0-9]*$ ]] &&
     [[ "$LOCK_OWNER_TOKEN" =~ ^[0-9a-f]{32}$ ]] &&
     [ -z "$extra" ] || return 1
@@ -683,7 +687,7 @@ lock_mailbox() {
     }
     owner="$LOCK_DIR/owner"
     if read_lock_owner "$owner"; then
-      owner_before="$(<"$owner")"
+      owner_before="$LOCK_OWNER_RECORD"
       owner_live=0
       if kill -0 "$LOCK_OWNER_PID" 2>/dev/null; then
         if [ -z "$LOCK_OWNER_IDENTITY" ]; then

@@ -2700,7 +2700,9 @@ EOF
   [ "$status" -eq 0 ]
   [ "$before" = "$(phase3_hashes)" ]
   jq -e '
-    ([.fleet[] | select(.project_name=="readonly")][0]) as $valid
+    ([.fleet[] | select(.project_name|startswith("overseer-"))
+      | .project_id] | sort) as $bad_ids
+    | ([.fleet[] | select(.project_name=="readonly")][0]) as $valid
     | ($valid.overseer
       | .applicability=="applicable" and .state=="present"
         and .reason=="ok" and .healthy==false
@@ -2714,13 +2716,11 @@ EOF
       | .overseer
       | .applicability=="applicable" and .state=="malformed"
         and .reason=="malformed"]|all)
-    and ([.fleet[] | select(.project_name|startswith("overseer-"))
-      | .project_id] | sort) as $bad_ids
-    | ([.coverage[] | select(.source=="overseer"
-      and (.project_id as $id | $bad_ids|index($id))!=null)
+    and ([.coverage[] | select(.source=="overseer"
+      and ((.project_id as $id | $bad_ids|index($id))!=null))
       | .state=="partial" and .reason=="malformed"
         and .records_total==1 and .records_valid==0 and .records_invalid==1]
-      | length)==3
+      | length==3 and all)
     and ([.evidence[] | select(.kind=="overseer_assessment")]|length)==1
   ' <<<"$output"
   [[ "$output" != *"SYNTHETIC_REDACT_ME"* ]]

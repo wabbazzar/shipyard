@@ -1662,3 +1662,56 @@ case "$count" in 1|2|3) echo 100 ;; *) echo 120 ;; esac
     fi
   done
 }
+
+@test "lock owner handoff never mixes parsed dead PID with a live successor record" {
+  # Run the real function definitions in an isolated process. DEBUG schedules
+  # a successor exactly between parsing the old owner and retaining its record.
+  # No production hook or probabilistic sleep is needed to expose this race.
+  FUNCTIONS="$BATS_TEST_TMPDIR/feedback-functions.sh"
+  python3 - "$FEEDBACK" "$FUNCTIONS" <<'PY'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+Path(sys.argv[2]).write_text(source.split('\ncase "${1:-}" in\n')[0])
+PY
+  cat > "$BATS_TEST_TMPDIR/handoff.sh" <<'SH'
+#!/bin/bash
+source "$1"
+PROCESS_IDENTITY_HELPER="$2/agents/release/critic-process-identity.py"
+BOX="$3/box"
+mkdir -m700 "$BOX" "$BOX/.lock" "$BOX/quarantine"
+sleep 10 &
+LIVE_PID=$!
+trap 'kill "$LIVE_PID" 2>/dev/null || true; wait "$LIVE_PID" 2>/dev/null || true' EXIT
+LIVE_ID="$(process_identity "$LIVE_PID")"
+printf '%s %032d %s %s\n' 2147483647 1 '1-1' "$(date +%s)" > "$BOX/.lock/owner"
+chmod 600 "$BOX/.lock/owner"
+SWAPPED=0
+boundary() {
+  if [ "$SWAPPED" = 0 ] && [[ "$1" == owner_before=* ]]; then
+    SWAPPED=1
+    rm "$BOX/.lock/owner"
+    rmdir "$BOX/.lock"
+    mkdir -m700 "$BOX/.lock"
+    printf '%s %032d %s %s\n' "$LIVE_PID" 2 "$LIVE_ID" "$(date +%s)" > "$BOX/.lock/owner"
+    chmod 600 "$BOX/.lock/owner"
+    printf 'live successor published\n'
+  fi
+}
+set -T
+trap 'boundary "$BASH_COMMAND"' DEBUG
+LOCK_WAIT_STEPS=1
+rc=0
+lock_mailbox "$BOX" || rc=$?
+trap - DEBUG
+printf 'lock_rc=%s boundary=%s\n' "$rc" "$SWAPPED"
+[ "$SWAPPED" -eq 1 ] && [ "$rc" -eq 75 ] || exit 2
+kill -0 "$LIVE_PID" || exit 2
+[ -f "$BOX/.lock/owner" ] || { echo 'live successor lock was stolen'; exit 1; }
+read_lock_owner "$BOX/.lock/owner" || exit 2
+[ "$LOCK_OWNER_PID" = "$LIVE_PID" ] || exit 1
+SH
+  run bash "$BATS_TEST_TMPDIR/handoff.sh" "$FUNCTIONS" "$QUARTET_ROOT" "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'lock_rc=75 boundary=1'* ]]
+}
