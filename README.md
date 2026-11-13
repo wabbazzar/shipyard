@@ -55,6 +55,7 @@ typecheck = "npx tsc --noEmit"
 
 [build]
 allow_no_ci = false
+reconcile_trunk = false
 
 [medic]
 can_merge = false
@@ -64,6 +65,14 @@ The installer is idempotent. It writes only the scheduler jobs and symlinks it
 owns; your project configuration, prompts, data, and gates stay project-owned.
 For the full six-layer model, configuration reference, repair, and uninstall
 behavior, read [the installation guide](docs/INSTALL.md).
+
+Projects that deliberately keep local trunk commits can opt into
+`[build].reconcile_trunk = true`. Before a live build, Shipyard fetches the
+remote trunk, fast-forwards or merges clean divergence, then pushes normally.
+Conflicts abort the merge and skip the build with an owner alert; history is
+never rebased or force-pushed. If reconciliation changes project configuration,
+the run stops so the next invocation loads the new gates. Unset or `false`
+preserves the existing preflight.
 
 ## Operate it
 
