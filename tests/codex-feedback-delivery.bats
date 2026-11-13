@@ -1715,3 +1715,175 @@ SH
   [ "$status" -eq 0 ]
   [[ "$output" == *'lock_rc=75 boundary=1'* ]]
 }
+
+@test "fresh unpublished owner across a wall-clock boundary is never reaped" {
+  FUNCTIONS="$BATS_TEST_TMPDIR/feedback-functions.sh"
+  python3 - "$FEEDBACK" "$FUNCTIONS" <<'PY'
+from pathlib import Path
+import sys
+Path(sys.argv[2]).write_text(Path(sys.argv[1]).read_text().split('\ncase "${1:-}" in\n')[0])
+PY
+  cat > "$BATS_TEST_TMPDIR/fresh-publication.sh" <<'SH'
+#!/bin/bash
+source "$1/feedback-functions.sh"
+PROCESS_IDENTITY_HELPER="$2/agents/release/critic-process-identity.py"
+BOX="$1/box"
+mkdir -m700 "$BOX" "$BOX/.lock" "$BOX/quarantine"
+(
+  while [ ! -f "$1/start" ]; do sleep .005; done
+  python3 - "$1/epoch" <<'PYCLOCK'
+import pathlib,sys,time
+when=int(pathlib.Path(sys.argv[1]).read_text())
+time.sleep(max(0,when + .05-time.time()))
+PYCLOCK
+  mkdir -m700 "$BOX/.lock" || exit 2
+  sleep 10 &
+  SLEEPER_PID=$!
+  trap 'kill "$SLEEPER_PID" 2>/dev/null || true; wait "$SLEEPER_PID" 2>/dev/null || true' EXIT
+  trap 'exit 143' TERM HUP INT
+  touch "$1/published"
+  wait "$SLEEPER_PID"
+) &
+PUBLISHER_PID=$!
+trap 'kill "$PUBLISHER_PID" 2>/dev/null || true; wait "$PUBLISHER_PID" 2>/dev/null || true' EXIT
+SWAPPED=0
+boundary() {
+  if [ "$SWAPPED" = 0 ] && [[ "$1" == mtime=* ]]; then
+    SWAPPED=1
+    rmdir "$BOX/.lock"
+    printf '%s\n' "$(($(date +%s) + 1))" > "$TASK_DIR/epoch"
+    touch "$TASK_DIR/start"
+    for ((n=0;n<500;n++)); do
+      [ ! -f "$TASK_DIR/published" ] || break
+      sleep .005
+    done
+    [ -f "$TASK_DIR/published" ] || exit 2
+    echo 'fresh publisher installed'
+  fi
+}
+TASK_DIR="$1"
+set -T
+trap 'boundary "$BASH_COMMAND"' DEBUG
+LOCK_WAIT_STEPS=1
+rc=0
+lock_mailbox "$BOX" || rc=$?
+trap - DEBUG
+printf 'lock_rc=%s boundary=%s\n' "$rc" "$SWAPPED"
+[ "$SWAPPED" -eq 1 ] && [ "$rc" -eq 75 ] || exit 2
+kill -0 "$PUBLISHER_PID" || exit 2
+[ -d "$BOX/.lock" ] || { echo 'fresh live publisher lock was reaped'; exit 1; }
+SH
+  run bash "$BATS_TEST_TMPDIR/fresh-publication.sh" "$BATS_TEST_TMPDIR" "$QUARTET_ROOT"
+  printf '%s\n' "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'lock_rc=75 boundary=1'* ]]
+}
+
+@test "lock released during the handoff safety check remains retryable" {
+  FUNCTIONS="$BATS_TEST_TMPDIR/feedback-functions.sh"
+  python3 - "$FEEDBACK" "$FUNCTIONS" <<'PY'
+from pathlib import Path
+import sys
+Path(sys.argv[2]).write_text(Path(sys.argv[1]).read_text().split('\ncase "${1:-}" in\n')[0])
+PY
+  export PROBE_LOCK="$BATS_TEST_TMPDIR/.lock" REAL_STAT="$(command -v stat)"
+  mkdir -m700 "$PROBE_LOCK"
+  make_stub_script stat '
+last="${@: -1}"
+if [ "${2:-}" = %u ] && [ "$last" = "$PROBE_LOCK" ]; then
+  rmdir "$PROBE_LOCK" 2>/dev/null || true
+fi
+exec "$REAL_STAT" "$@"'
+  run bash -c 'source "$1"; retryable_lock_handoff_state "$2"' _ "$FUNCTIONS" "$PROBE_LOCK"
+  [ "$status" -eq 0 ]
+  [ ! -e "$PROBE_LOCK" ]
+}
+
+@test "owner completed during stale-mtime sampling remains protected by its live PID" {
+  P="$(make_fixture_project cfb-completing-owner)"
+  FIRST="$(printf '1%.0s' {1..64})"
+  SECOND="$(printf '2%.0s' {1..64})"
+  deposit "$P" session-completing first "$FIRST"
+  BOX="$(mailbox_dir "$P" session-completing)"
+  mkdir -m700 "$BOX/.lock"
+  : > "$BOX/.lock/owner"
+  chmod 600 "$BOX/.lock/owner"
+  set_mtime_ago 2 "$BOX/.lock"
+  export REAL_STAT="$(command -v stat)" TARGET_LOCK="$BOX/.lock"
+  export STAT_FLAVOR="$(lock_stat_flavor "$REAL_STAT" "$TARGET_LOCK")"
+  LIVE_PID="$$"
+  LIVE_IDENTITY="$(python3 "$QUARTET_ROOT/agents/release/critic-process-identity.py" "$LIVE_PID")"
+  export LIVE_RECORD="$LIVE_PID $(printf 'd%.0s' {1..32}) $LIVE_IDENTITY $(date +%s)"
+  make_stub_script stat '
+if { [ "$STAT_FLAVOR" = gnu ] && [ "${1:-}" = -c ] && [ "${2:-}" = %Y ]; } ||
+   { [ "$STAT_FLAVOR" = bsd ] && [ "${1:-}" = -f ] && [ "${2:-}" = %m ]; }; then
+  if [ "${3:-}" = "$TARGET_LOCK" ]; then
+    "$REAL_STAT" "$@" || exit $?
+    printf "%s\n" "$LIVE_RECORD" > "$TARGET_LOCK/owner"
+    exit 0
+  fi
+fi
+exec "$REAL_STAT" "$@"'
+  run env CRITIC_LOCK_WAIT_STEPS=2 CRITIC_LOCK_SLEEP_SEC=0.001 \
+    CRITIC_CLAIM_LEASE_SEC=1 CRITIC_PROJECT_DIR="$P" CRITIC_NOTE_ID="$SECOND" \
+    bash "$NOTE" --harness codex session-completing second
+  [ "$status" -ne 0 ]
+  [ "$(cat "$BOX/.lock/owner")" = "$LIVE_RECORD" ]
+  [ "$(count_direct_json_files "$BOX/pending")" -eq 1 ]
+}
+
+@test "incomplete-owner age evidence never retires a later directory generation" {
+  FUNCTIONS="$BATS_TEST_TMPDIR/feedback-functions.sh"
+  python3 - "$FEEDBACK" "$FUNCTIONS" <<'PY'
+from pathlib import Path
+import sys
+Path(sys.argv[2]).write_text(Path(sys.argv[1]).read_text().split('\ncase "${1:-}" in\n')[0])
+PY
+  cat > "$BATS_TEST_TMPDIR/age-generation.sh" <<'SH'
+#!/bin/bash
+source "$1"
+PROCESS_IDENTITY_HELPER="$2/agents/release/critic-process-identity.py"
+BOX="$3/box"
+mkdir -m700 "$BOX" "$BOX/.lock" "$BOX/quarantine"
+python3 - "$BOX/.lock" <<'PYAGE'
+import os,sys,time
+when=time.time()-60
+os.utime(sys.argv[1],(when,when))
+PYAGE
+SWAPPED=0
+boundary() {
+  if [ "$SWAPPED" = 0 ] && [ "$1" = owner_kind=missing ]; then
+    SWAPPED=1
+    mv "$BOX/.lock" "$BOX/retired-generation"
+    mkdir -m700 "$BOX/.lock"
+  fi
+}
+set -T
+trap 'boundary "$BASH_COMMAND"' DEBUG
+LOCK_WAIT_STEPS=1
+rc=0
+lock_mailbox "$BOX" || rc=$?
+trap - DEBUG
+[ "$SWAPPED" -eq 1 ] && [ "$rc" -eq 75 ] || exit 2
+[ -d "$BOX/.lock" ] || { echo 'fresh successor retired using old age evidence'; exit 1; }
+SH
+  run bash "$BATS_TEST_TMPDIR/age-generation.sh" "$FUNCTIONS" "$QUARTET_ROOT" "$BATS_TEST_TMPDIR"
+  printf '%s\n' "$output"
+  [ "$status" -eq 0 ]
+}
+
+@test "a genuinely future-dated abandoned ownerless lock remains recoverable" {
+  P="$(make_fixture_project cfb-future-ownerless)"
+  FIRST="$(printf '1%.0s' {1..64})"
+  SECOND="$(printf '2%.0s' {1..64})"
+  deposit "$P" session-future-ownerless first "$FIRST"
+  BOX="$(mailbox_dir "$P" session-future-ownerless)"
+  mkdir -m700 "$BOX/.lock"
+  set_mtime_ahead 3600 "$BOX/.lock"
+  run env CRITIC_LOCK_WAIT_STEPS=4 CRITIC_LOCK_SLEEP_SEC=0.001 \
+    CRITIC_PROJECT_DIR="$P" CRITIC_NOTE_ID="$SECOND" \
+    bash "$NOTE" --harness codex session-future-ownerless second
+  [ "$status" -eq 0 ]
+  [ "$(count_direct_json_files "$BOX/pending")" -eq 2 ]
+  [ ! -e "$BOX/.lock" ]
+}

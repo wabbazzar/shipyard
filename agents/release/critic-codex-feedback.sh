@@ -502,7 +502,6 @@ recover_reaper_markers() {
   local lock="$1" expected_lock_generation="$2" marker marker_generation
   local owner owner_before created now target_before current_identity mtime
   local owner_live
-  now="$(date +%s)"
   for marker in "$lock/.reaper" "$lock/.reaper-"*; do
     [ -e "$marker" ] || [ -L "$marker" ] || continue
     [ "$(lock_generation "$lock" || true)" = "$expected_lock_generation" ] ||
@@ -516,6 +515,7 @@ recover_reaper_markers() {
     marker_generation="$(lock_generation "$marker" || true)"
     [ -n "$marker_generation" ] || return 1
     mtime="$(mtime_epoch "$marker" || true)"
+    now="$(date +%s)"
     [[ "$mtime" =~ ^[0-9]+$ ]] || return 1
     if [ ! -d "$marker" ]; then
       if [ "$mtime" -gt "$now" ] ||
@@ -639,7 +639,11 @@ retryable_lock_handoff_state() {
   if [ ! -e "$lock" ] && [ ! -L "$lock" ]; then
     return 0
   fi
-  safe_dir "$lock" || return 1
+  safe_dir "$lock" || {
+    # Normal release may remove the directory during safe_dir's stat checks.
+    [ ! -e "$lock" ] && [ ! -L "$lock" ]
+    return $?
+  }
   generation="$(lock_generation "$lock" || true)"
   [ -n "$generation" ] || {
     [ ! -e "$lock" ] && [ ! -L "$lock" ]
@@ -710,11 +714,6 @@ lock_mailbox() {
       # conclusively stale. Its self-reported epoch is not trusted: a forged
       # future value must not pin feedback behind an unrelated process.
       if [ "$(<"$owner")" = "$owner_before" ]; then
-        generation="$(lock_generation "$LOCK_DIR" || true)"
-        if [ -z "$generation" ]; then
-          retryable_lock_handoff_state "$LOCK_DIR" || return 75
-          continue
-        fi
         run_lock_recovery_test_hook || return 75
         retire_stale_lock_generation "$LOCK_DIR" "$generation" record \
           "$owner_before" || true
@@ -722,11 +721,18 @@ lock_mailbox() {
     else
       # A crash before publishing a complete owner record retains the existing
       # lease-based recovery path. Unsafe owner inodes still cannot be opened.
-      now="$(date +%s)"
+      # Clock/age evidence belongs to the generation sampled above. A new
+      # publication across a wall-clock second must not look future-stale.
       mtime="$(mtime_epoch "$LOCK_DIR" || true)"
+      now="$(date +%s)"
       if safe_file "$owner"; then
+        # Publication may have completed since the failed parse. Re-enter the
+        # normal live-owner path; malformed records use that exact read only.
+        if read_lock_owner "$owner"; then
+          continue
+        fi
         owner_kind=record
-        owner_before="$(<"$owner")"
+        owner_before="$LOCK_OWNER_RECORD"
       elif [ ! -e "$owner" ] && [ ! -L "$owner" ]; then
         owner_kind=missing
         owner_before=""
@@ -736,11 +742,6 @@ lock_mailbox() {
       if [[ "$mtime" =~ ^[0-9]+$ ]] &&
          { [ "$mtime" -gt "$now" ] ||
            [ $((now - mtime)) -ge "$CLAIM_LEASE_SEC" ]; }; then
-        generation="$(lock_generation "$LOCK_DIR" || true)"
-        if [ -z "$generation" ]; then
-          retryable_lock_handoff_state "$LOCK_DIR" || return 75
-          continue
-        fi
         run_lock_recovery_test_hook || return 75
         retire_stale_lock_generation "$LOCK_DIR" "$generation" "$owner_kind" \
           "$owner_before" || true
