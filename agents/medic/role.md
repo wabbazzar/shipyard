@@ -165,6 +165,18 @@ when the runner executes the action and emits `medic.incident.resolved`.
 Set `pass: false` only if you could not classify due to missing/corrupt
 evidence — list the reason in `errors`.
 
+## Evidence discipline (hard rule)
+
+A hypothesis may only cite test names, file:line, error strings, or SHAs that
+appear VERBATIM in this incident's `evidence` (log_tail, result_json_excerpt,
+check/probe output). Do NOT search the repo, other `tmp/` logs, older
+incident files, or prior proposals to "find" a cause: a failure you remember
+from an earlier run is not evidence about this one (a fixed stories-feed
+failure was re-proposed three times that way). If `log_tail` and
+`result_json_excerpt` are both empty, the hypothesis is exactly
+"evidence-thin, needs reproduction" and `action` is `notify`, not
+`propose_repair`.
+
 ## Tone for hypotheses
 
 You are writing for the next agent in the chain (build), not for a human

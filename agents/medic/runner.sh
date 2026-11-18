@@ -433,6 +433,21 @@ detect_scan_runners() {
       summary="$(jq -r '"\(.name) systemd unit state=failed"' <<<"$item")"
     fi
 
+    # A failed systemd unit carries no .log of its own. For a crew agent
+    # service (<project>-<role>) the runner's own last-run log + result
+    # are the evidence; without them the classifier has nothing to read
+    # and invents a hypothesis (mentat:bopthere:e7b16c52/c6675f6e/57fdae87).
+    local result_excerpt='null'
+    if [ -z "$log_tail" ]; then
+      local svc_log="$PROJECT_DIR/$RESULT_DIR_REL/$name-last-run.log"
+      local svc_result="$PROJECT_DIR/$RESULT_DIR_REL/$name-result.json"
+      [ -f "$svc_log" ] && log_tail="$(tail -200 "$svc_log" 2>/dev/null || true)"
+      if [ -s "$svc_result" ]; then
+        result_excerpt="$(jq -c '.' "$svc_result" 2>/dev/null || echo 'null')"
+        [ -z "$result_excerpt" ] && result_excerpt='null'
+      fi
+    fi
+
     push_incident "$(jq -n \
       --arg id "$id" \
       --arg src "$( [ "$kind" = "cron-stale" ] && echo cron || echo systemd )" \
@@ -441,9 +456,10 @@ detect_scan_runners() {
       --argjson item "$item" \
       --arg log "$log_tail" \
       --argjson commits "$commits" \
+      --argjson rj "$result_excerpt" \
       '{incident_id:$id, source:$src, surface:$surface, summary:$summary,
         evidence:{
-          log_tail:$log, result_json_path:null, result_json_excerpt:null,
+          log_tail:$log, result_json_path:null, result_json_excerpt:$rj,
           unit:$item, recent_commits:$commits
         }}')"
     i=$((i+1))
@@ -1170,18 +1186,42 @@ while [ "$i" -lt "$N_CLASS" ]; do
 
       # Assemble the incident-repair proposal from the classified incident.
       HYPO="$(jq -r '.hypothesis // ""' <<<"$inc")"
+      # Evidence gate: a hypothesis is only as good as the evidence medic
+      # captured. When the detected incident has no log tail AND no result
+      # excerpt AND no drift/probe/check payload, the classifier had nothing
+      # to read, so its hypothesis is invention (it once re-proposed a fixed
+      # stories-feed failure three times). Discard it; say so.
+      EV_THIN="$(jq -r --arg iid "$iid" '
+        [.[] | select(.incident_id==$iid)] | (first // {}) | .evidence // {} |
+        if ((.log_tail // "") == "" and (.result_json_excerpt == null)
+            and (.check == null) and (.probe == null)) then "yes" else "no" end
+      ' "$INCIDENTS_FILE" 2>/dev/null || echo yes)"
+      SEVERITY="high"
+      if [ "$EV_THIN" = "yes" ]; then
+        HYPO="EVIDENCE-THIN: medic captured no log tail or result for this incident, so the classifier hypothesis was discarded as unverifiable. Reproduce the failure (read the unit's journal / the runner's last-run log) before acting. Classifier guess was: $HYPO"
+      fi
+      # Dedup key: one open incident-repair per failing unit/source, not per
+      # LLM-worded title (titles differ every run, so title dedup never fired).
+      DEDUP_KEY="incident-repair:$(jq -r --arg iid "$iid" --arg src "$source" '
+        [.[] | select(.incident_id==$iid)] | (first // {}) |
+        (.evidence.unit.name // .evidence.check.name // .evidence.probe.name // $src)
+      ' "$INCIDENTS_FILE" 2>/dev/null || echo "$source")"
       REPAIR_PROPOSAL="$(jq -cn \
         --arg title "$summary" \
         --arg rationale "${HYPO:-$summary}" \
         --argjson inc "$inc" \
         --arg scope "$surface" \
+        --arg sev "$SEVERITY" \
+        --arg dk "$DEDUP_KEY" \
         '{type:"incident-repair", title:$title, rationale:$rationale,
-          evidence:($inc|tostring), suggested_scope:$scope, severity:"high"}')"
+          evidence:($inc|tostring), suggested_scope:$scope, severity:$sev,
+          dedup_key:$dk}')"
 
-      # Deterministic merge (dedup by title). Empty id ⇒ an identical
-      # incident-repair is already open ⇒ no re-page, no double count.
+      # Deterministic merge (dedup by title OR dedup_key against proposals
+      # the owner has not decided yet). Empty id => already open => no
+      # re-page, no double count.
       PROPOSAL_ID="$(mentat_merge_proposal "$MENTAT_RESULT" "$PROJECT_NAME" \
-        "$(now_iso)" "$REPAIR_PROPOSAL")"
+        "$(now_iso)" "$REPAIR_PROPOSAL" "$PROJECT_DIR/data/decisions.jsonl")"
       if [ -z "$PROPOSAL_ID" ]; then
         echo "[medic] incident-repair already open for '$summary' — dedup" >> "$LOG_FILE"
         push_action "$(jq -n --arg iid "$iid" \

@@ -13,7 +13,12 @@
 #    evidence, suggested_scope, severity, status:"open"}
 # Result file shape: {ts, project, proposals:[...]}.
 
-# mentat_merge_proposal <result_file> <project> <ts> <proposal_json>
+# mentat_merge_proposal <result_file> <project> <ts> <proposal_json> [decisions_file]
+#
+# Optional <decisions_file> (<project>/data/decisions.jsonl) lets dedup also
+# match on `dedup_key`: a new proposal is a duplicate when an UNDECIDED open
+# proposal already carries the same dedup_key. LLM-worded titles differ every
+# run, so title-only dedup let one failing unit open 100+ proposals.
 #
 # <proposal_json> is a compact JSON object supplying at least `title`; the
 # recognized fields are type/title/rationale/evidence/suggested_scope/severity.
@@ -24,6 +29,7 @@
 mentat_merge_proposal() {
   local result_file="$1" project="$2" ts="$3" proposal_json="$4"
   RESULT_FILE="$result_file" PROJECT_NAME="$project" TS="$ts" PROPOSAL="$proposal_json" \
+  DECISIONS_FILE="${5:-}" \
   python3 - <<'PY'
 import os, sys, json, hashlib
 
@@ -54,6 +60,23 @@ existing_titles = {p.get("title") for p in existing}
 if title in existing_titles:
     sys.exit(0)
 
+# Dedup by dedup_key against proposals the owner has not decided yet.
+dk = str(incoming.get("dedup_key", "")).strip()
+if dk:
+    decided = set()
+    df = os.environ.get("DECISIONS_FILE", "")
+    if df and os.path.exists(df):
+        with open(df) as f:
+            for line in f:
+                try:
+                    decided.add(json.loads(line).get("proposal_id"))
+                except Exception:
+                    pass
+    for p in existing:
+        if (p.get("status") == "open" and p.get("dedup_key") == dk
+                and p.get("id") not in decided):
+            sys.exit(0)
+
 pid = "mentat:%s:%s" % (
     project, hashlib.sha256((ts + title).encode()).hexdigest()[:8])
 obj = {
@@ -66,6 +89,8 @@ obj = {
     "severity": str(incoming.get("severity", "med")),
     "status": "open",
 }
+if dk:
+    obj["dedup_key"] = dk
 merged = existing + [obj]
 with open(result_file, "w") as f:
     json.dump({"ts": ts, "project": project, "proposals": merged}, f, indent=2)
