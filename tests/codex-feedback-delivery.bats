@@ -1168,6 +1168,27 @@ EOF
   [ "$(find "$BOX/pending" -type f -name '*.json' | wc -l)" -eq 1 ]
 }
 
+@test "a mkdir utility reporting a competing create as successful cannot replace a mailbox owner" {
+  P="$(make_fixture_project cfb-competing-create)"
+  deposit "$P" "session-race" "still pending" "$(printf '%064x' 1)"
+  BOX="$(mailbox_dir "$P" session-race)"
+  mkdir -m700 "$BOX/.lock"
+  # Model the other drainer acquiring the lock just before our creation
+  # attempt. A live legacy PID is sufficient to keep its claim active.
+  OWNER="$$ $(printf '%032x' 42) $(date +%s)"
+  printf '%s\n' "$OWNER" >"$BOX/.lock/owner"
+  chmod 600 "$BOX/.lock/owner"
+  export REAL_MKDIR="$(command -v mkdir)" COMPETING_LOCK="$BOX/.lock"
+  make_stub_script mkdir '
+    if [ "$1" = "$COMPETING_LOCK" ]; then exit 0; fi
+    exec "$REAL_MKDIR" "$@"'
+
+  CRITIC_LOCK_WAIT_STEPS=1 drain "$P" session-race >"$BATS_TEST_TMPDIR/result" 2>/dev/null
+  [ ! -s "$BATS_TEST_TMPDIR/result" ]
+  [ "$(<"$BOX/.lock/owner")" = "$OWNER" ]
+  [ "$(count_direct_json_files "$BOX/pending")" -eq 1 ]
+}
+
 @test "simultaneous drainers claim each item once under the real lock" {
   P="$(make_fixture_project cfb-drainers)"
   for ((i=1; i<=4; i++)); do
