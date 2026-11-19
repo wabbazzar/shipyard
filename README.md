@@ -17,6 +17,11 @@ default and optional Codex or Hermes harnesses.
 | Medic | every 10 min | detects incidents, performs bounded mitigation, and routes regressions back to design |
 | Scribe | daily | refreshes configured content and keeps ticket lifecycle folders consistent |
 
+In hook and daily modes, a configured runner-owned blocking gate records its exit
+code. A stage timeout records `timed_out`, its effective budget, and the gate
+name in the terminal event. An expired stage budget fails the release even
+when the hook still has time for other work.
+
 The normal path is:
 
 ```text

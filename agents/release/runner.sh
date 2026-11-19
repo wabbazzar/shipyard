@@ -74,9 +74,9 @@ ROLE="release"
 export QUARTET_ROLE="$ROLE"
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/naming.sh"
-DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
-DISPLAY_TITLE="$(display_title "$DISPLAY")"
-SVC="$PROJECT_NAME-$DISPLAY"
+ROLE_DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
+DISPLAY_TITLE="$(display_title "$ROLE_DISPLAY")"
+SVC="$PROJECT_NAME-$ROLE_DISPLAY"
 
 RESULT_DIR_REL="$(jq_from_json "$CFG_JSON" -r '.paths.result_dir // "tmp"')"
 TEST_CMD="$(jq_from_json "$CFG_JSON" -r '.release.test_cmd // "npx vitest run"')"
@@ -145,7 +145,7 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
   jq -n \
     --arg agent "$ROLE" \
     --arg role "$ROLE" \
-    --arg display "$DISPLAY" \
+    --arg display "$ROLE_DISPLAY" \
     --arg dir "$PROJECT_DIR" \
     --arg trunk "$TRUNK_BRANCH" \
     --arg test_cmd "$TEST_CMD" \
@@ -430,21 +430,21 @@ if [ ! -s "$WORK_RESULT_FILE" ]; then
   if [ "$HOOK_DEADLINE_HIT" -eq 1 ]; then
     # The cap ended the run before the model reported. Say so plainly: the
     # caller needs "this ran out of time", not a check failure it can't act on.
-    jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --argjson cap "$HOOK_WALL_CLOCK" --arg d "$DISPLAY" '{
+    jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --argjson cap "$HOOK_WALL_CLOCK" --arg d "$ROLE_DISPLAY" '{
       pass: false, incomplete: true, mode: $mode, timestamp: $ts,
       errors: ["\($d) hook hit its \($cap)s wall-clock cap before reporting a verdict; raise [release] hook_wall_clock_sec or run --mode daily for the long gate"]
     }' > "$WORK_RESULT_FILE"
     echo "[$SVC] hook cap reached before a verdict; marked incomplete, not a failure" >> "$LOG_FILE"
     RELEASE_FINISH_OPTIONS+=(--no-escalate)
   elif grep -qEi "hit your (weekly|5-hour|daily) limit|usage limit (reached|exceeded)" <<<"$USAGE_LIMIT_MSG"; then
-    jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --arg msg "$USAGE_LIMIT_MSG" --arg d "$DISPLAY" '{
+    jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --arg msg "$USAGE_LIMIT_MSG" --arg d "$ROLE_DISPLAY" '{
       pass: false, incomplete: true, mode: $mode, timestamp: $ts,
       errors: ["\($d) claude run hit an account usage cap, not a code issue: \($msg)"]
     }' > "$WORK_RESULT_FILE"
     echo "[$SVC] claude run hit account usage cap ($USAGE_LIMIT_MSG); marked incomplete, not a failure" >> "$LOG_FILE"
     RELEASE_FINISH_OPTIONS+=(--no-escalate)
   else
-    jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --argjson exit "$EXIT" --arg d "$DISPLAY" '{
+    jq -n --arg ts "$(now_iso)" --arg mode "$MODE" --argjson exit "$EXIT" --arg d "$ROLE_DISPLAY" '{
       pass: false, mode: $mode, timestamp: $ts,
       errors: ["\($d) claude run exited (\($exit)) without writing result.json"]
     }' > "$WORK_RESULT_FILE"
@@ -455,6 +455,8 @@ fi
 # The model result stays private until this foreground command has exited and
 # its status has been reconciled. A model-written claim for this key is ignored.
 FINAL_EXIT="$EXIT"
+GATE_FAILURE=""
+GATE_EVENT_FIELDS=()
 if [ "$BLOCKING_GATE_ACTIVE" -eq 1 ]; then
   BLOCKING_GATE_COMMAND="$(jq -r '.command' <<<"$BLOCKING_GATE_JSON")"
   BLOCKING_GATE_TIMEOUT="$(jq -r '.timeout_sec' <<<"$BLOCKING_GATE_JSON")"
@@ -480,7 +482,9 @@ if [ "$BLOCKING_GATE_ACTIVE" -eq 1 ]; then
     timeout "$BLOCKING_GATE_BUDGET" bash -o pipefail -c "$BLOCKING_GATE_COMMAND" >>"$LOG_FILE" 2>&1
     BLOCKING_GATE_EXIT=$?
     echo "[$SVC] blocking_gate end key=$BLOCKING_GATE_RESULT_KEY exit=$BLOCKING_GATE_EXIT" >>"$LOG_FILE"
-    [ "$BLOCKING_GATE_EXIT" -eq 124 ] && [ "$MODE" = "hook" ] && hook_deadline_trip blocking_gate
+    if [ "$BLOCKING_GATE_EXIT" -eq 124 ] && [ "$MODE" = "hook" ] && [ "$(stage_budget "")" -eq 0 ]; then
+      hook_deadline_trip blocking_gate
+    fi
   fi
 
   _bg_tmp="$(mktemp "$RESULT_DIR/.$SVC-blocking-gate.XXXXXX")"
@@ -559,10 +563,21 @@ if [ "$BLOCKING_GATE_ACTIVE" -eq 1 ]; then
         end
     ' "$WORK_RESULT_FILE" >"$_bg_tmp"
   else
-    _bg_error="runner-owned blocking gate $BLOCKING_GATE_RESULT_KEY failed (exit $BLOCKING_GATE_EXIT)"
+    gate_status=completed
+    GATE_FAILURE="runner-owned blocking gate $BLOCKING_GATE_RESULT_KEY failed (exit $BLOCKING_GATE_EXIT)"
+    if [ "$BLOCKING_GATE_BUDGET" -le 0 ]; then
+      gate_status=not_run
+      GATE_FAILURE="runner-owned blocking gate $BLOCKING_GATE_RESULT_KEY could not start before the hook deadline"
+    elif [ "$BLOCKING_GATE_EXIT" -eq 124 ]; then
+      gate_status=timed_out
+      GATE_FAILURE="runner-owned blocking gate $BLOCKING_GATE_RESULT_KEY timed out (budget ${BLOCKING_GATE_BUDGET}s, exit 124)"
+    fi
+    GATE_EVENT_FIELDS=("gate=$BLOCKING_GATE_RESULT_KEY" "gate_status=$gate_status" "gate_budget_sec=$BLOCKING_GATE_BUDGET")
     jq --arg key "$BLOCKING_GATE_RESULT_KEY" \
-       --argjson rc "$BLOCKING_GATE_EXIT" --arg error "$_bg_error" '
-      .[$key] = {status:"completed", pass:false, exitCode:$rc}
+       --argjson rc "$BLOCKING_GATE_EXIT" --arg error "$GATE_FAILURE" \
+       --arg status "$gate_status" --argjson budget "$BLOCKING_GATE_BUDGET" '
+      .[$key] = ({status:$status, pass:false, exitCode:$rc}
+        + (if $status == "timed_out" then {timeoutSec:$budget} else {} end))
       | .pass = false
       | del(.incomplete)
       | .errors = ([((.errors // [])[]) |
@@ -688,6 +703,14 @@ print(",".join(cats) or ("ok" if d.get("pass") else "unknown"))
 PY
 )"
 
+if [ -n "$GATE_FAILURE" ] && [ "$BLOCKING_GATE_EXIT" -eq 124 ]; then
+  if [ "$BLOCKING_GATE_BUDGET" -le 0 ]; then
+    CATEGORY="hook_timeout,$CATEGORY"
+  else
+    CATEGORY="gate_timeout,$CATEGORY"
+  fi
+fi
+
 # A hook that ran out of clock is not a regression for medic to repair — the
 # gate never rendered a verdict. Report it, don't escalate it.
 if [ "$HOOK_DEADLINE_HIT" -eq 1 ]; then
@@ -701,6 +724,9 @@ fi
 # from the events stream, not from the notification body.
 SUMMARY="$(tail -30 "$LOG_FILE" | grep -A20 -i "RELEASE RESULT" | head -10 || true)"
 [ -z "$SUMMARY" ] && SUMMARY="$SVC completed (mode=$MODE, exit=$FINAL_EXIT). See $LOG_FILE."
+if [ -n "$GATE_FAILURE" ]; then
+  SUMMARY="$GATE_FAILURE. See $LOG_FILE."
+fi
 HYGIENE_COUNT="$(jq -r '
   if ((.hygieneNotifications // null) | type) == "array"
   then (.hygieneNotifications | length)
@@ -737,7 +763,7 @@ JOB_DUR=$(( $(date +%s) - JOB_START ))
 agent_finish "$SVC" "$PROJECT_DIR" "$JOB_STATUS" "$JOB_DUR" \
   ${RELEASE_FINISH_OPTIONS[@]+"${RELEASE_FINISH_OPTIONS[@]}"} \
   --episode "$RUN_EPISODE" mode="$MODE" exit_code="$FINAL_EXIT" tokens="$TOKENS" \
-  category="$CATEGORY" >> "$LOG_FILE" 2>&1
+  category="$CATEGORY" ${GATE_EVENT_FIELDS[@]+"${GATE_EVENT_FIELDS[@]}"} >> "$LOG_FILE" 2>&1
 
 echo "[$SVC] done pass=$PASS exit=$FINAL_EXIT" >> "$LOG_FILE"
 exit "$FINAL_EXIT"

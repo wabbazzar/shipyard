@@ -184,8 +184,8 @@ ROLE="design"
 export QUARTET_ROLE="$ROLE"
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/naming.sh"
-DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
-SVC="$PROJECT_NAME-$DISPLAY"
+ROLE_DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
+SVC="$PROJECT_NAME-$ROLE_DISPLAY"
 
 RESULT_DIR_REL="$(jq_from_json "$CFG_JSON" -r '.paths.result_dir // "tmp"')"
 BUDGET_TOKENS="$(jq_from_json "$CFG_JSON" -r '.design.budget_tokens_daily // 1000000')"
@@ -203,7 +203,7 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
   jq -n \
     --arg agent "$ROLE" \
     --arg role "$ROLE" \
-    --arg display "$DISPLAY" \
+    --arg display "$ROLE_DISPLAY" \
     --arg dir "$PROJECT_DIR" \
     --arg trunk "$TRUNK_BRANCH" \
     --argjson budget "$BUDGET_TOKENS" \

@@ -180,23 +180,26 @@ EOF
   jq -e '.errors[] | contains("e2eIsolated") and contains("exit 7")' "$public"
 }
 
-@test "configured gate timeout is preserved as exit 124 and a completed failure" {
+@test "configured gate timeout is identified in daily and hook verdicts" {
   project="$(make_fixture_project blocktimeout can-merge-true.toml)"
   gate="$BATS_TEST_TMPDIR/blocking-timeout.sh"
   printf '%s\n' '#!/usr/bin/env bash' 'sleep 2' >"$gate"
   chmod +x "$gate"
-  configure_gate "$project" "bash $gate" 1
-  stub_model_pass
+  configure_gate "$project" "bash $gate" 1 '["daily","hook"]'
+  stub_model_in_progress_with_error
 
-  run run_runner release "$project" --mode daily
-  [ "$status" -eq 124 ]
-  public="$project/tmp/blocktimeout-release-result.json"
-  [ "$(jq -r '.pass' "$public")" = "false" ]
-  [ "$(jq -r '.e2eIsolated.status' "$public")" = "completed" ]
-  [ "$(jq -r '.e2eIsolated.pass' "$public")" = "false" ]
-  [ "$(jq -r '.e2eIsolated.exitCode' "$public")" -eq 124 ]
-  [ "$(job_end | jq -r '.status')" = "fail" ]
-  [ "$(job_end | jq -r '.exit_code')" -eq 124 ]
+  for mode in daily hook; do
+    run run_runner release "$project" --mode "$mode"
+    [ "$status" -eq 124 ]
+    public="$project/tmp/blocktimeout-release-result.json"
+    jq -e '.pass == false and .e2eIsolated.status == "timed_out"
+      and .e2eIsolated.exitCode == 124 and .e2eIsolated.timeoutSec == 1
+      and (.errors | index("vitest failed: 2 specs") != null)' "$public"
+    job_end | jq -e '.status == "fail" and .exit_code == 124
+      and .gate == "e2eIsolated" and .gate_status == "timed_out" and .gate_budget_sec == 1
+      and .category == "gate_timeout,error"'
+    [ -z "$(events_json | jq -c 'select(.event=="release.hook.timeout")')" ]
+  done
 }
 
 @test "model run-in-progress claim for runner-owned gate is never published as final" {
@@ -350,4 +353,21 @@ EOF
   done
   [ "$(stub_calls claude)" -eq 0 ]
   [ -z "$(events_json)" ]
+}
+
+@test "hook and daily gates inherit the caller's display" {
+  project="$(make_fixture_project blockdisplay can-merge-true.toml)"
+  gate="$BATS_TEST_TMPDIR/display.sh"
+  cat >"$gate" <<'GATE'
+#!/usr/bin/env bash
+test "$DISPLAY" = ":73"
+GATE
+  configure_gate "$project" "bash $gate" 5 '["daily","hook"]'
+  stub_model_pass
+  export DISPLAY=:73
+  for mode in hook daily; do
+    run run_runner release "$project" --mode "$mode"
+    [ "$status" -eq 0 ]
+    job_end | jq -e '.svc=="blockdisplay-release" and .status=="ok"'
+  done
 }

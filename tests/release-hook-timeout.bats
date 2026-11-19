@@ -212,8 +212,7 @@ blocking_gate = { command = "sleep 30 && true", timeout_sec = 900, modes = ["hoo
   RF="$(result_file "$PROJ")"
   [ "$(jq -r '.incomplete' "$RF")" = "true" ]
   # the gate never got to burn another 30s past an already-blown deadline
-  run jq -r '.gate // "absent"' "$RF"
-  [ "$output" != "true" ]
+  jq -e '.gate.status == "not_run" and .gate.pass == false' "$RF"
 }
 
 @test "the cap trip is recorded as an event with the budget that was enforced" {

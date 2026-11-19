@@ -78,9 +78,9 @@ ROLE="build"
 export QUARTET_ROLE="$ROLE"
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/naming.sh"
-DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
-DISPLAY_TITLE="$(display_title "$DISPLAY")"
-SVC="$PROJECT_NAME-$DISPLAY"
+ROLE_DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
+DISPLAY_TITLE="$(display_title "$ROLE_DISPLAY")"
+SVC="$PROJECT_NAME-$ROLE_DISPLAY"
 
 # Trunk branch — config wins, else origin/HEAD; unresolvable fails loudly.
 TRUNK_BRANCH="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")" || exit 2
@@ -93,7 +93,7 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
   jq -n \
     --arg agent "$ROLE" \
     --arg role "$ROLE" \
-    --arg display "$DISPLAY" \
+    --arg display "$ROLE_DISPLAY" \
     --arg dir "$PROJECT_DIR" \
     --arg trunk "$TRUNK_BRANCH" \
     --argjson cfg "$CFG_JSON" \
@@ -412,16 +412,16 @@ $RUN_CONTEXT"
   if [ -f "$RESULT_FILE" ] && [ -s "$RESULT_FILE" ]; then
     if [ -x "$FMT" ] || [ -f "$FMT" ]; then
       node "$FMT" "$RESULT_FILE" > "$SUMMARY_FILE" 2>>"$LOG_FILE" || \
-        echo "$PROJECT_NAME $DISPLAY ($MODE) — formatter failed; see $LOG_FILE" > "$SUMMARY_FILE"
+        echo "$PROJECT_NAME $ROLE_DISPLAY ($MODE) — formatter failed; see $LOG_FILE" > "$SUMMARY_FILE"
     else
-      jq -r --arg name "$PROJECT_NAME" --arg mode "$MODE" --arg d "$DISPLAY" \
+      jq -r --arg name "$PROJECT_NAME" --arg mode "$MODE" --arg d "$ROLE_DISPLAY" \
         '"\($name) \($d) (\($mode)) — pass=\(.pass) items=\(.items|length)"' \
         "$RESULT_FILE" > "$SUMMARY_FILE" 2>/dev/null || \
-        echo "$PROJECT_NAME $DISPLAY ($MODE) — no result." > "$SUMMARY_FILE"
+        echo "$PROJECT_NAME $ROLE_DISPLAY ($MODE) — no result." > "$SUMMARY_FILE"
     fi
     PASS="$(jq -r '.pass // false' "$RESULT_FILE")"
   else
-    echo "$PROJECT_NAME $DISPLAY ($MODE) — no result file produced (exit=$EXIT)." > "$SUMMARY_FILE"
+    echo "$PROJECT_NAME $ROLE_DISPLAY ($MODE) — no result file produced (exit=$EXIT)." > "$SUMMARY_FILE"
     PASS="false"
   fi
 
