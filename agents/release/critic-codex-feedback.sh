@@ -657,9 +657,10 @@ lock_mailbox() {
   identity="$(process_identity "$$")" || return 75
   LOCK_DIR="$box/.lock"
   for ((attempt=0; attempt<LOCK_WAIT_STEPS; attempt++)); do
-    if mkdir "$LOCK_DIR" 2>/dev/null; then
-      if ! chmod 700 "$LOCK_DIR" ||
-         ! printf '%s %s %s %s\n' "$$" "$LOCK_TOKEN" "$identity" \
+    # Only the successful mkdir(2) caller owns the directory. Some mkdir
+    # utilities report success to multiple concurrent callers for the same path.
+    if python3 -c 'import os, sys; os.mkdir(sys.argv[1], 0o700)' "$LOCK_DIR" 2>/dev/null; then
+      if ! printf '%s %s %s %s\n' "$$" "$LOCK_TOKEN" "$identity" \
            "$(date +%s)" >"$LOCK_DIR/owner" ||
          ! chmod 600 "$LOCK_DIR/owner"; then
         rm -f -- "$LOCK_DIR/owner" 2>/dev/null || true
