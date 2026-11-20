@@ -203,10 +203,10 @@ ROLE="medic"
 export QUARTET_ROLE="$ROLE"
 # shellcheck disable=SC1091
 source "$QUARTET_DIR/agents/lib/naming.sh"
-DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
-DISPLAY_TITLE="$(display_title "$DISPLAY")"
+ROLE_DISPLAY="$(role_display "$ROLE" "$CFG_JSON")"
+DISPLAY_TITLE="$(display_title "$ROLE_DISPLAY")"
 BUILD_DISPLAY="$(role_display build "$CFG_JSON")"
-SVC="$PROJECT_NAME-$DISPLAY"
+SVC="$PROJECT_NAME-$ROLE_DISPLAY"
 
 # Trunk branch — config wins, else origin/HEAD; unresolvable fails loudly.
 TRUNK_BRANCH="$(detect_trunk "$CFG_JSON" "$PROJECT_DIR")" || exit 2
@@ -232,7 +232,7 @@ if [ "$CHECK_CONFIG" -eq 1 ]; then
   jq -n \
     --arg agent "$ROLE" \
     --arg role "$ROLE" \
-    --arg display "$DISPLAY" \
+    --arg display "$ROLE_DISPLAY" \
     --arg dir "$PROJECT_DIR" \
     --arg trunk "$TRUNK_BRANCH" \
     --argjson cfg "$CFG_JSON" \
